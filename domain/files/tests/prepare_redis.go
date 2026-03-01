@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	redis "github.com/assurrussa/goredis"
 	"github.com/assurrussa/goredis/redisinit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
