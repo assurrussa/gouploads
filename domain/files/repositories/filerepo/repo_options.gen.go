@@ -5,7 +5,7 @@ package filerepo
 import (
 	fmt461e464ebed9 "fmt"
 
-	pgsql "github.com/assurrussa/outbox/infrastructure/pgsql/storage"
+	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	errors461e464ebed9 "github.com/kazhuravlev/options-gen/pkg/errors"
 	validator461e464ebed9 "github.com/kazhuravlev/options-gen/pkg/validator"
 )

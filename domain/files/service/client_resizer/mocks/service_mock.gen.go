@@ -14,7 +14,7 @@ import (
 	http "net/http"
 	reflect "reflect"
 
-	transporthttp "github.com/assurrussa/outbox/infrastructure/transport/http"
+	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
 	gomock "go.uber.org/mock/gomock"
 )
 

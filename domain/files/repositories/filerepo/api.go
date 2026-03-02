@@ -7,7 +7,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	querybuilder "github.com/assurrussa/goshared/pkg/query_builder"
-	pgsql "github.com/assurrussa/outbox/infrastructure/pgsql/storage"
+	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/georgysavva/scany/v2/pgxscan"
 
 	"github.com/assurrussa/gouploads/domain/files/model"

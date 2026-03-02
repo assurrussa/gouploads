@@ -8,9 +8,9 @@ import (
 
 	redis "github.com/assurrussa/goredis"
 	"github.com/assurrussa/goshared/pkg/logger"
+	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
 	inmemeventstream "github.com/assurrussa/goshared/services/event-stream/in-mem"
-	pgsql "github.com/assurrussa/outbox/infrastructure/pgsql/storage"
-	transporthttp "github.com/assurrussa/outbox/infrastructure/transport/http"
+	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/outbox"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"

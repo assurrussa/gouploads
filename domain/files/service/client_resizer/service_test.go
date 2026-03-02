@@ -10,7 +10,7 @@ import (
 
 	"github.com/assurrussa/goshared/pkg/logger"
 	"github.com/assurrussa/goshared/pkg/tests"
-	transporthttp "github.com/assurrussa/outbox/infrastructure/transport/http"
+	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
 	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"

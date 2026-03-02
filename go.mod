@@ -1,13 +1,14 @@
 module github.com/assurrussa/gouploads
 
-go 1.25.4
+go 1.26
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/assurrussa/godi v0.9.1
 	github.com/assurrussa/goredis v0.4.4
 	github.com/assurrussa/goshared v1.0.0
-	github.com/assurrussa/outbox v0.3.0
+	github.com/assurrussa/outbox v0.9.1
+	github.com/assurrussa/outbox/backends/pgsql v0.0.0-20260302160745-331fc94cb378
 	github.com/aws/aws-sdk-go-v2 v1.41.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.7
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.95.1

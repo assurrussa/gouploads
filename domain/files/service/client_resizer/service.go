@@ -9,7 +9,7 @@ import (
 	"net/http"
 
 	"github.com/assurrussa/goshared/pkg/logger"
-	transporthttp "github.com/assurrussa/outbox/infrastructure/transport/http"
+	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
 	"github.com/gofiber/fiber/v3"
 )
 

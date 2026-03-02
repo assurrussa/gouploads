@@ -3,7 +3,7 @@ package filerepo
 import (
 	"fmt"
 
-	pgsql "github.com/assurrussa/outbox/infrastructure/pgsql/storage"
+	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 )
 
 //go:generate options-gen -out-filename=repo_options.gen.go -from-struct=Options

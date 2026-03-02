@@ -10,8 +10,10 @@ github.com/assurrussa/goredis v0.4.4 h1:4Cd+HBDszwJ2cZ72mflyg9rvxcKOiEd7Pp2aF4wW
 github.com/assurrussa/goredis v0.4.4/go.mod h1:VXfFYnHdPuqRPulx3kv6XiqWmL6ut0wwvI4VLhRBpN4=
 github.com/assurrussa/goshared v1.0.0 h1:LtJt6feqoTlsFdjBaZ+DSMe/PLfakQ7YLU2bSONuI8M=
 github.com/assurrussa/goshared v1.0.0/go.mod h1:19IIavp0MdXq/pmgPh9hS6AXMyqBJAGR5lVUEckJb5I=
-github.com/assurrussa/outbox v0.3.0 h1:2LWuzf/MideiILHn9OegpeEsv+OZXNB3o4g4/JNqDEk=
-github.com/assurrussa/outbox v0.3.0/go.mod h1:dvyJmINOSdg5IJXJQC4dc5Iw0u8Inl0mdhkju94QbRI=
+github.com/assurrussa/outbox v0.9.1 h1:0TtuP8Dcxhmzv8ieFZLNScNEbbZ3NDeukTv94uzSo9U=
+github.com/assurrussa/outbox v0.9.1/go.mod h1:LvHFrBodald169Oysm6Xr514HsmiwjaX1phMvvjuhM4=
+github.com/assurrussa/outbox/backends/pgsql v0.0.0-20260302160745-331fc94cb378 h1:JvZRRZ69qIVKLVN3m2WBvsKfQKOKqd+UKPXeUzx7MyQ=
+github.com/assurrussa/outbox/backends/pgsql v0.0.0-20260302160745-331fc94cb378/go.mod h1:YRBgjRty9nlz+gljQLsRcw4p8w1Xd1SXK95sT+u2NPk=
 github.com/aws/aws-sdk-go-v2 v1.41.1 h1:ABlyEARCDLN034NhxlRUSZr4l71mh+T5KAeGh6cerhU=
 github.com/aws/aws-sdk-go-v2 v1.41.1/go.mod h1:MayyLB8y+buD9hZqkCW3kX1AKq07Y5pXxtgB+rRFhz0=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 h1:489krEF9xIGkOaaX3CE/Be2uWjiXrkCH6gUX+bZA/BU=
@@ -127,8 +129,6 @@ github.com/opentracing/opentracing-go v1.2.0 h1:uEJPy/1a5RIPAJ0Ov+OIO8OxWu77jEv+
 github.com/opentracing/opentracing-go v1.2.0/go.mod h1:GxEUsuufX4nBwe+T+Wl9TAgYrxe9dPLANfrWvHYVTgc=
 github.com/philhofer/fwd v1.2.0 h1:e6DnBTl7vGY+Gz322/ASL4Gyp1FspeMvx1RNDoToZuM=
 github.com/philhofer/fwd v1.2.0/go.mod h1:RqIHx9QI14HlwKwm98g9Re5prTQ6LdeRQn+gXJFxsJM=
-github.com/picodata/picodata-go v1.0.0 h1:7YLJNOF+7dGIj7YC4k+N09lWC9kzfEhI7Ei8N7U84z0=
-github.com/picodata/picodata-go v1.0.0/go.mod h1:XjBlGTF19NiuPX1+2XhyXZOQoh79nPH4y6JnP+MUHlE=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
