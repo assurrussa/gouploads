@@ -29,9 +29,9 @@ type StorageS3Config struct {
 	ACL            string        `toml:"acl" long:"storage-s3-acl" env:"STORAGE_S3_ACL" value-default:"public-read"`
 	Region         string        `toml:"region" long:"storage-s3-region" env:"STORAGE_S3_REGION"`
 	Bucket         string        `toml:"bucket" long:"storage-s3-bucket" env:"STORAGE_S3_BUCKET"`
-	AccessKey      string        `toml:"access_key" long:"storage-s3-access-key" env:"STORAGE_S3_ACCESS_KEY"` //nolint:gosec // false positive
+	AccessKey      string        `toml:"access_key" long:"storage-s3-access-key" env:"STORAGE_S3_ACCESS_KEY"`
 	SecretKey      string        `toml:"secret_key" long:"storage-s3-secret-key" env:"STORAGE_S3_SECRET_KEY"`
-	SessionToken   string        `toml:"session_token" long:"storage-s3-session-token" env:"STORAGE_S3_SESSION_TOKEN"` //nolint:gosec // false positive
+	SessionToken   string        `toml:"session_token" long:"storage-s3-session-token" env:"STORAGE_S3_SESSION_TOKEN"`
 	ForcePathStyle bool          `toml:"force_path_style" long:"storage-s3-force-path-style" env:"STORAGE_S3_FORCE_PATH_STYLE" value-default:"false"`
 	TransformHost  bool          `toml:"transform_host" long:"storage-s3-transform-host" env:"STORAGE_S3_TRANSFORM_HOST" value-default:"true"`
 	DisableSSL     bool          `toml:"disable_ssl" long:"storage-s3-disable-ssl" env:"STORAGE_S3_DISABLE_SSL" value-default:"false"`

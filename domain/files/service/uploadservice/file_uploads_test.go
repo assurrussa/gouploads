@@ -223,7 +223,7 @@ func newFileHeader(t *testing.T, fieldName, fileName, content, contentType strin
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	req := httptest.NewRequest(http.MethodPost, "/", body)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	require.NoError(t, req.ParseMultipartForm(int64(body.Len())))
 

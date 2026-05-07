@@ -120,6 +120,8 @@ linters:
       excludes:
         # G115: integer overflow conversion int -> uint64 https://github.com/moby/moby/issues/48358
         - G115
+        # G117: S3 credentials are intentionally represented as config fields.
+        - G117
     govet:
       disable:
         - fieldalignment
@@ -204,6 +206,10 @@ linters:
         use-field-name: false
   exclusions:
     generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - goconst
     presets:
       - comments
       - common-false-positives

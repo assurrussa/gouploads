@@ -35,13 +35,13 @@ func main() {
 		AllowedDeepImportDirs: allowedDeepImportDirs,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gouploads import policy check failed: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "gouploads import policy check failed: %v\n", err)
 		os.Exit(1)
 	}
 	if !report.OK() {
-		fmt.Fprintln(os.Stderr, report.Message())
-		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, "Only packages listed in gouploads/reference/externalconsumer are stable for host consumers.")
+		_, _ = fmt.Fprintln(os.Stderr, report.Message())
+		_, _ = fmt.Fprintln(os.Stderr)
+		_, _ = fmt.Fprintln(os.Stderr, "Only packages listed in gouploads/reference/externalconsumer are stable for host consumers.")
 		os.Exit(1)
 	}
 }

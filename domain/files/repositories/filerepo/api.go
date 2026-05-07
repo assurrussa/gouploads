@@ -15,13 +15,40 @@ import (
 
 const (
 	tableName = "files"
+
+	columnID          = "id"
+	columnUserID      = "user_id"
+	columnObjectType  = "object_type"
+	columnManagerID   = "manager_id"
+	columnFilename    = "filename"
+	columnObjectID    = "object_id"
+	columnOriginal    = "original_filename"
+	columnFolderPath  = "folder_path"
+	columnIsPrimary   = "is_primary"
+	columnData        = "data"
+	columnSize        = "size"
+	columnMimeType    = "mime_type"
+	columnName        = "name"
+	columnProvider    = "provider"
+	columnURL         = "url"
+	columnModerate    = "moderate"
+	columnBlockCause  = "block_cause"
+	columnFileType    = "file_type"
+	columnPosition    = "position"
+	columnSlug        = "slug"
+	columnLocale      = "locale"
+	columnDescription = "description"
+	columnCreatedAt   = "created_at"
+	columnUpdatedAt   = "updated_at"
+	columnDeletedAt   = "deleted_at"
+	columnPublishedAt = "published_at"
 )
 
 var columns = []string{
-	"id", "user_id", "manager_id", "object_type", "object_id", "original_filename",
-	"filename", "folder_path", "provider", "size", "mime_type",
-	"moderate", "block_cause", "name", "description", "file_type", "position", "is_primary", "url",
-	"slug", "locale", "data", "created_at", "updated_at", "deleted_at", "published_at",
+	columnID, columnUserID, columnManagerID, columnObjectType, columnObjectID, columnOriginal,
+	columnFilename, columnFolderPath, columnProvider, columnSize, columnMimeType,
+	columnModerate, columnBlockCause, columnName, columnDescription, columnFileType, columnPosition, columnIsPrimary, columnURL,
+	columnSlug, columnLocale, columnData, columnCreatedAt, columnUpdatedAt, columnDeletedAt, columnPublishedAt,
 }
 
 // ListFilters фильтры для списка файлов.
@@ -39,30 +66,30 @@ func (r *Repo) List(ctx context.Context, filters ListFilters) ([]model.File, int
 
 	// Базовый запрос для подсчета
 	countBuilder := querybuilder.BuilderDollar().
-		Select("count(id) as total").
+		Select(fmt.Sprintf("count(%s) as total", columnID)).
 		From(tableName).
-		Where(squirrel.Eq{"deleted_at": nil})
+		Where(squirrel.Eq{columnDeletedAt: nil})
 
 	// Базовый запрос для получения данных
 	listBuilder := querybuilder.BuilderDollar().
 		Select(columns...).
 		From(tableName).
-		Where(squirrel.Eq{"deleted_at": nil})
+		Where(squirrel.Eq{columnDeletedAt: nil})
 
 	// Применяем фильтры
 	if filters.FileType != "" {
-		countBuilder = countBuilder.Where(squirrel.Like{"mime_type": filters.FileType + "%"})
-		listBuilder = listBuilder.Where(squirrel.Like{"mime_type": filters.FileType + "%"})
+		countBuilder = countBuilder.Where(squirrel.Like{columnMimeType: filters.FileType + "%"})
+		listBuilder = listBuilder.Where(squirrel.Like{columnMimeType: filters.FileType + "%"})
 	}
 
 	if filters.ObjectType != "" {
-		countBuilder = countBuilder.Where(squirrel.Eq{"object_type": filters.ObjectType})
-		listBuilder = listBuilder.Where(squirrel.Eq{"object_type": filters.ObjectType})
+		countBuilder = countBuilder.Where(squirrel.Eq{columnObjectType: filters.ObjectType})
+		listBuilder = listBuilder.Where(squirrel.Eq{columnObjectType: filters.ObjectType})
 	}
 
 	if filters.ObjectID > 0 {
-		countBuilder = countBuilder.Where(squirrel.Eq{"object_id": filters.ObjectID})
-		listBuilder = listBuilder.Where(squirrel.Eq{"object_id": filters.ObjectID})
+		countBuilder = countBuilder.Where(squirrel.Eq{columnObjectID: filters.ObjectID})
+		listBuilder = listBuilder.Where(squirrel.Eq{columnObjectID: filters.ObjectID})
 	}
 
 	// Получаем общее количество
@@ -93,24 +120,24 @@ func (r *Repo) Create(ctx context.Context, file model.File) (int64, error) {
 		Insert(tableName).
 		Suffix("RETURNING id").
 		SetMap(querybuilder.Eq{
-			"user_id":           file.UserID,
-			"manager_id":        file.ManagerID,
-			"object_type":       file.ObjectType,
-			"object_id":         file.ObjectID,
-			"original_filename": file.OriginalFileName,
-			"filename":          file.FileName,
-			"folder_path":       file.FolderPath,
-			"provider":          file.Provider,
-			"size":              file.Size,
-			"mime_type":         file.MimeType,
-			"url":               file.URL,
-			"slug":              file.Slug,
-			"name":              file.Name,
-			"description":       file.Description,
-			"data":              file.Data,
-			"is_primary":        file.IsPrimary,
-			"created_at":        file.CreatedAt,
-			"updated_at":        file.UpdatedAt,
+			columnUserID:      file.UserID,
+			columnManagerID:   file.ManagerID,
+			columnObjectType:  file.ObjectType,
+			columnObjectID:    file.ObjectID,
+			columnOriginal:    file.OriginalFileName,
+			columnFilename:    file.FileName,
+			columnFolderPath:  file.FolderPath,
+			columnProvider:    file.Provider,
+			columnSize:        file.Size,
+			columnMimeType:    file.MimeType,
+			columnURL:         file.URL,
+			columnSlug:        file.Slug,
+			columnName:        file.Name,
+			columnDescription: file.Description,
+			columnData:        file.Data,
+			columnIsPrimary:   file.IsPrimary,
+			columnCreatedAt:   file.CreatedAt,
+			columnUpdatedAt:   file.UpdatedAt,
 		})
 
 	var id int64
@@ -127,24 +154,24 @@ func (r *Repo) Update(ctx context.Context, id int64, file model.File) error {
 	builder := querybuilder.BuilderDollar().
 		Update(tableName).
 		SetMap(querybuilder.Eq{
-			"user_id":           file.UserID,
-			"manager_id":        file.ManagerID,
-			"object_type":       file.ObjectType,
-			"object_id":         file.ObjectID,
-			"original_filename": file.OriginalFileName,
-			"filename":          file.FileName,
-			"folder_path":       file.FolderPath,
-			"provider":          file.Provider,
-			"size":              file.Size,
-			"mime_type":         file.MimeType,
-			"url":               file.URL,
-			"name":              file.Name,
-			"data":              file.Data,
-			"description":       file.Description,
-			"is_primary":        file.IsPrimary,
-			"created_at":        file.CreatedAt,
-			"updated_at":        file.UpdatedAt,
-		}).Where(squirrel.Eq{"id": id})
+			columnUserID:      file.UserID,
+			columnManagerID:   file.ManagerID,
+			columnObjectType:  file.ObjectType,
+			columnObjectID:    file.ObjectID,
+			columnOriginal:    file.OriginalFileName,
+			columnFilename:    file.FileName,
+			columnFolderPath:  file.FolderPath,
+			columnProvider:    file.Provider,
+			columnSize:        file.Size,
+			columnMimeType:    file.MimeType,
+			columnURL:         file.URL,
+			columnName:        file.Name,
+			columnData:        file.Data,
+			columnDescription: file.Description,
+			columnIsPrimary:   file.IsPrimary,
+			columnCreatedAt:   file.CreatedAt,
+			columnUpdatedAt:   file.UpdatedAt,
+		}).Where(squirrel.Eq{columnID: id})
 
 	if _, err := r.pgsql.DB().Execx(ctx, op, builder); err != nil {
 		return fmt.Errorf("error update: %w", pgsql.ErrorTransform(err))
@@ -164,7 +191,7 @@ func (r *Repo) GetByID(ctx context.Context, id int64) (model.File, error) {
 	builder := querybuilder.BuilderDollar().
 		Select(columns...).
 		From(tableName).
-		Where(squirrel.Eq{"id": id, "deleted_at": nil}).
+		Where(squirrel.Eq{columnID: id, columnDeletedAt: nil}).
 		Limit(1)
 
 	var file model.File
@@ -189,9 +216,9 @@ func (r *Repo) DeleteByID(ctx context.Context, id int64) error {
 
 	builder := querybuilder.BuilderDollar().
 		Update(tableName).
-		Set("deleted_at", time.Now()).
-		Where(squirrel.Eq{"id": id}).
-		Where(squirrel.Eq{"deleted_at": nil})
+		Set(columnDeletedAt, time.Now()).
+		Where(squirrel.Eq{columnID: id}).
+		Where(squirrel.Eq{columnDeletedAt: nil})
 
 	if _, err := r.pgsql.DB().Execx(ctx, op, builder); err != nil {
 		return fmt.Errorf("failed to delete file: %w", pgsql.ErrorTransform(err))
@@ -207,9 +234,9 @@ func (r *Repo) GetByObjectType(ctx context.Context, objectType string, objectID 
 	builder := querybuilder.BuilderDollar().
 		Select(columns...).
 		From(tableName).
-		Where(squirrel.Eq{"object_type": objectType}).
-		Where(squirrel.Eq{"object_id": objectID}).
-		Where(squirrel.Eq{"deleted_at": nil}).
+		Where(squirrel.Eq{columnObjectType: objectType}).
+		Where(squirrel.Eq{columnObjectID: objectID}).
+		Where(squirrel.Eq{columnDeletedAt: nil}).
 		OrderBy("is_primary DESC", "position ASC", "created_at DESC")
 
 	var files []model.File
@@ -233,14 +260,14 @@ func (r *Repo) ClearPrimary(ctx context.Context, objectType string, objectID int
 
 	builder := querybuilder.BuilderDollar().
 		Update(tableName).
-		Set("is_primary", false).
-		Set("updated_at", time.Now()).
-		Where(squirrel.Eq{"object_type": objectType}).
-		Where(squirrel.Eq{"object_id": objectID}).
-		Where(squirrel.Eq{"is_primary": true})
+		Set(columnIsPrimary, false).
+		Set(columnUpdatedAt, time.Now()).
+		Where(squirrel.Eq{columnObjectType: objectType}).
+		Where(squirrel.Eq{columnObjectID: objectID}).
+		Where(squirrel.Eq{columnIsPrimary: true})
 
 	if excludeID > 0 {
-		builder = builder.Where(squirrel.NotEq{"id": excludeID})
+		builder = builder.Where(squirrel.NotEq{columnID: excludeID})
 	}
 
 	if _, err := r.pgsql.DB().Execx(ctx, op, builder); err != nil {
@@ -267,13 +294,13 @@ func (r *Repo) SetPrimary(ctx context.Context, id int64, objectType string, obje
 	builder := querybuilder.BuilderDollar().
 		Update(tableName).
 		SetMap(querybuilder.Eq{
-			"object_type": objectType,
-			"object_id":   objectID,
-			"is_primary":  true,
-			"updated_at":  time.Now(),
+			columnObjectType: objectType,
+			columnObjectID:   objectID,
+			columnIsPrimary:  true,
+			columnUpdatedAt:  time.Now(),
 		}).
-		Where(squirrel.Eq{"id": id}).
-		Where(squirrel.Eq{"deleted_at": nil})
+		Where(squirrel.Eq{columnID: id}).
+		Where(squirrel.Eq{columnDeletedAt: nil})
 
 	if _, err := r.pgsql.DB().Execx(ctx, op, builder); err != nil {
 		return fmt.Errorf("failed to set primary: %w", pgsql.ErrorTransform(err))
@@ -292,10 +319,10 @@ func (r *Repo) UpdatePosition(ctx context.Context, id int64, position int) error
 
 	builder := querybuilder.BuilderDollar().
 		Update(tableName).
-		Set("position", position).
-		Set("updated_at", "NOW()").
-		Where(squirrel.Eq{"id": id}).
-		Where(squirrel.Eq{"deleted_at": nil})
+		Set(columnPosition, position).
+		Set(columnUpdatedAt, "NOW()").
+		Where(squirrel.Eq{columnID: id}).
+		Where(squirrel.Eq{columnDeletedAt: nil})
 
 	if _, err := r.pgsql.DB().Execx(ctx, op, builder); err != nil {
 		return fmt.Errorf("failed to update file position: %w", pgsql.ErrorTransform(err))

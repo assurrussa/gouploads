@@ -24,6 +24,25 @@ import (
 const sniffLen = 512
 
 const (
+	extJPG  = ".jpg"
+	extJPEG = ".jpeg"
+	extPNG  = ".png"
+	extGIF  = ".gif"
+	extWebP = ".webp"
+	extMP4  = ".mp4"
+	extWebM = ".webm"
+	extPDF  = ".pdf"
+
+	mimeImageJPEG = "image/jpeg"
+	mimeImagePNG  = "image/png"
+	mimeImageGIF  = "image/gif"
+	mimeImageWebP = "image/webp"
+	mimeVideoMP4  = "video/mp4"
+	mimeVideoWebM = "video/webm"
+	mimePDF       = "application/pdf"
+)
+
+const (
 	uploadErrorCodeFileHeaderMissing = "file_header_missing"
 	uploadErrorCodeFileTooLarge      = "file_too_large"
 	uploadErrorCodeExtensionDenied   = "extension_denied"
@@ -130,16 +149,16 @@ func DefaultFileUploadConfig(addPathDir ...string) *FileUploadConfig {
 	uploadDir := strings.Join(uploadSegments, "/")
 	return &FileUploadConfig{
 		MaxFileSize:       10 * 1024 * 1024, // 10MB
-		AllowedExtensions: []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".webm", ".pdf"},
+		AllowedExtensions: []string{extJPG, extJPEG, extPNG, extGIF, extWebP, extMP4, extWebM, extPDF},
 		AllowedMimeTypes: map[string][]string{
-			".jpg":  {"image/jpeg"},
-			".jpeg": {"image/jpeg"},
-			".png":  {"image/png"},
-			".gif":  {"image/gif"},
-			".webp": {"image/webp"},
-			".mp4":  {"video/mp4"},
-			".webm": {"video/webm"},
-			".pdf":  {"application/pdf"},
+			extJPG:  {mimeImageJPEG},
+			extJPEG: {mimeImageJPEG},
+			extPNG:  {mimeImagePNG},
+			extGIF:  {mimeImageGIF},
+			extWebP: {mimeImageWebP},
+			extMP4:  {mimeVideoMP4},
+			extWebM: {mimeVideoWebM},
+			extPDF:  {mimePDF},
 		},
 		UploadDir: uploadDir,
 	}
@@ -151,13 +170,13 @@ func DefaultFileUploadRichTextConfig(addPathDir ...string) *FileUploadConfig {
 	uploadDir := strings.Join(segments, "/")
 	return &FileUploadConfig{
 		MaxFileSize:       5 * 1024 * 1024, // 5MB для Rich Text
-		AllowedExtensions: []string{".jpg", ".jpeg", ".png", ".gif", ".webp"},
+		AllowedExtensions: []string{extJPG, extJPEG, extPNG, extGIF, extWebP},
 		AllowedMimeTypes: map[string][]string{
-			".jpg":  {"image/jpeg"},
-			".jpeg": {"image/jpeg"},
-			".png":  {"image/png"},
-			".gif":  {"image/gif"},
-			".webp": {"image/webp"},
+			extJPG:  {mimeImageJPEG},
+			extJPEG: {mimeImageJPEG},
+			extPNG:  {mimeImagePNG},
+			extGIF:  {mimeImageGIF},
+			extWebP: {mimeImageWebP},
 		},
 		UploadDir: uploadDir,
 	}

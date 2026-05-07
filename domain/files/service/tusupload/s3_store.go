@@ -53,6 +53,8 @@ type S3StoreConfig struct {
 	IndexKey string
 }
 
+const defaultS3StorePrefix = "tmp/uploads"
+
 type S3Store struct {
 	client s3Client
 	domain ceph.DomainHost
@@ -74,7 +76,7 @@ func NewS3Store(client s3Client, domain ceph.DomainHost, redis redisClient, cfg 
 		cfg.PartSize = ceph.MinPartSize
 	}
 	if cfg.Prefix == "" {
-		cfg.Prefix = "tmp/uploads"
+		cfg.Prefix = defaultS3StorePrefix
 	}
 
 	return &S3Store{

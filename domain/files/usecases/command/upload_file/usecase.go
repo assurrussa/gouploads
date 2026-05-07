@@ -34,6 +34,11 @@ import (
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 )
 
+const (
+	contentTypeImageWebP = "image/webp"
+	extensionWebP        = ".webp"
+)
+
 //go:generate toolsmocks
 
 type fileRepository interface {
@@ -615,8 +620,8 @@ func extensionFromContentType(contentType string) string {
 
 	// Common fallback when mime package is missing mapping.
 	contentTypeLower := strings.ToLower(contentType)
-	if contentTypeLower == "image/webp" {
-		return ".webp"
+	if contentTypeLower == contentTypeImageWebP {
+		return extensionWebP
 	}
 
 	return ""

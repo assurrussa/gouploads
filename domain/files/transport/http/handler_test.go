@@ -149,7 +149,7 @@ func (f *fibertApp) AppSend(
 	app := fiber.New()
 	app.Add([]string{method}, "/", handler)
 
-	req := httptest.NewRequest(method, "/", nil)
+	req := httptest.NewRequestWithContext(context.Background(), method, "/", nil)
 	for _, opt := range opts {
 		opt(req)
 	}
@@ -174,7 +174,7 @@ func (f *fibertApp) CreateRequest(
 	app := fiber.New()
 	app.Add([]string{method}, "/", handler)
 
-	req := httptest.NewRequest(method, "/", nil)
+	req := httptest.NewRequestWithContext(context.Background(), method, "/", nil)
 	for _, opt := range opts {
 		opt(req)
 	}
