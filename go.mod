@@ -8,7 +8,7 @@ require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/assurrussa/godi v0.9.1
 	github.com/assurrussa/goredis v0.4.4
-	github.com/assurrussa/goshared v1.0.0
+	github.com/assurrussa/goshared v1.0.2
 	github.com/assurrussa/outbox v0.9.5
 	github.com/assurrussa/outbox/backends/pgsql v0.0.0-20260304133452-a769874e28a3
 	github.com/aws/aws-sdk-go-v2 v1.41.2

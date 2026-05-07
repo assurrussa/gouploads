@@ -1,4 +1,4 @@
-package externalconsumer
+package externalconsumer_test
 
 import (
 	"go/ast"
@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/assurrussa/gouploads/reference/externalconsumer"
 )
 
 func TestSupportedPackagesMatchesBlankImports(t *testing.T) {
@@ -19,7 +21,7 @@ func TestSupportedPackagesMatchesBlankImports(t *testing.T) {
 	file, err := parser.ParseFile(fset, filepath.Join(".", "imports.go"), nil, parser.ImportsOnly)
 	require.NoError(t, err)
 
-	var imported []string
+	imported := make([]string, 0, len(file.Imports))
 	for _, spec := range file.Imports {
 		require.NotNil(t, spec)
 		require.NotNil(t, spec.Name)
@@ -32,11 +34,11 @@ func TestSupportedPackagesMatchesBlankImports(t *testing.T) {
 
 	slices.Sort(imported)
 
-	supported := slices.Collect(slices.Values(SupportedPackages))
+	supported := slices.Collect(slices.Values(externalconsumer.SupportedPackages))
 	slices.Sort(supported)
 
 	require.Equal(t, supported, imported)
-	require.Equal(t, len(SupportedPackages), SupportedPackageCount)
+	require.Equal(t, len(externalconsumer.SupportedPackages), externalconsumer.SupportedPackageCount)
 }
 
 func TestImportsFileContainsOnlyBlankImports(t *testing.T) {
@@ -64,13 +66,13 @@ func TestImportsFileContainsOnlyBlankImports(t *testing.T) {
 func TestSupportedPackagesHaveReleaseSurfaceCategory(t *testing.T) {
 	t.Helper()
 
-	supported := slices.Collect(slices.Values(SupportedPackages))
+	supported := slices.Collect(slices.Values(externalconsumer.SupportedPackages))
 	slices.Sort(supported)
 
-	categorized := make([]string, 0, len(EmbeddingPackages))
-	categorized = append(categorized, EmbeddingPackages[:]...)
+	categorized := make([]string, 0, len(externalconsumer.EmbeddingPackages))
+	categorized = append(categorized, externalconsumer.EmbeddingPackages[:]...)
 	slices.Sort(categorized)
 
-	require.NotEmpty(t, EmbeddingPackages)
+	require.NotEmpty(t, externalconsumer.EmbeddingPackages)
 	require.Equal(t, supported, categorized)
 }

@@ -17,7 +17,11 @@ func main() {
 
 	flag.StringVar(&repoRoot, "repo-root", "..", "repository root to scan")
 	flag.Var(&consumers, "consumers", "comma-separated host consumer roots")
-	flag.Var(&allowedDeepImportDirs, "allow-deep-dir", "comma-separated transitional directories allowed to import gouploads internals")
+	flag.Var(
+		&allowedDeepImportDirs,
+		"allow-deep-dir",
+		"comma-separated transitional directories allowed to import gouploads internals",
+	)
 	flag.Parse()
 
 	if len(consumers) == 0 {
@@ -35,7 +39,7 @@ func main() {
 		os.Exit(1)
 	}
 	if !report.OK() {
-		fmt.Fprintln(os.Stderr, report.Error())
+		fmt.Fprintln(os.Stderr, report.Message())
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "Only packages listed in gouploads/reference/externalconsumer are stable for host consumers.")
 		os.Exit(1)

@@ -1,4 +1,4 @@
-package importpolicy
+package importpolicy_test
 
 import (
 	"os"
@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/assurrussa/gouploads/reference/externalconsumer"
 	"github.com/stretchr/testify/require"
+
+	"github.com/assurrussa/gouploads/internal/importpolicy"
+	"github.com/assurrussa/gouploads/reference/externalconsumer"
 )
 
 func TestCheckPassesCurrentSupportedImports(t *testing.T) {
@@ -25,13 +27,13 @@ package secondgohost
 import _ "github.com/assurrussa/gouploads/host"
 `)
 
-	report, err := Check(Config{
+	report, err := importpolicy.Check(importpolicy.Config{
 		RepoRoot:          repoRoot,
 		ConsumerRoots:     []string{"backend", "fixtures/second-go-host"},
 		SupportedPackages: externalconsumer.SupportedPackages,
 	})
 	require.NoError(t, err)
-	require.True(t, report.OK(), report.Error())
+	require.True(t, report.OK(), report.Message())
 }
 
 func TestCheckRejectsUnsupportedBackendImport(t *testing.T) {
@@ -44,14 +46,14 @@ package backend
 import _ "github.com/assurrussa/gouploads/domain/files/shared"
 `)
 
-	report, err := Check(Config{
+	report, err := importpolicy.Check(importpolicy.Config{
 		RepoRoot:          repoRoot,
 		ConsumerRoots:     []string{"backend", "fixtures/second-go-host"},
 		SupportedPackages: externalconsumer.SupportedPackages,
 	})
 	require.NoError(t, err)
 	require.False(t, report.OK())
-	require.Equal(t, []UnsupportedImport{{
+	require.Equal(t, []importpolicy.UnsupportedImport{{
 		File:       "backend/bad.go",
 		ImportPath: "github.com/assurrussa/gouploads/domain/files/shared",
 	}}, report.UnsupportedImports)
@@ -72,7 +74,7 @@ package app
 import _ "github.com/assurrussa/gouploads/di"
 `)
 
-	report, err := Check(Config{
+	report, err := importpolicy.Check(importpolicy.Config{
 		RepoRoot:              repoRoot,
 		ConsumerRoots:         []string{"backend"},
 		SupportedPackages:     externalconsumer.SupportedPackages,
@@ -80,7 +82,7 @@ import _ "github.com/assurrussa/gouploads/di"
 	})
 	require.NoError(t, err)
 	require.False(t, report.OK())
-	require.Equal(t, []UnsupportedImport{{
+	require.Equal(t, []importpolicy.UnsupportedImport{{
 		File:       "backend/internal/app/bad.go",
 		ImportPath: "github.com/assurrussa/gouploads/di",
 	}}, report.UnsupportedImports)
@@ -106,13 +108,13 @@ package mocks
 import _ "github.com/assurrussa/gouploads/domain/files/model"
 `)
 
-	report, err := Check(Config{
+	report, err := importpolicy.Check(importpolicy.Config{
 		RepoRoot:          repoRoot,
 		ConsumerRoots:     []string{"backend"},
 		SupportedPackages: externalconsumer.SupportedPackages,
 	})
 	require.NoError(t, err)
-	require.True(t, report.OK(), report.Error())
+	require.True(t, report.OK(), report.Message())
 }
 
 func writeGoFile(t *testing.T, root, name, content string) {
@@ -120,5 +122,5 @@ func writeGoFile(t *testing.T, root, name, content string) {
 
 	path := filepath.Join(root, filepath.FromSlash(name))
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(strings.TrimSpace(content)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(strings.TrimSpace(content)+"\n"), 0o600))
 }

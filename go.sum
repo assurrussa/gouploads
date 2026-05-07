@@ -9,8 +9,8 @@ github.com/assurrussa/godi v0.9.1 h1:6T8WutDwdxIxUXyeG1G9THQNLgqA1eItUKgpgY+Xo/o
 github.com/assurrussa/godi v0.9.1/go.mod h1:gV3ls8GtxLLDO5NPD2RqSyVbMqZO0/snRMtIOYgnGVk=
 github.com/assurrussa/goredis v0.4.4 h1:4Cd+HBDszwJ2cZ72mflyg9rvxcKOiEd7Pp2aF4wWXII=
 github.com/assurrussa/goredis v0.4.4/go.mod h1:VXfFYnHdPuqRPulx3kv6XiqWmL6ut0wwvI4VLhRBpN4=
-github.com/assurrussa/goshared v1.0.0 h1:LtJt6feqoTlsFdjBaZ+DSMe/PLfakQ7YLU2bSONuI8M=
-github.com/assurrussa/goshared v1.0.0/go.mod h1:19IIavp0MdXq/pmgPh9hS6AXMyqBJAGR5lVUEckJb5I=
+github.com/assurrussa/goshared v1.0.2 h1:j+m97yC7DrU5cCvh2D7H7A/EX16O0ARTg/b6hxNcEBA=
+github.com/assurrussa/goshared v1.0.2/go.mod h1:19IIavp0MdXq/pmgPh9hS6AXMyqBJAGR5lVUEckJb5I=
 github.com/assurrussa/outbox v0.9.5 h1:bLbWP3d3hEgsmxWpM6+WNr/F5DOJ0kMc1pinnyuC7YY=
 github.com/assurrussa/outbox v0.9.5/go.mod h1:fzNmhtaNHltUtnUsj5KMQPNlnEB9tY/Z5MfsxJYvBgg=
 github.com/assurrussa/outbox/backends/pgsql v0.0.0-20260304133452-a769874e28a3 h1:G3ICY0zX7HGNaHtwHDkNb8qVIAZGNE+w4D87mUHLRV0=

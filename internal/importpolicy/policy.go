@@ -34,7 +34,7 @@ func (r Report) OK() bool {
 	return len(r.UnsupportedImports) == 0
 }
 
-func (r Report) Error() string {
+func (r Report) Message() string {
 	if len(r.UnsupportedImports) == 0 {
 		return ""
 	}

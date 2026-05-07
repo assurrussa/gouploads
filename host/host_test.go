@@ -1,4 +1,4 @@
-package host
+package host_test
 
 import (
 	"context"
@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/assurrussa/gouploads/host"
 )
 
 func TestObjectIDPtr(t *testing.T) {
-	got := ObjectIDPtr(42)
+	got := host.ObjectIDPtr(42)
 
 	require.NotNil(t, got)
 	require.EqualValues(t, 42, got.Int64())
@@ -17,39 +19,50 @@ func TestObjectIDPtr(t *testing.T) {
 }
 
 func TestFilesBaseURLAndBucket(t *testing.T) {
-	cfg := StorageConfig{
-		Driver:       StorageDriverS3,
+	cfg := host.StorageConfig{
+		Driver:       host.StorageDriverS3,
 		AppDomainURL: "https://app.example.test",
-		S3: StorageS3Config{
+		S3: host.StorageS3Config{
 			Host:   "cdn.example.test/",
 			Bucket: "/media/",
 		},
 	}
 
-	require.Equal(t, "https://cdn.example.test", FilesBaseURL(cfg))
-	require.Equal(t, "media", FilesBucket(cfg))
-	require.Equal(t, "https://cdn.example.test/media/image.jpg", ComposeFileURL(FilesBaseURL(cfg), FilesBucket(cfg), "image.jpg"))
+	require.Equal(t, "https://cdn.example.test", host.FilesBaseURL(cfg))
+	require.Equal(t, "media", host.FilesBucket(cfg))
+	require.Equal(
+		t,
+		"https://cdn.example.test/media/image.jpg",
+		host.ComposeFileURL(host.FilesBaseURL(cfg), host.FilesBucket(cfg), "image.jpg"),
+	)
 }
 
 func TestNewCleanTusRequest(t *testing.T) {
 	before := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 
-	require.Equal(t, CleanTusRequest{Before: before}, NewCleanTusRequest(before))
+	require.Equal(t, host.CleanTusRequest{Before: before}, host.NewCleanTusRequest(before))
 }
 
 func TestBuildListenResizeRequest(t *testing.T) {
 	expireAt := time.Date(2026, 5, 7, 13, 0, 0, 0, time.UTC)
 	timestamp := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 
-	got := BuildListenResizeRequest(ListenResizeInput{
+	got := host.BuildListenResizeRequest(host.ListenResizeInput{
 		ExternalID: 10,
 		Status:     "done",
 		Attempt:    -3,
 		Error:      "ignored",
 		Metadata:   map[string]any{"source": "test"},
 		Timestamp:  timestamp,
-		Artifacts: []ResizeArtifactInput{
-			{Preset: "main", URL: "https://cdn.example.test/main.jpg", MediaType: "image", ContentType: "image/jpeg", Size: 10, ExpireAt: expireAt},
+		Artifacts: []host.ResizeArtifactInput{
+			{
+				Preset:      "main",
+				URL:         "https://cdn.example.test/main.jpg",
+				MediaType:   "image",
+				ContentType: "image/jpeg",
+				Size:        10,
+				ExpireAt:    expireAt,
+			},
 			{Preset: "main", URL: "https://cdn.example.test/duplicate.jpg"},
 			{Preset: "thumb", URL: "https://cdn.example.test/thumb.jpg"},
 		},
@@ -61,7 +74,7 @@ func TestBuildListenResizeRequest(t *testing.T) {
 	require.Equal(t, "ignored", got.Error)
 	require.Equal(t, timestamp, got.Timestamp)
 	require.Len(t, got.Artifacts, 2)
-	require.Equal(t, ResizeArtifact{
+	require.Equal(t, host.ResizeArtifact{
 		Preset:      "main",
 		URL:         "https://cdn.example.test/main.jpg",
 		MediaType:   "image",
@@ -73,13 +86,13 @@ func TestBuildListenResizeRequest(t *testing.T) {
 }
 
 func TestUploadHandlerUsesHostOwnedStrategyContract(t *testing.T) {
-	handler := NewUploadHandler(
+	handler := host.NewUploadHandler(
 		nil,
 		nil,
 		nil,
 		nil,
-		func(_ context.Context, metadata map[string]string) (UploadContext, error) {
-			return UploadContext{UserID: 10, Metadata: metadata}, nil
+		func(_ context.Context, metadata map[string]string) (host.UploadContext, error) {
+			return host.UploadContext{UserID: 10, Metadata: metadata}, nil
 		},
 		nil,
 	)
@@ -89,32 +102,16 @@ func TestUploadHandlerUsesHostOwnedStrategyContract(t *testing.T) {
 	})
 }
 
-func TestInternalContextBuilderConvertsHostContext(t *testing.T) {
-	builder := internalContextBuilder(func(_ context.Context, metadata map[string]string) (UploadContext, error) {
-		return UploadContext{
-			UserID:    10,
-			SessionID: "session-id",
-			Metadata:  metadata,
-		}, nil
-	})
-
-	got, err := builder(context.Background(), map[string]string{"context": "avatar"})
-	require.NoError(t, err)
-	require.EqualValues(t, 10, got.UserID)
-	require.Equal(t, "session-id", got.SessionID)
-	require.Equal(t, map[string]string{"context": "avatar"}, got.Metadata)
-}
-
 type hostStrategy struct{}
 
-func (hostStrategy) CanUpload(context.Context, UploadContext) error {
+func (hostStrategy) CanUpload(context.Context, host.UploadContext) error {
 	return nil
 }
 
-func (hostStrategy) GetConfig(context.Context, UploadContext) *FileUploadConfig {
+func (hostStrategy) GetConfig(context.Context, host.UploadContext) *host.FileUploadConfig {
 	return nil
 }
 
-func (hostStrategy) GetAfterJobs(context.Context, UploadContext) ([]FileEventAfterJob, error) {
+func (hostStrategy) GetAfterJobs(context.Context, host.UploadContext) ([]host.FileEventAfterJob, error) {
 	return nil, nil
 }

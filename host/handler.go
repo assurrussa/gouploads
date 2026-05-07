@@ -4,9 +4,10 @@ import (
 	"context"
 
 	"github.com/assurrussa/goshared/pkg/logger"
+	"github.com/gofiber/fiber/v3"
+
 	uploadhttp "github.com/assurrussa/gouploads/domain/files/transport/http"
 	"github.com/assurrussa/gouploads/shared/uploadstrategies"
-	"github.com/gofiber/fiber/v3"
 )
 
 type TaskUploader interface {
@@ -98,7 +99,10 @@ func (a uploadStrategyAdapter) GetConfig(ctx context.Context, req uploadstrategi
 	return a.strategy.GetConfig(ctx, toHostUploadContext(req))
 }
 
-func (a uploadStrategyAdapter) GetAfterJobs(ctx context.Context, req uploadstrategies.UploadContext) ([]FileEventAfterJob, error) {
+func (a uploadStrategyAdapter) GetAfterJobs(
+	ctx context.Context,
+	req uploadstrategies.UploadContext,
+) ([]FileEventAfterJob, error) {
 	return a.strategy.GetAfterJobs(ctx, toHostUploadContext(req))
 }
 

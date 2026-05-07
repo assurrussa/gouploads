@@ -5,9 +5,10 @@ import (
 	"time"
 
 	"github.com/assurrussa/goshared/pkg/logger"
+	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
+
 	cleanerfiles "github.com/assurrussa/gouploads/domain/files/usecases/command/cleaner_files"
 	cleanertusuploads "github.com/assurrussa/gouploads/domain/files/usecases/command/cleaner_tus_uploads"
-	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 )
 
 type (
