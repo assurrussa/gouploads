@@ -24,7 +24,10 @@ import _ "github.com/assurrussa/gouploads/host"
 	writeGoFile(t, repoRoot, "fixtures/second-go-host/good.go", `
 package secondgohost
 
-import _ "github.com/assurrussa/gouploads/host"
+import (
+	_ "github.com/assurrussa/gouploads/host"
+	_ "github.com/assurrussa/gouploads/hosttest"
+)
 `)
 
 	report, err := importpolicy.Check(importpolicy.Config{

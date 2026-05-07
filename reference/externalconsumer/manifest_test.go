@@ -69,10 +69,16 @@ func TestSupportedPackagesHaveReleaseSurfaceCategory(t *testing.T) {
 	supported := slices.Collect(slices.Values(externalconsumer.SupportedPackages))
 	slices.Sort(supported)
 
-	categorized := make([]string, 0, len(externalconsumer.EmbeddingPackages))
+	categorized := make(
+		[]string,
+		0,
+		len(externalconsumer.EmbeddingPackages)+len(externalconsumer.TestSupportPackages),
+	)
 	categorized = append(categorized, externalconsumer.EmbeddingPackages[:]...)
+	categorized = append(categorized, externalconsumer.TestSupportPackages[:]...)
 	slices.Sort(categorized)
 
 	require.NotEmpty(t, externalconsumer.EmbeddingPackages)
+	require.NotEmpty(t, externalconsumer.TestSupportPackages)
 	require.Equal(t, supported, categorized)
 }

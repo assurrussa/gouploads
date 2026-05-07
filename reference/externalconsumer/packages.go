@@ -6,8 +6,15 @@ var EmbeddingPackages = [...]string{
 	"github.com/assurrussa/gouploads/host",
 }
 
+// TestSupportPackages are stable packages for external consumer tests and test
+// helpers. Runtime host code should use EmbeddingPackages instead.
+var TestSupportPackages = [...]string{
+	"github.com/assurrussa/gouploads/hosttest",
+}
+
 var SupportedPackages = joinPackageGroups(
 	EmbeddingPackages[:],
+	TestSupportPackages[:],
 )
 
 var SupportedPackageCount = len(SupportedPackages)

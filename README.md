@@ -27,8 +27,10 @@ go get github.com/assurrussa/gouploads@latest
 `gouploads` uses an interface-driven architecture to wire its components together and register specific processing strategies for different contexts (e.g., standard uploads vs. rich-text uploads).
 
 Host applications should import `github.com/assurrussa/gouploads/host` as the
-stable embedding surface. Deep `domain/files/*`, `config`, and `di` packages
-are library internals unless a release note explicitly promotes a package.
+stable runtime embedding surface. External consumer tests may import
+`github.com/assurrussa/gouploads/hosttest` for stable test-support contracts.
+Deep `domain/files/*`, `config`, and `di` packages are library internals unless
+a release note explicitly promotes a package.
 
 ### 1. Server Initialization
 
@@ -85,7 +87,7 @@ Some of the main configurations include:
 
 ## Stable Host Surface
 
-The supported host-facing package is:
+The supported host-facing runtime package is:
 
 - `github.com/assurrussa/gouploads/host`
 
@@ -95,6 +97,13 @@ cleanup use case factories, outbox job registration, and DI bootstrap helpers.
 Host projects remain responsible for local environment mapping, auth context
 extraction, route mounting, object-type policy, and deployment topology.
 
+The supported external test-support package is:
+
+- `github.com/assurrussa/gouploads/hosttest`
+
+It exposes narrow aliases for consumer tests and test helpers that need to
+assert upload storage input/output values without importing gouploads internals.
+
 The machine-readable source of truth is
 `gouploads/reference/externalconsumer`. Host projects should treat packages not
 listed there, including `domain/files/*`, `shared/*`, `config`, and `di`, as
@@ -103,12 +112,8 @@ internal implementation details.
 To check a host repository:
 
 ```bash
-go run ./cmd/importpolicy --repo-root ../site --allow-deep-dir backend/internal/infrastructure/uploads
+go run ./cmd/importpolicy --repo-root ../site
 ```
-
-The `--allow-deep-dir` flag is transitional. It allows an existing host adapter
-to keep deep imports until the host can update to a released `gouploads` version
-that contains the `host` facade.
 
 ## License
 
