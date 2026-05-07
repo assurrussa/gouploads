@@ -11,37 +11,48 @@ import (
 )
 
 type (
-	AfterProcessService  = eventfileafterprocess.Service
-	BatchRequest         = uploadservice.BatchRequest
-	ClientError          = uploadservice.ClientError
-	DeleteRequest        = uploadservice.DeleteRequest
-	EventAfterProcess    = fileshared.EventAfterProcess
-	File                 = uploadmodel.File
-	FileData             = uploadmodel.FileData
-	FileEventAfterJob    = fileshared.FileEventAfterJob
-	FileLoader           = fileloader.Service
-	FilePreset           = fileshared.FilePreset
-	FileRepo             = filerepo.Repo
-	FileUploadConfig     = uploadservice.FileUploadConfig
-	FileUploadTaskStatus = fileshared.FileUploadTaskStatus
-	ListFilters          = filerepo.ListFilters
-	ObjectID             = fileshared.FileObjectID
-	ObjectType           = fileshared.FileObjectType
-	PresetName           = fileshared.PresetName
-	ReaderRequest        = uploadservice.ReaderRequest
-	ReaderUploadInput    = uploadservice.ReaderUploadInput
-	SingleRequest        = uploadservice.SingleRequest
-	Status               = fileshared.Status
-	TusStore             = tusupload.Store
-	UploadedFile         = uploadservice.UploadedFile
-	UploadService        = uploadservice.Service
-	UploadValidator      = uploadservice.UploadValidator
-	UploadValidatorFunc  = uploadservice.UploadValidatorFunc
-	UserType             = fileshared.UserType
-	ValidationError      = uploadservice.ValidationError
+	AfterProcessService   = eventfileafterprocess.Service
+	AfterProcessFunc      = eventfileafterprocess.FnCallAfterProcess
+	AfterProcessPayload   = eventfileafterprocess.Payload
+	BatchRequest          = uploadservice.BatchRequest
+	ClientError           = uploadservice.ClientError
+	DeleteRequest         = uploadservice.DeleteRequest
+	EventAfterProcess     = fileshared.EventAfterProcess
+	File                  = uploadmodel.File
+	FileData              = uploadmodel.FileData
+	FileDeletedEvent      = fileshared.FileDeletedEvent
+	FileDeleteStatus      = fileshared.FileDeleteStatus
+	FileEventAfterJob     = fileshared.FileEventAfterJob
+	FileLoader            = fileloader.Service
+	FilePreset            = fileshared.FilePreset
+	FileUploadEventFile   = fileshared.FileUploadEventFile
+	FileUploadStatusEvent = fileshared.FileUploadStatusEvent
+	FileRepo              = filerepo.Repo
+	FileUploadConfig      = uploadservice.FileUploadConfig
+	FileUploadTaskStatus  = fileshared.FileUploadTaskStatus
+	ListFilters           = filerepo.ListFilters
+	ObjectID              = fileshared.FileObjectID
+	ObjectType            = fileshared.FileObjectType
+	PresetName            = fileshared.PresetName
+	ReaderRequest         = uploadservice.ReaderRequest
+	ReaderUploadInput     = uploadservice.ReaderUploadInput
+	SingleRequest         = uploadservice.SingleRequest
+	Status                = fileshared.Status
+	TusStore              = tusupload.Store
+	UploadedFile          = uploadservice.UploadedFile
+	UploadService         = uploadservice.Service
+	UploadValidator       = uploadservice.UploadValidator
+	UploadValidatorFunc   = uploadservice.UploadValidatorFunc
+	UserType              = fileshared.UserType
+	ValidationError       = uploadservice.ValidationError
 )
 
 const (
+	EventTypeAfterProcess                               = fileshared.EventTypeAfterProcess
+	EventTypeDeleted                                    = fileshared.EventTypeDeleted
+	EventTypeUploadStatus                               = fileshared.EventTypeUploadStatus
+	FileDeleteStatusCompleted      FileDeleteStatus     = fileshared.FileDeleteStatusCompleted
+	FileDeleteStatusFailed         FileDeleteStatus     = fileshared.FileDeleteStatusFailed
 	FileUploadTaskStatusCompleted  FileUploadTaskStatus = fileshared.FileUploadTaskStatusCompleted
 	FileUploadTaskStatusFailed     FileUploadTaskStatus = fileshared.FileUploadTaskStatusFailed
 	FileUploadTaskStatusProcessing FileUploadTaskStatus = fileshared.FileUploadTaskStatusProcessing
@@ -59,6 +70,36 @@ const (
 func ObjectIDPtr(id int64) *ObjectID {
 	objectID := ObjectID(id)
 	return &objectID
+}
+
+func NewAfterProcessPayload(
+	userID UserID,
+	userType UserType,
+	fileID int64,
+	eventType string,
+	metas ...map[string]any,
+) AfterProcessPayload {
+	return eventfileafterprocess.NewPayload(userID, userType, fileID, eventType, metas...)
+}
+
+func MarshalAfterProcessPayload(payload AfterProcessPayload) (string, error) {
+	return eventfileafterprocess.MarshalPayload(payload)
+}
+
+func UnmarshalAfterProcessPayload(data string) (AfterProcessPayload, error) {
+	return eventfileafterprocess.UnmarshalPayload(data)
+}
+
+func NewFileUploadStatusEvent(taskID int64, status FileUploadTaskStatus) FileUploadStatusEvent {
+	return fileshared.NewFileUploadStatusEvent(taskID, status)
+}
+
+func NewEventAfterProcess(fileID int64, filePath string, status Status, eventTrigger string) EventAfterProcess {
+	return fileshared.NewEventAfterProcess(fileID, filePath, status, eventTrigger)
+}
+
+func NewFileDeletedEvent(fileID int64, filePath string, status FileDeleteStatus) FileDeletedEvent {
+	return fileshared.NewFileDeletedEvent(fileID, filePath, status)
 }
 
 func NewFileEventAfterJob(jobName string, userID UserID, payload string, metas ...map[string]any) FileEventAfterJob {

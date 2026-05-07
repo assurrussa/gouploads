@@ -43,6 +43,40 @@ func TestNewCleanTusRequest(t *testing.T) {
 	require.Equal(t, host.CleanTusRequest{Before: before}, host.NewCleanTusRequest(before))
 }
 
+func TestAfterProcessPayloadHelpers(t *testing.T) {
+	userID := host.NewUserID()
+
+	payload := host.NewAfterProcessPayload(
+		userID,
+		host.UserTypeAdmin,
+		42,
+		"admin_preview_attach",
+		map[string]any{"sessionId": "session-1"},
+	)
+
+	raw, err := host.MarshalAfterProcessPayload(payload)
+	require.NoError(t, err)
+
+	got, err := host.UnmarshalAfterProcessPayload(raw)
+	require.NoError(t, err)
+	require.Equal(t, userID, got.UserID)
+	require.Equal(t, host.UserTypeAdmin, got.UserType)
+	require.Equal(t, int64(42), got.FileID)
+	require.Equal(t, "admin_preview_attach", got.EventType)
+	require.Equal(t, "session-1", got.Meta["sessionId"])
+}
+
+func TestEventConstructorsExposeStableHostTypes(t *testing.T) {
+	uploadStatus := host.NewFileUploadStatusEvent(10, host.FileUploadTaskStatusCompleted)
+	require.Equal(t, host.EventTypeUploadStatus, uploadStatus.EventName())
+
+	afterProcess := host.NewEventAfterProcess(11, "image.jpg", host.StatusCompleted, "avatar")
+	require.Equal(t, host.EventTypeAfterProcess, afterProcess.EventName())
+
+	deleted := host.NewFileDeletedEvent(12, "old.jpg", host.FileDeleteStatusCompleted)
+	require.Equal(t, host.EventTypeDeleted, deleted.EventName())
+}
+
 func TestBuildListenResizeRequest(t *testing.T) {
 	expireAt := time.Date(2026, 5, 7, 13, 0, 0, 0, time.UTC)
 	timestamp := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
