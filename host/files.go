@@ -1,6 +1,8 @@
 package host
 
 import (
+	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
+
 	uploadmodel "github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/repositories/filerepo"
 	eventfileafterprocess "github.com/assurrussa/gouploads/domain/files/service/event_file_after_process"
@@ -70,6 +72,14 @@ const (
 func ObjectIDPtr(id int64) *ObjectID {
 	objectID := ObjectID(id)
 	return &objectID
+}
+
+func NewFileRepo(client pgsql.Client, tx pgsql.TxManager) (*FileRepo, error) {
+	return filerepo.New(filerepo.NewOptions(client, tx))
+}
+
+func MustFileRepo(client pgsql.Client, tx pgsql.TxManager) *FileRepo {
+	return filerepo.Must(filerepo.NewOptions(client, tx))
 }
 
 func NewAfterProcessPayload(

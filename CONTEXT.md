@@ -26,5 +26,9 @@
   `domain/files/*`, `shared/*`, `config`, or `di` directly.
 - `shared/*` and `di` may keep their physical package names for internal
   compatibility, but stable consumer access must go through the Host Surface.
-- A temporary host adapter may be allowed by the import policy while a published
-  version catches up, but new deep imports should not spread.
+- New host runtime imports must pass `cmd/importpolicy` without transitional
+  deep-import allowances.
+- Local reusable-boundary readiness means `make release-readiness` passes.
+  Published reusable-boundary readiness additionally requires
+  `make externalconsumer-published VERSION=<tag>` to pass against a pushed tag
+  without local `replace`.

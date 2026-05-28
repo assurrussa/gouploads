@@ -15,10 +15,11 @@ import (
 const gouploadsModulePath = "github.com/assurrussa/gouploads"
 
 type Config struct {
-	RepoRoot              string
-	ConsumerRoots         []string
-	SupportedPackages     []string
-	AllowedDeepImportDirs []string
+	RepoRoot                 string
+	ConsumerRoots            []string
+	SupportedPackages        []string
+	SupportedRuntimePackages []string
+	SupportedTestPackages    []string
 }
 
 type Report struct {
@@ -52,18 +53,18 @@ func Check(cfg Config) (Report, error) {
 		cfg.RepoRoot = "."
 	}
 
-	supported := make(map[string]struct{}, len(cfg.SupportedPackages))
-	for _, pkg := range cfg.SupportedPackages {
-		supported[pkg] = struct{}{}
-	}
-
-	allowedDeepImportDirs := normalizeDirs(cfg.AllowedDeepImportDirs)
+	runtimeSupported := supportedPackages(cfg.SupportedRuntimePackages, cfg.SupportedPackages)
+	testSupported := supportedPackages(cfg.SupportedTestPackages, cfg.SupportedPackages)
 
 	var violations []UnsupportedImport
 	err := walkGoFiles(cfg.RepoRoot, cfg.ConsumerRoots, func(path string) error {
 		relPath := rel(cfg.RepoRoot, path)
 		if isIgnoredGoFile(relPath) {
 			return nil
+		}
+		supported := runtimeSupported
+		if isTestSupportGoFile(relPath) {
+			supported = testSupported
 		}
 
 		fset := token.NewFileSet()
@@ -82,9 +83,6 @@ func Check(cfg Config) (Report, error) {
 				continue
 			}
 			if _, ok := supported[importPath]; ok {
-				continue
-			}
-			if isUnderAnyDir(relPath, allowedDeepImportDirs) {
 				continue
 			}
 
@@ -114,29 +112,22 @@ func isGouploadsImport(importPath string) bool {
 	return importPath == gouploadsModulePath || strings.HasPrefix(importPath, gouploadsModulePath+"/")
 }
 
-func normalizeDirs(dirs []string) []string {
-	out := make([]string, 0, len(dirs))
-	for _, dir := range dirs {
-		dir = strings.Trim(filepath.ToSlash(strings.TrimSpace(dir)), "/")
-		if dir == "" {
-			continue
-		}
-		out = append(out, dir)
+func supportedPackages(primary []string, fallback []string) map[string]struct{} {
+	packages := primary
+	if len(packages) == 0 {
+		packages = fallback
 	}
-	return out
-}
 
-func isUnderAnyDir(file string, dirs []string) bool {
-	file = strings.Trim(filepath.ToSlash(file), "/")
-	for _, dir := range dirs {
-		if file == dir || strings.HasPrefix(file, dir+"/") {
-			return true
-		}
+	supported := make(map[string]struct{}, len(packages))
+	for _, pkg := range packages {
+		supported[pkg] = struct{}{}
 	}
-	return false
+
+	return supported
 }
 
 func walkGoFiles(repoRoot string, roots []string, visit func(path string) error) error {
+	var missingRoots []string
 	for _, root := range roots {
 		root = strings.TrimSpace(root)
 		if root == "" {
@@ -146,6 +137,7 @@ func walkGoFiles(repoRoot string, roots []string, visit func(path string) error)
 		absoluteRoot := filepath.Join(repoRoot, filepath.FromSlash(root))
 		if _, err := os.Stat(absoluteRoot); err != nil {
 			if os.IsNotExist(err) {
+				missingRoots = append(missingRoots, root)
 				continue
 			}
 			return err
@@ -174,12 +166,17 @@ func walkGoFiles(repoRoot string, roots []string, visit func(path string) error)
 		}
 	}
 
+	if len(missingRoots) > 0 {
+		slices.Sort(missingRoots)
+		return fmt.Errorf("consumer roots not found under %s: %s", repoRoot, strings.Join(missingRoots, ", "))
+	}
+
 	return nil
 }
 
 func shouldSkipDir(name string) bool {
 	switch name {
-	case ".git", ".nuxt", "dist", "node_modules", "tmp", "vendor":
+	case ".cache", ".git", ".go-cache", ".nuxt", "dist", "node_modules", "tmp", "vendor":
 		return true
 	default:
 		return false
@@ -188,9 +185,24 @@ func shouldSkipDir(name string) bool {
 
 func isIgnoredGoFile(path string) bool {
 	normalized := filepath.ToSlash(path)
-	return strings.HasSuffix(normalized, "_test.go") ||
-		strings.HasSuffix(normalized, ".gen.go") ||
+	return strings.HasSuffix(normalized, ".gen.go") ||
 		strings.Contains(normalized, "/mocks/")
+}
+
+func isTestSupportGoFile(path string) bool {
+	normalized := filepath.ToSlash(path)
+	if strings.HasSuffix(normalized, "_test.go") {
+		return true
+	}
+
+	for _, segment := range strings.Split(normalized, "/") {
+		switch segment {
+		case "tests", "testsupport":
+			return true
+		}
+	}
+
+	return false
 }
 
 func rel(root, path string) string {

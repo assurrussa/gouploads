@@ -96,13 +96,19 @@ store contracts, upload handler contracts, resize webhook request helpers,
 cleanup use case factories, outbox job registration, and DI bootstrap helpers.
 Host projects remain responsible for local environment mapping, auth context
 extraction, route mounting, object-type policy, and deployment topology.
+It also exposes the embedded `files` table migrations through `host.MigrationsFS`
+and `host.MigrationFiles`. Hosts still need to run the storage migrations owned
+by their selected outbox backend.
 
 The supported external test-support package is:
 
 - `github.com/assurrussa/gouploads/hosttest`
 
-It exposes narrow aliases for consumer tests and test helpers that need to
-assert upload storage input/output values without importing gouploads internals.
+It exposes narrow aliases and matchers for consumer tests and test helpers that
+need to assert upload storage input/output values or resize callback payloads
+without importing gouploads internals.
+Integration-only database helpers are compiled by the release probe with
+`-tags integration`.
 
 The machine-readable source of truth is
 `gouploads/reference/externalconsumer`. Host projects should treat packages not
@@ -112,8 +118,11 @@ internal implementation details.
 To check a host repository:
 
 ```bash
-go run ./cmd/importpolicy --repo-root ../site
+go run ./cmd/importpolicy --repo-root ../site --consumers backend,goadmin,fixtures/second-go-host
 ```
+
+For the full host integration contract, see [docs/host-integration.md](docs/host-integration.md).
+For release readiness, see [RELEASING.md](RELEASING.md).
 
 ## License
 

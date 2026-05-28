@@ -13,26 +13,20 @@ import (
 func main() {
 	var repoRoot string
 	var consumers csvFlag
-	var allowedDeepImportDirs csvFlag
 
-	flag.StringVar(&repoRoot, "repo-root", "..", "repository root to scan")
+	flag.StringVar(&repoRoot, "repo-root", "../site", "repository root to scan")
 	flag.Var(&consumers, "consumers", "comma-separated host consumer roots")
-	flag.Var(
-		&allowedDeepImportDirs,
-		"allow-deep-dir",
-		"comma-separated transitional directories allowed to import gouploads internals",
-	)
 	flag.Parse()
 
 	if len(consumers) == 0 {
-		consumers = csvFlag{"backend", "fixtures/second-go-host"}
+		consumers = csvFlag{"backend", "goadmin", "fixtures/second-go-host"}
 	}
 
 	report, err := importpolicy.Check(importpolicy.Config{
-		RepoRoot:              repoRoot,
-		ConsumerRoots:         consumers,
-		SupportedPackages:     externalconsumer.SupportedPackages,
-		AllowedDeepImportDirs: allowedDeepImportDirs,
+		RepoRoot:                 repoRoot,
+		ConsumerRoots:            consumers,
+		SupportedRuntimePackages: externalconsumer.EmbeddingPackages[:],
+		SupportedTestPackages:    externalconsumer.SupportedPackages,
 	})
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "gouploads import policy check failed: %v\n", err)
@@ -41,7 +35,8 @@ func main() {
 	if !report.OK() {
 		_, _ = fmt.Fprintln(os.Stderr, report.Message())
 		_, _ = fmt.Fprintln(os.Stderr)
-		_, _ = fmt.Fprintln(os.Stderr, "Only packages listed in gouploads/reference/externalconsumer are stable for host consumers.")
+		_, _ = fmt.Fprintln(os.Stderr, "Runtime host code may import only gouploads/host.")
+		_, _ = fmt.Fprintln(os.Stderr, "Test files and tests/testsupport packages may also import gouploads/hosttest.")
 		os.Exit(1)
 	}
 }

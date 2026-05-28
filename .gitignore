@@ -1,4 +1,6 @@
 .DS_Store
+.cache/
+.go-cache/
 .idea
 .vscode
 __debug_*
