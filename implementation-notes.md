@@ -1,5 +1,28 @@
 # Implementation Notes
 
+## 2026-06-04: Agent Project Initialization
+
+- Goal: initialize project-facing agent guidance for future work in
+  `gouploads` without changing code behavior.
+- Used `$project-context-router` to resolve shared context at
+  `/Users/amir/agents/agent-context`, then compared the local repository docs
+  and code with the shared `gouploads`, `media-resizer`, and `outbox` platform
+  pages.
+- Kept `AGENTS.md` focused on agent workflow, source order, public import
+  boundaries, commands, generation rules, and verification expectations instead
+  of duplicating `README.md` or `docs/host-integration.md`.
+- Added `docs/project-map.md` as the concise project fact sheet for package map,
+  runtime flow, ownership split, config keys, verification gates, and
+  cross-project context.
+- Preserved the existing reusable-boundary decision: runtime consumers use
+  `github.com/assurrussa/gouploads/host`; external tests use
+  `github.com/assurrussa/gouploads/hosttest`; deep packages remain internal
+  unless promoted through `reference/externalconsumer`.
+- Did not touch the pre-existing modified `.github/workflows/go.yml`.
+- A direct `go list ./...` first failed because the default user-level Go build
+  cache is outside the sandbox. Re-ran it with repository-local `GOCACHE` and
+  `GOPATH`, matching the Makefile cache strategy, and it succeeded.
+
 ## 2026-05-28: Reusable Boundary
 
 - Goal: make `gouploads` reusable through explicit host-facing contracts rather
