@@ -34,9 +34,6 @@ jobs:
         env:
           GOPRIVATE: "github.com/assurrussa"
 
-      - name: Reusable Boundary
-        run: make release-readiness
-
       - name: Build
         run: go build -v ./...
 

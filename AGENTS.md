@@ -29,14 +29,16 @@ Read in this order:
 8. Relevant code, tests, migrations, configs, and generated contracts
 
 Use `$project-context-router` when a task needs cross-project context or the
-shared wiki. The shared wiki root is `/Users/amir/agents/agent-context`.
+shared wiki. Expose the shared wiki root through `AGENT_CONTEXT_ROOT` or let `$project-context-router` resolve it for the current session.
 After local grounding, read:
 
-- `/Users/amir/agents/agent-context/streams/wiki/index.md`
-- `/Users/amir/agents/agent-context/streams/wiki/glossary.md`
-- `/Users/amir/agents/agent-context/streams/wiki/platforms/gouploads.md`
-- `/Users/amir/agents/agent-context/streams/wiki/platforms/media-resizer.md`
-- `/Users/amir/agents/agent-context/streams/wiki/platforms/outbox.md`
+Do not hard-code machine-local absolute paths in this public repository.
+
+- `streams/wiki/index.md`
+- `streams/wiki/glossary.md`
+- `streams/wiki/platforms/gouploads.md`
+- `streams/wiki/platforms/media-resizer.md`
+- `streams/wiki/platforms/outbox.md`
 
 If local verified docs/code conflict with the shared wiki, treat the wiki as
 stale. When the task includes documentation upkeep, update the relevant platform
