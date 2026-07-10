@@ -296,23 +296,35 @@ func (h *Handler) TusPatch(c fiber.Ctx) error {
 
 	newOffset, err := h.tusStore.Append(c, session.ID, offset, body, mimeType)
 	if err != nil {
-		if errors.Is(err, tusupload.ErrOffsetMismatch) {
-			c.Set("Upload-Offset", strconv.FormatInt(session.Offset, 10))
-			return c.SendStatus(http.StatusConflict)
-		}
-		if errors.Is(err, tusupload.ErrLengthExceeded) {
-			c.Set("Upload-Offset", strconv.FormatInt(session.Offset, 10))
-			return c.SendStatus(http.StatusRequestEntityTooLarge)
-		}
-		if errors.Is(err, tusupload.ErrChunkTooSmall) {
-			return h.jsonError(c, fiber.StatusBadRequest, "chunk size too small")
-		}
-		h.logger.ErrorContext(c, "failed to append tus upload", logger.Error(err))
-		return c.SendStatus(http.StatusInternalServerError)
+		return h.handleTusAppendError(c, session, err)
 	}
 
 	c.Set("Upload-Offset", strconv.FormatInt(newOffset, 10))
 	return c.SendStatus(http.StatusNoContent)
+}
+
+func (h *Handler) handleTusAppendError(c fiber.Ctx, session tusupload.Session, err error) error {
+	switch {
+	case errors.Is(err, tusupload.ErrOffsetMismatch),
+		errors.Is(err, tusupload.ErrUploadBusy),
+		errors.Is(err, tusupload.ErrFenceLost):
+		currentOffset := session.Offset
+		if current, getErr := h.tusStore.Get(c, session.ID); getErr == nil {
+			currentOffset = current.Offset
+		}
+		c.Set("Upload-Offset", strconv.FormatInt(currentOffset, 10))
+		return c.SendStatus(http.StatusConflict)
+	case errors.Is(err, tusupload.ErrLengthExceeded):
+		c.Set("Upload-Offset", strconv.FormatInt(session.Offset, 10))
+		return c.SendStatus(http.StatusRequestEntityTooLarge)
+	case errors.Is(err, tusupload.ErrChunkTooSmall):
+		return h.jsonError(c, fiber.StatusBadRequest, "chunk size too small")
+	case errors.Is(err, tusupload.ErrChunkSize):
+		return h.jsonError(c, fiber.StatusBadRequest, "intermediate chunk size must match the server part size")
+	default:
+		h.logger.ErrorContext(c, "failed to append tus upload", logger.Error(err))
+		return c.SendStatus(http.StatusInternalServerError)
+	}
 }
 
 func (h *Handler) TusComplete(c fiber.Ctx) error {
@@ -384,6 +396,9 @@ func (h *Handler) TusComplete(c fiber.Ctx) error {
 	if err != nil {
 		if errors.Is(err, tusupload.ErrOffsetMismatch) {
 			return h.jsonError(c, fiber.StatusConflict, "upload is not complete")
+		}
+		if errors.Is(err, tusupload.ErrUploadBusy) || errors.Is(err, tusupload.ErrFenceLost) {
+			return h.jsonError(c, fiber.StatusConflict, "upload finalization is already in progress")
 		}
 		h.logger.ErrorContext(c, "failed to finalize tus upload", logger.Error(err))
 		return h.jsonError(c, fiber.StatusInternalServerError, "failed to finalize upload")

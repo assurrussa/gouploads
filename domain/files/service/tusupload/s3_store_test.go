@@ -1,9 +1,11 @@
-//nolint:testpackage // need access to unexported helpers and types for thorough store testing
+//nolint:testpackage // exercises the internal durable state machine
 package tusupload
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,81 +15,25 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	redislib "github.com/redis/go-redis/v9"
+	awss3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/ceph"
 )
 
-type fakeS3Client struct {
-	mu              sync.Mutex
-	createCalls     int
-	uploadInputs    []s3.UploadPartInput
-	completeInputs  []s3.CompleteMultipartUploadInput
-	abortInputs     []s3.AbortMultipartUploadInput
-	nextETagCounter int
-}
+func TestS3Store_DurableCrossReplicaResumeAndIdempotentFinalize(t *testing.T) {
+	t.Parallel()
 
-func (f *fakeS3Client) CreateMultipartUpload(
-	_ context.Context,
-	_ *s3.CreateMultipartUploadInput,
-	_ ...func(*s3.Options),
-) (*s3.CreateMultipartUploadOutput, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.createCalls++
-	return &s3.CreateMultipartUploadOutput{UploadId: aws.String("upload-1")}, nil
-}
-
-func (f *fakeS3Client) AbortMultipartUpload(
-	_ context.Context,
-	input *s3.AbortMultipartUploadInput,
-	_ ...func(*s3.Options),
-) (*s3.AbortMultipartUploadOutput, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.abortInputs = append(f.abortInputs, *input)
-	return &s3.AbortMultipartUploadOutput{}, nil
-}
-
-func (f *fakeS3Client) UploadPart(
-	_ context.Context,
-	input *s3.UploadPartInput,
-	_ ...func(*s3.Options),
-) (*s3.UploadPartOutput, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.uploadInputs = append(f.uploadInputs, *input)
-	f.nextETagCounter++
-	etag := fmt.Sprintf("etag-%d", f.nextETagCounter)
-	return &s3.UploadPartOutput{ETag: aws.String(etag)}, nil
-}
-
-func (f *fakeS3Client) CompleteMultipartUpload(
-	_ context.Context,
-	input *s3.CompleteMultipartUploadInput,
-	_ ...func(*s3.Options),
-) (*s3.CompleteMultipartUploadOutput, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.completeInputs = append(f.completeInputs, *input)
-	return &s3.CompleteMultipartUploadOutput{}, nil
-}
-
-func TestS3Store_AppendComplete(t *testing.T) {
 	ctx := context.Background()
-	redisClient := newFakeRedis()
+	repo := newMemorySessionRepository()
+	client := newFakeS3Client()
+	storeA := newTestS3Store(t, client, repo)
+	storeB := newTestS3Store(t, client, repo)
 
-	client := &fakeS3Client{}
-	domain := ceph.NewDomainHost("https://storage.example.com", "bucket", "public-read", true, false, true)
-	store, err := NewS3Store(client, domain, redisClient, S3StoreConfig{
-		Prefix:   "tmp/uploads",
-		PartSize: ceph.MinPartSize,
-	})
-	require.NoError(t, err)
-
-	session, err := store.Create(ctx, CreateRequest{
-		UploadLength: 10,
+	firstChunk := make([]byte, ceph.MinPartSize)
+	lastChunk := []byte("tail")
+	session, err := storeA.Create(ctx, CreateRequest{
+		UploadLength: int64(len(firstChunk) + len(lastChunk)),
 		OriginalName: "test.png",
 		FileName:     "test.png",
 		Metadata: map[string]string{
@@ -96,37 +42,239 @@ func TestS3Store_AppendComplete(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	require.True(t, session.Quarantined)
+	require.Equal(t, StatusActive, session.Status)
+	require.NotEmpty(t, session.FinalizationKey)
+	require.Empty(t, session.URL)
 
-	newOffset, err := store.Append(ctx, session.ID, 0, []byte("0123456789"), "image/png")
+	offset, err := storeA.Append(ctx, session.ID, 0, firstChunk, "image/png")
 	require.NoError(t, err)
-	require.Equal(t, int64(10), newOffset)
+	require.Equal(t, int64(len(firstChunk)), offset)
 
-	complete, err := store.Complete(ctx, session.ID)
+	offset, err = storeB.Append(ctx, session.ID, offset, lastChunk, "image/png")
 	require.NoError(t, err)
-	require.Equal(t, int64(10), complete.Size)
-	require.True(t, strings.HasPrefix(complete.RelativePath, "tmp/uploads/"))
-	require.True(t, strings.HasSuffix(complete.RelativePath, "/test.png"))
-	require.NotEmpty(t, complete.URL)
+	require.Equal(t, session.UploadLength, offset)
+
+	result, err := storeB.Complete(ctx, session.ID)
+	require.NoError(t, err)
+	require.Equal(t, session.UploadLength, result.Size)
+	require.Equal(t, session.FinalizationKey, result.FinalizationKey)
+	require.True(t, result.Quarantined)
+	require.Contains(t, result.RelativePath, "quarantine/uploads/exercise/12/")
+	require.NotEmpty(t, result.URL)
+
+	repeated, err := storeA.Complete(ctx, session.ID)
+	require.NoError(t, err)
+	require.Equal(t, result, repeated)
 
 	client.mu.Lock()
-	require.Equal(t, 1, client.createCalls)
-	require.Len(t, client.uploadInputs, 1)
+	require.Len(t, client.createInputs, 1)
+	require.Equal(t, awss3types.ObjectCannedACLPrivate, client.createInputs[0].ACL)
+	require.Equal(t, awss3types.ChecksumAlgorithmSha256, client.createInputs[0].ChecksumAlgorithm)
+	require.Len(t, client.uploadInputs, 2)
 	require.Len(t, client.completeInputs, 1)
 	client.mu.Unlock()
 }
 
-func TestS3Store_AppendChunkTooSmall(t *testing.T) {
-	ctx := context.Background()
-	redisClient := newFakeRedis()
+func TestS3Store_ConcurrentPatchUsesSingleFence(t *testing.T) {
+	t.Parallel()
 
-	client := &fakeS3Client{}
-	domain := ceph.NewDomainHost("https://storage.example.com", "bucket", "public-read", true, false, true)
-	store, err := NewS3Store(client, domain, redisClient, S3StoreConfig{
-		Prefix:   "tmp/uploads",
-		PartSize: ceph.MinPartSize,
+	ctx := context.Background()
+	repo := newMemorySessionRepository()
+	client := newFakeS3Client()
+	client.uploadStarted = make(chan struct{}, 1)
+	client.releaseUpload = make(chan struct{})
+	storeA := newTestS3Store(t, client, repo)
+	storeB := newTestS3Store(t, client, repo)
+	payload := []byte("complete payload")
+
+	session, err := storeA.Create(ctx, CreateRequest{
+		UploadLength: int64(len(payload)),
+		OriginalName: "test.txt",
+		FileName:     "test.txt",
 	})
 	require.NoError(t, err)
 
+	firstDone := make(chan error, 1)
+	go func() {
+		_, appendErr := storeA.Append(ctx, session.ID, 0, payload, "text/plain")
+		firstDone <- appendErr
+	}()
+
+	select {
+	case <-client.uploadStarted:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	_, err = storeB.Append(ctx, session.ID, 0, payload, "text/plain")
+	require.ErrorIs(t, err, ErrUploadBusy)
+	close(client.releaseUpload)
+	require.NoError(t, <-firstDone)
+
+	client.mu.Lock()
+	require.Len(t, client.uploadInputs, 1)
+	client.mu.Unlock()
+}
+
+func TestS3Store_ReconcilesCrashAfterPartBeforeMetadataCommit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := newMemorySessionRepository()
+	repo.failNextPartCommit = true
+	client := newFakeS3Client()
+	store := newTestS3Store(t, client, repo)
+	payload := []byte("complete payload")
+
+	session, err := store.Create(ctx, CreateRequest{
+		UploadLength: int64(len(payload)),
+		OriginalName: "test.txt",
+		FileName:     "test.txt",
+	})
+	require.NoError(t, err)
+
+	_, err = store.Append(ctx, session.ID, 0, payload, "text/plain")
+	require.ErrorContains(t, err, "injected commit failure")
+
+	repo.advance(2 * defaultLeaseTTL)
+	offset, err := store.Append(ctx, session.ID, 0, payload, "text/plain")
+	require.NoError(t, err)
+	require.Equal(t, int64(len(payload)), offset)
+
+	client.mu.Lock()
+	require.Len(t, client.uploadInputs, 1, "the matching S3 part must be reused")
+	client.mu.Unlock()
+}
+
+func TestS3Store_CompetingFinalizeIsFencedAndRetryIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := newMemorySessionRepository()
+	client := newFakeS3Client()
+	storeA := newTestS3Store(t, client, repo)
+	storeB := newTestS3Store(t, client, repo)
+	payload := []byte("complete payload")
+
+	session, err := storeA.Create(ctx, CreateRequest{
+		UploadLength: int64(len(payload)),
+		OriginalName: "test.txt",
+		FileName:     "test.txt",
+	})
+	require.NoError(t, err)
+	_, err = storeA.Append(ctx, session.ID, 0, payload, "text/plain")
+	require.NoError(t, err)
+
+	client.completeStarted = make(chan struct{}, 1)
+	client.releaseComplete = make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, completeErr := storeA.Complete(ctx, session.ID)
+		firstDone <- completeErr
+	}()
+	<-client.completeStarted
+
+	_, err = storeB.Complete(ctx, session.ID)
+	require.ErrorIs(t, err, ErrUploadBusy)
+	close(client.releaseComplete)
+	require.NoError(t, <-firstDone)
+
+	result, err := storeB.Complete(ctx, session.ID)
+	require.NoError(t, err)
+	require.Equal(t, session.FinalizationKey, result.FinalizationKey)
+
+	client.mu.Lock()
+	require.Len(t, client.completeInputs, 1)
+	client.mu.Unlock()
+}
+
+func TestS3Store_RecoversCrashAfterS3FinalizeBeforeMetadataCommit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := newMemorySessionRepository()
+	repo.failNextFinalizeCommit = true
+	client := newFakeS3Client()
+	store := newTestS3Store(t, client, repo)
+	payload := []byte("complete payload")
+
+	session, err := store.Create(ctx, CreateRequest{
+		UploadLength: int64(len(payload)),
+		OriginalName: "test.txt",
+		FileName:     "test.txt",
+	})
+	require.NoError(t, err)
+	_, err = store.Append(ctx, session.ID, 0, payload, "text/plain")
+	require.NoError(t, err)
+
+	_, err = store.Complete(ctx, session.ID)
+	require.ErrorContains(t, err, "injected finalize commit failure")
+	repo.advance(2 * defaultLeaseTTL)
+
+	recovered, err := store.Complete(ctx, session.ID)
+	require.NoError(t, err)
+	require.Equal(t, session.FinalizationKey, recovered.FinalizationKey)
+
+	client.mu.Lock()
+	require.Len(t, client.completeInputs, 1, "S3 completion must not be repeated after recovery")
+	client.mu.Unlock()
+}
+
+func TestS3Store_CleanupAbortsExpiredQuarantine(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := newMemorySessionRepository()
+	client := newFakeS3Client()
+	store := newTestS3Store(t, client, repo)
+	session, err := store.Create(ctx, CreateRequest{
+		UploadLength: 5,
+		OriginalName: "test.txt",
+		FileName:     "test.txt",
+	})
+	require.NoError(t, err)
+
+	repo.advance(2 * defaultSessionTTL)
+	removed, err := store.Cleanup(ctx, repo.now())
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	_, err = store.Get(ctx, session.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	client.mu.Lock()
+	require.Len(t, client.abortInputs, 1)
+	client.mu.Unlock()
+}
+
+func TestS3Store_CleanupAbortsMultipartWithoutDurableSession(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := newMemorySessionRepository()
+	client := newFakeS3Client()
+	store := newTestS3Store(t, client, repo)
+	created, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String("bucket"),
+		Key:    aws.String(defaultS3StorePrefix + "/orphan.txt"),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, aws.ToString(created.UploadId))
+
+	removed, err := store.Cleanup(ctx, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+
+	client.mu.Lock()
+	require.Len(t, client.abortInputs, 1)
+	client.mu.Unlock()
+}
+
+func TestS3Store_RejectsSmallIntermediateChunk(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestS3Store(t, newFakeS3Client(), newMemorySessionRepository())
 	session, err := store.Create(ctx, CreateRequest{
 		UploadLength: int64(ceph.MinPartSize) + 1,
 		OriginalName: "test.png",
@@ -138,225 +286,480 @@ func TestS3Store_AppendChunkTooSmall(t *testing.T) {
 	require.ErrorIs(t, err, ErrChunkTooSmall)
 }
 
-func TestS3Store_Cleanup(t *testing.T) {
-	ctx := context.Background()
-	redisClient := newFakeRedis()
-
-	client := &fakeS3Client{}
+func newTestS3Store(t *testing.T, client s3Client, repo sessionRepository) *S3Store {
+	t.Helper()
 	domain := ceph.NewDomainHost("https://storage.example.com", "bucket", "public-read", true, false, true)
-	store, err := NewS3Store(client, domain, redisClient, S3StoreConfig{
-		Prefix:   "tmp/uploads",
+	store, err := NewS3Store(client, domain, repo, S3StoreConfig{
+		Prefix:   defaultS3StorePrefix,
 		PartSize: ceph.MinPartSize,
+		TTL:      defaultSessionTTL,
+		LeaseTTL: defaultLeaseTTL,
 	})
 	require.NoError(t, err)
-
-	session, err := store.Create(ctx, CreateRequest{
-		UploadLength: 5,
-		OriginalName: "test.png",
-		FileName:     "test.png",
-	})
-	require.NoError(t, err)
-
-	_, err = store.Append(ctx, session.ID, 0, []byte("12345"), "image/png")
-	require.NoError(t, err)
-
-	loaded, err := store.loadSession(ctx, session.ID)
-	require.NoError(t, err)
-	loaded.UpdatedAt = time.Now().Add(-2 * time.Hour)
-	require.NoError(t, store.saveSession(ctx, loaded))
-
-	removed, err := store.Cleanup(ctx, time.Now().Add(-time.Hour))
-	require.NoError(t, err)
-	require.Equal(t, 1, removed)
-
-	_, err = store.Get(ctx, session.ID)
-	require.ErrorIs(t, err, ErrNotFound)
-
-	client.mu.Lock()
-	require.Len(t, client.abortInputs, 1)
-	client.mu.Unlock()
+	return store
 }
 
-type fakeRedis struct {
-	mu    sync.Mutex
-	kv    map[string]redisEntry
-	zsets map[string]map[string]float64
+type memorySessionRepository struct {
+	mu                     sync.Mutex
+	clock                  time.Time
+	sessions               map[string]s3Session
+	leases                 map[string]memoryLease
+	failNextPartCommit     bool
+	failNextFinalizeCommit bool
 }
 
-type redisEntry struct {
-	value     string
-	expiresAt time.Time
+type memoryLease struct {
+	owner string
+	until time.Time
 }
 
-func newFakeRedis() *fakeRedis {
-	return &fakeRedis{
-		kv:    make(map[string]redisEntry),
-		zsets: make(map[string]map[string]float64),
+func newMemorySessionRepository() *memorySessionRepository {
+	return &memorySessionRepository{
+		clock:    time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
+		sessions: make(map[string]s3Session),
+		leases:   make(map[string]memoryLease),
 	}
 }
 
-func (f *fakeRedis) Get(ctx context.Context, key string) *redislib.StringCmd {
-	cmd := redislib.NewStringCmd(ctx)
-	f.mu.Lock()
-	entry, ok := f.kv[key]
-	if ok && !entry.expiresAt.IsZero() && time.Now().After(entry.expiresAt) {
-		delete(f.kv, key)
-		ok = false
-	}
-	f.mu.Unlock()
-	if !ok {
-		cmd.SetErr(redislib.Nil)
-		return cmd
-	}
-	cmd.SetVal(entry.value)
-	return cmd
+func (r *memorySessionRepository) now() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.clock
 }
 
-func (f *fakeRedis) Set(ctx context.Context, key string, value any, expiration time.Duration) *redislib.StatusCmd {
-	cmd := redislib.NewStatusCmd(ctx)
-	var str string
-	switch v := value.(type) {
-	case string:
-		str = v
-	case []byte:
-		str = string(v)
-	default:
-		str = fmt.Sprint(v)
-	}
-
-	var expiresAt time.Time
-	if expiration > 0 {
-		expiresAt = time.Now().Add(expiration)
-	}
-
-	f.mu.Lock()
-	f.kv[key] = redisEntry{value: str, expiresAt: expiresAt}
-	f.mu.Unlock()
-	cmd.SetVal("OK")
-	return cmd
+func (r *memorySessionRepository) advance(duration time.Duration) {
+	r.mu.Lock()
+	r.clock = r.clock.Add(duration)
+	r.mu.Unlock()
 }
 
-func (f *fakeRedis) Del(ctx context.Context, keys ...string) *redislib.IntCmd {
-	cmd := redislib.NewIntCmd(ctx)
-	var removed int64
-	f.mu.Lock()
-	for _, key := range keys {
-		if _, ok := f.kv[key]; ok {
-			delete(f.kv, key)
-			removed++
+func (r *memorySessionRepository) Create(_ context.Context, session s3Session) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.sessions[session.ID]; exists {
+		return errors.New("duplicate session")
+	}
+	r.sessions[session.ID] = cloneS3Session(session)
+	return nil
+}
+
+func (r *memorySessionRepository) Get(_ context.Context, id string) (s3Session, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	session, exists := r.sessions[id]
+	if !exists {
+		return s3Session{}, ErrNotFound
+	}
+	return cloneS3Session(session), nil
+}
+
+func (r *memorySessionRepository) ClaimAppend(
+	_ context.Context,
+	id string,
+	expectedOffset int64,
+	owner string,
+	leaseTTL time.Duration,
+	sessionTTL time.Duration,
+) (s3Session, sessionClaim, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	session, exists := r.sessions[id]
+	if !exists {
+		return s3Session{}, sessionClaim{}, ErrNotFound
+	}
+	if session.Status == StatusReady {
+		return session, sessionClaim{}, ErrUploadFinalized
+	}
+	if session.Status != StatusActive {
+		return session, sessionClaim{}, ErrUploadBusy
+	}
+	if session.Offset != expectedOffset {
+		return session, sessionClaim{}, ErrOffsetMismatch
+	}
+	if lease, leased := r.leases[id]; leased && lease.until.After(r.clock) && lease.owner != owner {
+		return session, sessionClaim{}, ErrUploadBusy
+	}
+	session.Revision++
+	session.UpdatedAt = r.clock
+	session.ExpiresAt = maxTime(session.ExpiresAt, r.clock.Add(sessionTTL))
+	r.sessions[id] = session
+	r.leases[id] = memoryLease{owner: owner, until: r.clock.Add(leaseTTL)}
+	return cloneS3Session(session), sessionClaim{Owner: owner, Fence: session.Revision}, nil
+}
+
+func (r *memorySessionRepository) CommitPart(
+	_ context.Context,
+	id string,
+	claim sessionClaim,
+	expectedOffset int64,
+	part durablePart,
+	mimeType string,
+	sessionTTL time.Duration,
+) (s3Session, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.failNextPartCommit {
+		r.failNextPartCommit = false
+		return s3Session{}, errors.New("injected commit failure")
+	}
+	session, exists := r.sessions[id]
+	lease := r.leases[id]
+	if !exists || session.Revision != claim.Fence || lease.owner != claim.Owner ||
+		!lease.until.After(r.clock) || session.Offset != expectedOffset {
+		return s3Session{}, ErrFenceLost
+	}
+	session.Parts[part.Number] = part
+	session.Offset += part.Size
+	if session.MimeType == "" {
+		session.MimeType = mimeType
+	}
+	session.Revision++
+	session.UpdatedAt = r.clock
+	session.ExpiresAt = maxTime(session.ExpiresAt, r.clock.Add(sessionTTL))
+	r.sessions[id] = session
+	delete(r.leases, id)
+	return cloneS3Session(session), nil
+}
+
+func (r *memorySessionRepository) ClaimFinalize(
+	_ context.Context,
+	id string,
+	owner string,
+	leaseTTL time.Duration,
+	sessionTTL time.Duration,
+) (s3Session, sessionClaim, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	session, exists := r.sessions[id]
+	if !exists {
+		return s3Session{}, sessionClaim{}, ErrNotFound
+	}
+	if session.Status == StatusReady {
+		return session, sessionClaim{}, ErrUploadFinalized
+	}
+	if session.Offset != session.UploadLength {
+		return session, sessionClaim{}, ErrOffsetMismatch
+	}
+	if lease, leased := r.leases[id]; leased && lease.until.After(r.clock) && lease.owner != owner {
+		return session, sessionClaim{}, ErrUploadBusy
+	}
+	session.Status = StatusFinalizing
+	session.Revision++
+	session.UpdatedAt = r.clock
+	session.ExpiresAt = maxTime(session.ExpiresAt, r.clock.Add(sessionTTL))
+	r.sessions[id] = session
+	r.leases[id] = memoryLease{owner: owner, until: r.clock.Add(leaseTTL)}
+	return cloneS3Session(session), sessionClaim{Owner: owner, Fence: session.Revision}, nil
+}
+
+func (r *memorySessionRepository) CommitFinalize(
+	_ context.Context,
+	id string,
+	claim sessionClaim,
+) (s3Session, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.failNextFinalizeCommit {
+		r.failNextFinalizeCommit = false
+		return s3Session{}, errors.New("injected finalize commit failure")
+	}
+	session, exists := r.sessions[id]
+	lease := r.leases[id]
+	if !exists || session.Revision != claim.Fence || lease.owner != claim.Owner || !lease.until.After(r.clock) {
+		return s3Session{}, ErrFenceLost
+	}
+	session.Status = StatusReady
+	session.Revision++
+	session.UpdatedAt = r.clock
+	r.sessions[id] = session
+	delete(r.leases, id)
+	return cloneS3Session(session), nil
+}
+
+func (r *memorySessionRepository) Release(_ context.Context, id string, claim sessionClaim) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	session, exists := r.sessions[id]
+	lease := r.leases[id]
+	if exists && session.Revision == claim.Fence && lease.owner == claim.Owner {
+		session.Revision++
+		r.sessions[id] = session
+		delete(r.leases, id)
+	}
+	return nil
+}
+
+func (r *memorySessionRepository) Delete(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.sessions[id]; !exists {
+		return ErrNotFound
+	}
+	delete(r.sessions, id)
+	delete(r.leases, id)
+	return nil
+}
+
+func (r *memorySessionRepository) ListExpired(
+	_ context.Context,
+	before time.Time,
+	limit int,
+) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids := make([]string, 0, limit)
+	for id, session := range r.sessions {
+		lease := r.leases[id]
+		if session.Status != StatusReady && session.ExpiresAt.Before(before) && !lease.until.After(r.clock) {
+			ids = append(ids, id)
 		}
 	}
-	f.mu.Unlock()
-	cmd.SetVal(removed)
-	return cmd
+	sort.Strings(ids)
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	return ids, nil
 }
 
-func (f *fakeRedis) ZAdd(ctx context.Context, key string, members ...redislib.Z) *redislib.IntCmd {
-	cmd := redislib.NewIntCmd(ctx)
-	f.mu.Lock()
-	set := f.zsets[key]
-	if set == nil {
-		set = make(map[string]float64)
-		f.zsets[key] = set
-	}
-	var added int64
-	for _, member := range members {
-		memberKey := fmt.Sprint(member.Member)
-		if _, ok := set[memberKey]; !ok {
-			added++
+func (r *memorySessionRepository) HasMultipart(
+	_ context.Context,
+	objectPath string,
+	uploadID string,
+) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, session := range r.sessions {
+		if session.Status != StatusReady && session.Path == objectPath && session.UploadID == uploadID {
+			return true, nil
 		}
-		set[memberKey] = member.Score
 	}
-	f.mu.Unlock()
-	cmd.SetVal(added)
-	return cmd
+	return false, nil
 }
 
-func (f *fakeRedis) ZRangeByScore(ctx context.Context, key string, opt *redislib.ZRangeBy) *redislib.StringSliceCmd {
-	cmd := redislib.NewStringSliceCmd(ctx)
-	minScore, minInf := parseScore(opt.Min)
-	maxScore, maxInf := parseScore(opt.Max)
+func cloneS3Session(session s3Session) s3Session {
+	cloned := session
+	cloned.Metadata = cloneMetadata(session.Metadata)
+	cloned.Parts = make(map[int32]durablePart, len(session.Parts))
+	for number, part := range session.Parts {
+		cloned.Parts[number] = part
+	}
+	return cloned
+}
+
+func maxTime(left, right time.Time) time.Time {
+	if left.After(right) {
+		return left
+	}
+	return right
+}
+
+type fakeS3Client struct {
+	mu              sync.Mutex
+	nextUploadID    int
+	createInputs    []s3.CreateMultipartUploadInput
+	uploadInputs    []s3.UploadPartInput
+	completeInputs  []s3.CompleteMultipartUploadInput
+	abortInputs     []s3.AbortMultipartUploadInput
+	uploads         map[string]*fakeMultipartUpload
+	uploadStarted   chan struct{}
+	releaseUpload   chan struct{}
+	completeStarted chan struct{}
+	releaseComplete chan struct{}
+}
+
+type fakeMultipartUpload struct {
+	key       string
+	initiated time.Time
+	parts     map[int32]awss3types.Part
+	completed bool
+	size      int64
+}
+
+func newFakeS3Client() *fakeS3Client {
+	return &fakeS3Client{uploads: make(map[string]*fakeMultipartUpload)}
+}
+
+func (f *fakeS3Client) CreateMultipartUpload(
+	_ context.Context,
+	input *s3.CreateMultipartUploadInput,
+	_ ...func(*s3.Options),
+) (*s3.CreateMultipartUploadOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextUploadID++
+	uploadID := fmt.Sprintf("upload-%d", f.nextUploadID)
+	f.createInputs = append(f.createInputs, *input)
+	f.uploads[uploadID] = &fakeMultipartUpload{
+		key:       aws.ToString(input.Key),
+		initiated: time.Now(),
+		parts:     make(map[int32]awss3types.Part),
+	}
+	return &s3.CreateMultipartUploadOutput{UploadId: aws.String(uploadID)}, nil
+}
+
+func (f *fakeS3Client) AbortMultipartUpload(
+	_ context.Context,
+	input *s3.AbortMultipartUploadInput,
+	_ ...func(*s3.Options),
+) (*s3.AbortMultipartUploadOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.abortInputs = append(f.abortInputs, *input)
+	delete(f.uploads, aws.ToString(input.UploadId))
+	return &s3.AbortMultipartUploadOutput{}, nil
+}
+
+func (f *fakeS3Client) UploadPart(
+	ctx context.Context,
+	input *s3.UploadPartInput,
+	_ ...func(*s3.Options),
+) (*s3.UploadPartOutput, error) {
+	if f.uploadStarted != nil {
+		select {
+		case f.uploadStarted <- struct{}{}:
+		default:
+		}
+	}
+	if f.releaseUpload != nil {
+		select {
+		case <-f.releaseUpload:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	body, err := io.ReadAll(input.Body)
+	if err != nil {
+		return nil, err
+	}
 
 	f.mu.Lock()
-	set := f.zsets[key]
-	f.mu.Unlock()
+	defer f.mu.Unlock()
+	upload, exists := f.uploads[aws.ToString(input.UploadId)]
+	if !exists || upload.completed {
+		return nil, errors.New("multipart upload not found")
+	}
+	partNumber := aws.ToInt32(input.PartNumber)
+	etag := fmt.Sprintf("etag-%d-%s", partNumber, aws.ToString(input.ChecksumSHA256))
+	part := awss3types.Part{
+		PartNumber:     aws.Int32(partNumber),
+		Size:           aws.Int64(int64(len(body))),
+		ETag:           aws.String(etag),
+		ChecksumSHA256: input.ChecksumSHA256,
+	}
+	upload.parts[partNumber] = part
+	f.uploadInputs = append(f.uploadInputs, *input)
+	return &s3.UploadPartOutput{ETag: aws.String(etag), ChecksumSHA256: input.ChecksumSHA256}, nil
+}
 
-	if len(set) == 0 {
-		cmd.SetVal([]string{})
-		return cmd
+func (f *fakeS3Client) ListParts(
+	_ context.Context,
+	input *s3.ListPartsInput,
+	_ ...func(*s3.Options),
+) (*s3.ListPartsOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	upload, exists := f.uploads[aws.ToString(input.UploadId)]
+	if !exists || upload.completed {
+		return nil, errors.New("multipart upload not found")
 	}
-
-	type item struct {
-		member string
-		score  float64
-	}
-	items := make([]item, 0, len(set))
-	for member, score := range set {
-		items = append(items, item{member: member, score: score})
-	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].score == items[j].score {
-			return items[i].member < items[j].member
+	marker, _ := strconv.Atoi(aws.ToString(input.PartNumberMarker))
+	numbers := make([]int, 0, len(upload.parts))
+	for number := range upload.parts {
+		if int(number) > marker {
+			numbers = append(numbers, int(number))
 		}
-		return items[i].score < items[j].score
-	})
+	}
+	sort.Ints(numbers)
+	limit := len(numbers)
+	if input.MaxParts != nil && int(aws.ToInt32(input.MaxParts)) < limit {
+		limit = int(aws.ToInt32(input.MaxParts))
+	}
+	parts := make([]awss3types.Part, 0, limit)
+	for _, number := range numbers[:limit] {
+		parts = append(parts, upload.parts[int32(number)])
+	}
+	result := &s3.ListPartsOutput{Parts: parts, IsTruncated: aws.Bool(limit < len(numbers))}
+	if limit > 0 && limit < len(numbers) {
+		result.NextPartNumberMarker = aws.String(strconv.Itoa(numbers[limit-1]))
+	}
+	return result, nil
+}
 
-	filtered := make([]string, 0, len(items))
-	for _, it := range items {
-		if !minInf && it.score < minScore {
+func (f *fakeS3Client) ListMultipartUploads(
+	_ context.Context,
+	input *s3.ListMultipartUploadsInput,
+	_ ...func(*s3.Options),
+) (*s3.ListMultipartUploadsOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	uploads := make([]awss3types.MultipartUpload, 0, len(f.uploads))
+	for uploadID, upload := range f.uploads {
+		if upload.completed || !strings.HasPrefix(upload.key, aws.ToString(input.Prefix)) {
 			continue
 		}
-		if !maxInf && it.score > maxScore {
-			continue
+		uploads = append(uploads, awss3types.MultipartUpload{
+			Initiated: aws.Time(upload.initiated),
+			Key:       aws.String(upload.key),
+			UploadId:  aws.String(uploadID),
+		})
+	}
+	sort.Slice(uploads, func(i, j int) bool {
+		if aws.ToString(uploads[i].Key) == aws.ToString(uploads[j].Key) {
+			return aws.ToString(uploads[i].UploadId) < aws.ToString(uploads[j].UploadId)
 		}
-		filtered = append(filtered, it.member)
-	}
-
-	offset := int(opt.Offset)
-	if offset > 0 && offset < len(filtered) {
-		filtered = filtered[offset:]
-	} else if offset >= len(filtered) {
-		filtered = nil
-	}
-	if opt.Count >= 0 && int(opt.Count) < len(filtered) {
-		filtered = filtered[:opt.Count]
-	}
-
-	cmd.SetVal(filtered)
-	return cmd
+		return aws.ToString(uploads[i].Key) < aws.ToString(uploads[j].Key)
+	})
+	return &s3.ListMultipartUploadsOutput{Uploads: uploads, IsTruncated: aws.Bool(false)}, nil
 }
 
-func (f *fakeRedis) ZRem(ctx context.Context, key string, members ...any) *redislib.IntCmd {
-	cmd := redislib.NewIntCmd(ctx)
+func (f *fakeS3Client) CompleteMultipartUpload(
+	ctx context.Context,
+	input *s3.CompleteMultipartUploadInput,
+	_ ...func(*s3.Options),
+) (*s3.CompleteMultipartUploadOutput, error) {
+	if f.completeStarted != nil {
+		select {
+		case f.completeStarted <- struct{}{}:
+		default:
+		}
+	}
+	if f.releaseComplete != nil {
+		select {
+		case <-f.releaseComplete:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	f.mu.Lock()
-	set := f.zsets[key]
-	var removed int64
-	for _, member := range members {
-		memberKey := fmt.Sprint(member)
-		if _, ok := set[memberKey]; ok {
-			delete(set, memberKey)
-			removed++
+	defer f.mu.Unlock()
+	upload, exists := f.uploads[aws.ToString(input.UploadId)]
+	if !exists || upload.completed {
+		return nil, errors.New("multipart upload not found")
+	}
+	for _, part := range upload.parts {
+		upload.size += aws.ToInt64(part.Size)
+	}
+	upload.completed = true
+	f.completeInputs = append(f.completeInputs, *input)
+	return &s3.CompleteMultipartUploadOutput{}, nil
+}
+
+func (f *fakeS3Client) HeadObject(
+	_ context.Context,
+	input *s3.HeadObjectInput,
+	_ ...func(*s3.Options),
+) (*s3.HeadObjectOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, upload := range f.uploads {
+		if upload.key == aws.ToString(input.Key) && upload.completed {
+			return &s3.HeadObjectOutput{ContentLength: aws.Int64(upload.size)}, nil
 		}
 	}
-	if len(set) == 0 {
-		delete(f.zsets, key)
-	}
-	f.mu.Unlock()
-	cmd.SetVal(removed)
-	return cmd
+	return nil, errors.New("object not found")
 }
 
-func parseScore(raw string) (float64, bool) {
-	raw = strings.TrimSpace(raw)
-	switch raw {
-	case "-inf":
-		return 0, true
-	case "+inf", "inf":
-		return 0, true
-	default:
-		value, _ := strconv.ParseFloat(strings.TrimPrefix(raw, "("), 64)
-		return value, false
-	}
-}
-
-var _ s3Client = (*fakeS3Client)(nil)
+var (
+	_ sessionRepository = (*memorySessionRepository)(nil)
+	_ s3Client          = (*fakeS3Client)(nil)
+)

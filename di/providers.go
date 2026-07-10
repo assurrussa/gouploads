@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	redis "github.com/assurrussa/goredis"
 	"github.com/assurrussa/goshared/pkg/logger"
 	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
 	inmemeventstream "github.com/assurrussa/goshared/services/event-stream/in-mem"
@@ -48,8 +47,8 @@ func provideFileLoader(repo fileloader.FileRepo, lg logger.Logger) (*fileloader.
 	return fileloader.New(fileloader.NewOptions(repo, lg))
 }
 
-func provideTusStore(cfg uploadconfig.StorageConfig, redisClient redis.ClientShardContract) (tusupload.Store, error) {
-	return tusupload.BuildStore(cfg, redisClient)
+func provideTusStore(cfg uploadconfig.StorageConfig, database pgsql.Client) (tusupload.Store, error) {
+	return tusupload.BuildDurableStore(cfg, database)
 }
 
 func provideFileStorage(cfg uploadconfig.StorageConfig) (filestorage.Storage, error) {

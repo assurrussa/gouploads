@@ -3,7 +3,8 @@ package tusupload
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
@@ -13,12 +14,10 @@ import (
 	"time"
 
 	"github.com/assurrussa/goshared/pkg/filesanitize"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	awss3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
-	redislib "github.com/redis/go-redis/v9"
 
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/ceph"
 )
@@ -39,35 +38,59 @@ type s3Client interface {
 		input *s3.UploadPartInput,
 		optFns ...func(*s3.Options),
 	) (*s3.UploadPartOutput, error)
+	ListParts(
+		ctx context.Context,
+		input *s3.ListPartsInput,
+		optFns ...func(*s3.Options),
+	) (*s3.ListPartsOutput, error)
+	ListMultipartUploads(
+		ctx context.Context,
+		input *s3.ListMultipartUploadsInput,
+		optFns ...func(*s3.Options),
+	) (*s3.ListMultipartUploadsOutput, error)
 	CompleteMultipartUpload(
 		ctx context.Context,
 		input *s3.CompleteMultipartUploadInput,
 		optFns ...func(*s3.Options),
 	) (*s3.CompleteMultipartUploadOutput, error)
+	HeadObject(
+		ctx context.Context,
+		input *s3.HeadObjectInput,
+		optFns ...func(*s3.Options),
+	) (*s3.HeadObjectOutput, error)
 }
 
 type S3StoreConfig struct {
 	Prefix   string
 	PartSize int64
 	TTL      time.Duration
-	IndexKey string
+	LeaseTTL time.Duration
 }
 
-const defaultS3StorePrefix = "tmp/uploads"
+const (
+	defaultS3StorePrefix = "quarantine/uploads"
+	defaultSessionTTL    = 24 * time.Hour
+	defaultLeaseTTL      = 30 * time.Second
+)
 
 type S3Store struct {
 	client s3Client
 	domain ceph.DomainHost
-	redis  redisClient
+	repo   sessionRepository
 	cfg    S3StoreConfig
 }
 
-func NewS3Store(client s3Client, domain ceph.DomainHost, redis redisClient, cfg S3StoreConfig) (*S3Store, error) {
+func NewS3Store(
+	client s3Client,
+	domain ceph.DomainHost,
+	repo sessionRepository,
+	cfg S3StoreConfig,
+) (*S3Store, error) {
 	if client == nil {
 		return nil, errors.New("tus s3 store: client is required")
 	}
-	if redis == nil {
-		return nil, errors.New("tus s3 store: redis is required")
+	if repo == nil {
+		return nil, errors.New("tus s3 store: durable session repository is required")
 	}
 	if cfg.PartSize <= 0 {
 		cfg.PartSize = ceph.MinPartSize
@@ -75,14 +98,20 @@ func NewS3Store(client s3Client, domain ceph.DomainHost, redis redisClient, cfg 
 	if cfg.PartSize < ceph.MinPartSize {
 		cfg.PartSize = ceph.MinPartSize
 	}
-	if cfg.Prefix == "" {
+	if strings.TrimSpace(cfg.Prefix) == "" {
 		cfg.Prefix = defaultS3StorePrefix
+	}
+	if cfg.TTL <= 0 {
+		cfg.TTL = defaultSessionTTL
+	}
+	if cfg.LeaseTTL <= 0 {
+		cfg.LeaseTTL = defaultLeaseTTL
 	}
 
 	return &S3Store{
 		client: client,
 		domain: domain,
-		redis:  redis,
+		repo:   repo,
 		cfg:    cfg,
 	}, nil
 }
@@ -91,10 +120,10 @@ func (s *S3Store) Create(ctx context.Context, req CreateRequest) (Session, error
 	if req.UploadLength < 0 {
 		return Session{}, fmt.Errorf("invalid upload length: %d", req.UploadLength)
 	}
-	if req.OriginalName == "" {
+	if strings.TrimSpace(req.OriginalName) == "" {
 		return Session{}, errors.New("original name is required")
 	}
-	if req.FileName == "" {
+	if strings.TrimSpace(req.FileName) == "" {
 		return Session{}, errors.New("file name is required")
 	}
 
@@ -104,26 +133,48 @@ func (s *S3Store) Create(ctx context.Context, req CreateRequest) (Session, error
 		return Session{}, err
 	}
 
-	now := time.Now()
-	session := s3Session{
-		Session: Session{
-			ID:           id,
-			UploadLength: req.UploadLength,
-			Offset:       0,
-			Metadata:     cloneMetadata(req.Metadata),
-			Path:         key,
-			URL:          s.buildURL(key),
-			OriginalName: req.OriginalName,
-			FileName:     req.FileName,
-			OwnerID:      req.OwnerID,
-			OwnerUUID:    req.OwnerUUID,
-			CreatedAt:    now,
-			UpdatedAt:    now,
-		},
-		Parts: make(map[int32]string),
+	mpu, err := s.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		ACL:               awss3types.ObjectCannedACLPrivate,
+		Bucket:            aws.String(s.domain.Bucket()),
+		Key:               aws.String(key),
+		ChecksumAlgorithm: awss3types.ChecksumAlgorithmSha256,
+	})
+	if err != nil {
+		return Session{}, fmt.Errorf("create multipart upload: %w", err)
+	}
+	uploadID := strings.TrimSpace(aws.ToString(mpu.UploadId))
+	if uploadID == "" {
+		return Session{}, errors.New("create multipart upload: empty upload id")
 	}
 
-	if err := s.saveSession(ctx, session); err != nil {
+	now := time.Now().UTC()
+	session := s3Session{
+		Session: Session{
+			ID:              id,
+			UploadLength:    req.UploadLength,
+			Metadata:        cloneMetadata(req.Metadata),
+			Path:            key,
+			OriginalName:    req.OriginalName,
+			FileName:        req.FileName,
+			OwnerID:         req.OwnerID,
+			OwnerUUID:       req.OwnerUUID,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			Status:          StatusActive,
+			Quarantined:     true,
+			FinalizationKey: uuid.NewString(),
+		},
+		UploadID:  uploadID,
+		Parts:     make(map[int32]durablePart),
+		ExpiresAt: now.Add(s.cfg.TTL),
+	}
+
+	if err := s.repo.Create(ctx, session); err != nil {
+		_, _ = s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			Bucket:   aws.String(s.domain.Bucket()),
+			Key:      aws.String(key),
+			UploadId: aws.String(uploadID),
+		})
 		return Session{}, err
 	}
 
@@ -131,7 +182,7 @@ func (s *S3Store) Create(ctx context.Context, req CreateRequest) (Session, error
 }
 
 func (s *S3Store) Get(ctx context.Context, id string) (Session, error) {
-	session, err := s.loadSession(ctx, id)
+	session, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return Session{}, err
 	}
@@ -139,235 +190,177 @@ func (s *S3Store) Get(ctx context.Context, id string) (Session, error) {
 	return session.Session, nil
 }
 
-func (s *S3Store) Append(ctx context.Context, id string, offset int64, chunk []byte, mimeType string) (int64, error) {
-	session, err := s.loadSession(ctx, id)
+func (s *S3Store) Append(
+	ctx context.Context,
+	id string,
+	offset int64,
+	chunk []byte,
+	mimeType string,
+) (int64, error) {
+	current, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return 0, err
 	}
-
-	if offset != session.Offset {
-		return session.Offset, ErrOffsetMismatch
+	if offset != current.Offset {
+		return current.Offset, ErrOffsetMismatch
 	}
-
-	if session.UploadLength >= 0 && offset > session.UploadLength {
-		return session.Offset, ErrLengthExceeded
+	if current.Status != StatusActive {
+		if current.Status == StatusReady {
+			return current.Offset, ErrUploadFinalized
+		}
+		return current.Offset, ErrUploadBusy
 	}
-
 	if len(chunk) == 0 {
-		return session.Offset, ErrChunkTooSmall
+		return current.Offset, ErrChunkTooSmall
 	}
-
-	isLast := session.UploadLength >= 0 && offset+int64(len(chunk)) == session.UploadLength
+	newOffset := offset + int64(len(chunk))
+	if newOffset > current.UploadLength {
+		return current.Offset, ErrLengthExceeded
+	}
+	isLast := newOffset == current.UploadLength
 	if !isLast && int64(len(chunk)) < s.cfg.PartSize {
-		return session.Offset, ErrChunkTooSmall
+		return current.Offset, ErrChunkTooSmall
 	}
-
+	if !isLast && int64(len(chunk)) != s.cfg.PartSize {
+		return current.Offset, ErrChunkSize
+	}
 	if offset%s.cfg.PartSize != 0 && offset != 0 {
-		return session.Offset, ErrOffsetMismatch
+		return current.Offset, ErrOffsetMismatch
 	}
 
-	if session.UploadID == "" {
-		contentType := strings.TrimSpace(mimeType)
-		if contentType == "" {
-			contentType = session.MimeType
-		}
-		mpu, err := s.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-			ACL:         awss3types.ObjectCannedACL(s.domain.ACL()),
-			Bucket:      aws.String(s.domain.Bucket()),
-			Key:         aws.String(session.Path),
-			ContentType: optionalString(contentType),
-		})
-		if err != nil {
-			return session.Offset, fmt.Errorf("create multipart upload: %w", err)
-		}
-
-		session.UploadID = aws.ToString(mpu.UploadId)
-		if contentType != "" {
-			session.MimeType = contentType
-		}
+	owner := uuid.NewString()
+	session, claim, err := s.repo.ClaimAppend(
+		ctx,
+		id,
+		offset,
+		owner,
+		s.cfg.LeaseTTL,
+		s.cfg.TTL,
+	)
+	if err != nil {
+		return current.Offset, err
 	}
 
 	partNumber := int32(offset/s.cfg.PartSize + 1)
-	contentLength := int64(len(chunk))
-	uploadedPart, err := s.client.UploadPart(ctx, &s3.UploadPartInput{
-		Body:          bytes.NewReader(chunk),
-		Bucket:        aws.String(s.domain.Bucket()),
-		Key:           aws.String(session.Path),
-		PartNumber:    aws.Int32(partNumber),
-		UploadId:      aws.String(session.UploadID),
-		ContentLength: &contentLength,
-	})
+	checksum := checksumSHA256(chunk)
+	part, err := s.reconcileOrUploadPart(ctx, session, partNumber, chunk, checksum)
 	if err != nil {
-		return session.Offset, fmt.Errorf("upload part %d: %w", partNumber, err)
-	}
-
-	session.Parts[partNumber] = aws.ToString(uploadedPart.ETag)
-	session.Offset = offset + int64(len(chunk))
-	session.UpdatedAt = time.Now()
-
-	if err := s.saveSession(ctx, session); err != nil {
+		_ = s.repo.Release(ctx, id, claim)
 		return session.Offset, err
 	}
 
-	return session.Offset, nil
+	updated, err := s.repo.CommitPart(
+		ctx,
+		id,
+		claim,
+		offset,
+		part,
+		strings.TrimSpace(mimeType),
+		s.cfg.TTL,
+	)
+	if err != nil {
+		return session.Offset, err
+	}
+
+	return updated.Offset, nil
 }
 
 func (s *S3Store) Complete(ctx context.Context, id string) (CompleteResult, error) {
-	session, err := s.loadSession(ctx, id)
+	current, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return CompleteResult{}, err
 	}
-
-	if session.UploadLength >= 0 && session.Offset < session.UploadLength {
+	if current.Status == StatusReady {
+		return s.completeResult(current), nil
+	}
+	if current.Offset != current.UploadLength {
 		return CompleteResult{}, ErrOffsetMismatch
 	}
 
-	if session.UploadID == "" {
-		return CompleteResult{}, errors.New("multipart upload is not initialized")
-	}
-
-	parts := make([]awss3types.CompletedPart, 0, len(session.Parts))
-	partNumbers := make([]int, 0, len(session.Parts))
-	for partNumber := range session.Parts {
-		partNumbers = append(partNumbers, int(partNumber))
-	}
-	sort.Ints(partNumbers)
-
-	for _, number := range partNumbers {
-		partNumber := int32(number)
-		etag := session.Parts[partNumber]
-		if etag == "" {
-			continue
+	owner := uuid.NewString()
+	session, claim, err := s.repo.ClaimFinalize(
+		ctx,
+		id,
+		owner,
+		s.cfg.LeaseTTL,
+		s.cfg.TTL,
+	)
+	if err != nil {
+		if errors.Is(err, ErrUploadFinalized) {
+			ready, getErr := s.repo.Get(ctx, id)
+			if getErr != nil {
+				return CompleteResult{}, getErr
+			}
+			return s.completeResult(ready), nil
 		}
-		parts = append(parts, awss3types.CompletedPart{
-			ETag:       aws.String(etag),
-			PartNumber: aws.Int32(partNumber),
+		return CompleteResult{}, err
+	}
+
+	parts, listErr := s.listRemoteParts(ctx, session)
+	if listErr != nil {
+		completed, headErr := s.objectMatchesSession(ctx, session)
+		if headErr != nil || !completed {
+			_ = s.repo.Release(ctx, id, claim)
+			return CompleteResult{}, fmt.Errorf("list multipart parts: %w", listErr)
+		}
+		ready, commitErr := s.repo.CommitFinalize(ctx, id, claim)
+		if commitErr != nil {
+			return CompleteResult{}, commitErr
+		}
+		return s.completeResult(ready), nil
+	}
+	if err := validateRemoteParts(session, parts); err != nil {
+		_ = s.repo.Release(ctx, id, claim)
+		return CompleteResult{}, err
+	}
+
+	completedParts := make([]awss3types.CompletedPart, 0, len(parts))
+	for _, part := range parts {
+		completedParts = append(completedParts, awss3types.CompletedPart{
+			ETag:           aws.String(part.ETag),
+			PartNumber:     aws.Int32(part.Number),
+			ChecksumSHA256: optionalString(part.ChecksumSHA256),
 		})
 	}
-
-	_, err = s.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+	_, completeErr := s.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(s.domain.Bucket()),
 		Key:      aws.String(session.Path),
 		UploadId: aws.String(session.UploadID),
 		MultipartUpload: &awss3types.CompletedMultipartUpload{
-			Parts: parts,
+			Parts: completedParts,
 		},
 	})
-	if err != nil {
-		return CompleteResult{}, fmt.Errorf("complete multipart upload: %w", err)
+	if completeErr != nil {
+		completed, headErr := s.objectMatchesSession(ctx, session)
+		if headErr != nil || !completed {
+			_ = s.repo.Release(ctx, id, claim)
+			return CompleteResult{}, fmt.Errorf("complete multipart upload: %w", completeErr)
+		}
 	}
 
-	if err := s.deleteSession(ctx, id); err != nil {
+	ready, err := s.repo.CommitFinalize(ctx, id, claim)
+	if err != nil {
 		return CompleteResult{}, err
 	}
-
-	return CompleteResult{
-		Size:         session.UploadLength,
-		RelativePath: session.Path,
-		URL:          session.URL,
-		MimeType:     session.MimeType,
-		OriginalName: session.OriginalName,
-		FileName:     session.FileName,
-	}, nil
+	return s.completeResult(ready), nil
 }
 
 func (s *S3Store) Delete(ctx context.Context, id string) error {
-	session, err := s.loadSession(ctx, id)
+	session, err := s.repo.Get(ctx, id)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return ErrNotFound
-		}
 		return err
 	}
-
-	if session.UploadID != "" {
-		_, _ = s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+	if session.Status != StatusReady && session.UploadID != "" {
+		if _, err := s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 			Bucket:   aws.String(s.domain.Bucket()),
 			Key:      aws.String(session.Path),
 			UploadId: aws.String(session.UploadID),
-		})
-	}
-
-	return s.deleteSession(ctx, id)
-}
-
-type s3Session struct {
-	Session
-	UploadID string
-	Parts    map[int32]string
-}
-
-func (s *S3Store) buildURL(key string) string {
-	link, _ := url.JoinPath(s.domain.Host(), s.domain.Bucket(), key)
-	return link
-}
-
-func (s *S3Store) redisKey(id string) string {
-	return "tus:upload:" + id
-}
-
-func (s *S3Store) indexKey() string {
-	if strings.TrimSpace(s.cfg.IndexKey) != "" {
-		return s.cfg.IndexKey
-	}
-	return "tus:uploads:index"
-}
-
-func (s *S3Store) saveSession(ctx context.Context, session s3Session) error {
-	data, err := json.Marshal(toSessionDTO(session))
-	if err != nil {
-		return fmt.Errorf("marshal tus session: %w", err)
-	}
-
-	ttl := s.cfg.TTL
-	if ttl <= 0 {
-		ttl = 24 * time.Hour
-	}
-
-	if err := s.redis.Set(ctx, s.redisKey(session.ID), data, ttl).Err(); err != nil {
-		return fmt.Errorf("save tus session: %w", err)
-	}
-	if err := s.redis.ZAdd(ctx, s.indexKey(), redislib.Z{
-		Score:  float64(session.UpdatedAt.Unix()),
-		Member: session.ID,
-	}).Err(); err != nil {
-		return fmt.Errorf("save tus session: %w", err)
-	}
-
-	return nil
-}
-
-func (s *S3Store) loadSession(ctx context.Context, id string) (s3Session, error) {
-	data, err := s.redis.Get(ctx, s.redisKey(id)).Bytes()
-	if err != nil {
-		if errors.Is(err, redislib.Nil) {
-			return s3Session{}, ErrNotFound
+		}); err != nil {
+			return fmt.Errorf("abort multipart upload: %w", err)
 		}
-		return s3Session{}, fmt.Errorf("load tus session: %w", err)
 	}
 
-	var dto s3SessionDTO
-	if err := json.Unmarshal(data, &dto); err == nil {
-		return dto.toSession(), nil
-	}
-
-	var legacy s3SessionLegacy
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return s3Session{}, fmt.Errorf("unmarshal tus session: %w", err)
-	}
-
-	return legacy.toSession(), nil
-}
-
-func (s *S3Store) deleteSession(ctx context.Context, id string) error {
-	if err := s.redis.Del(ctx, s.redisKey(id)).Err(); err != nil {
-		return fmt.Errorf("delete tus session: %w", err)
-	}
-	if err := s.redis.ZRem(ctx, s.indexKey(), id).Err(); err != nil {
-		return fmt.Errorf("delete tus session: %w", err)
-	}
-
-	return nil
+	return s.repo.Delete(ctx, id)
 }
 
 func (s *S3Store) Cleanup(ctx context.Context, before time.Time) (int, error) {
@@ -378,86 +371,246 @@ func (s *S3Store) Cleanup(ctx context.Context, before time.Time) (int, error) {
 	const batchSize = 100
 	removed := 0
 	for {
-		if err := ctx.Err(); err != nil {
-			return removed, err
-		}
-
-		ids, err := s.loadExpiredIDs(ctx, before, batchSize)
+		ids, err := s.repo.ListExpired(ctx, before, batchSize)
 		if err != nil {
-			return removed, fmt.Errorf("load tus cleanup index: %w", err)
+			return removed, err
 		}
 		if len(ids) == 0 {
 			break
 		}
-
 		for _, id := range ids {
 			if err := ctx.Err(); err != nil {
 				return removed, err
 			}
-
-			cleaned, err := s.cleanupSession(ctx, id)
-			if err != nil {
+			if err := s.Delete(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
 				return removed, err
 			}
-			if cleaned {
-				removed++
-			}
+			removed++
 		}
-
 		if len(ids) < batchSize {
 			break
 		}
 	}
 
-	return removed, nil
-}
-
-func (s *S3Store) loadExpiredIDs(ctx context.Context, before time.Time, limit int64) ([]string, error) {
-	return s.redis.ZRangeByScore(ctx, s.indexKey(), &redislib.ZRangeBy{
-		Min:    "-inf",
-		Max:    strconv.FormatInt(before.Unix(), 10),
-		Offset: 0,
-		Count:  limit,
-	}).Result()
-}
-
-func (s *S3Store) cleanupSession(ctx context.Context, id string) (bool, error) {
-	session, err := s.loadSession(ctx, id)
+	orphans, err := s.cleanupOrphanMultipartUploads(ctx, before)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			if err := s.redis.ZRem(ctx, s.indexKey(), id).Err(); err != nil {
-				return false, fmt.Errorf("cleanup tus index: %w", err)
-			}
-			return false, nil
-		}
-		return false, err
+		return removed, err
 	}
-
-	if err := s.abortMultipartIfNeeded(ctx, session); err != nil {
-		return false, err
-	}
-
-	if err := s.deleteSession(ctx, id); err != nil {
-		return false, err
-	}
-
-	return true, nil
+	return removed + orphans, nil
 }
 
-func (s *S3Store) abortMultipartIfNeeded(ctx context.Context, session s3Session) error {
-	if session.UploadID == "" {
-		return nil
+func (s *S3Store) cleanupOrphanMultipartUploads(ctx context.Context, before time.Time) (int, error) {
+	removed := 0
+	var keyMarker *string
+	var uploadIDMarker *string
+	for {
+		result, err := s.client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+			Bucket:         aws.String(s.domain.Bucket()),
+			Prefix:         aws.String(strings.Trim(s.cfg.Prefix, "/") + "/"),
+			KeyMarker:      keyMarker,
+			UploadIdMarker: uploadIDMarker,
+		})
+		if err != nil {
+			return removed, fmt.Errorf("list orphan multipart uploads: %w", err)
+		}
+		for _, upload := range result.Uploads {
+			if err := ctx.Err(); err != nil {
+				return removed, err
+			}
+			if upload.Initiated == nil || !upload.Initiated.Before(before) {
+				continue
+			}
+			objectPath := aws.ToString(upload.Key)
+			uploadID := aws.ToString(upload.UploadId)
+			exists, err := s.repo.HasMultipart(ctx, objectPath, uploadID)
+			if err != nil {
+				return removed, err
+			}
+			if exists {
+				continue
+			}
+			if _, err := s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+				Bucket:   aws.String(s.domain.Bucket()),
+				Key:      aws.String(objectPath),
+				UploadId: aws.String(uploadID),
+			}); err != nil {
+				return removed, fmt.Errorf("abort orphan multipart upload: %w", err)
+			}
+			removed++
+		}
+		if !aws.ToBool(result.IsTruncated) {
+			return removed, nil
+		}
+		if result.NextKeyMarker == nil {
+			return removed, errors.New("list orphan multipart uploads: truncated result has no next key marker")
+		}
+		keyMarker = result.NextKeyMarker
+		uploadIDMarker = result.NextUploadIdMarker
+	}
+}
+
+func (s *S3Store) reconcileOrUploadPart(
+	ctx context.Context,
+	session s3Session,
+	partNumber int32,
+	chunk []byte,
+	checksum string,
+) (durablePart, error) {
+	remote, found, err := s.findRemotePart(ctx, session, partNumber)
+	if err != nil {
+		return durablePart{}, err
+	}
+	if found && remote.Size == int64(len(chunk)) && remote.ChecksumSHA256 == checksum && remote.ETag != "" {
+		return remote, nil
 	}
 
-	if _, err := s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-		Bucket:   aws.String(s.domain.Bucket()),
-		Key:      aws.String(session.Path),
-		UploadId: aws.String(session.UploadID),
-	}); err != nil {
-		return fmt.Errorf("abort multipart upload: %w", err)
+	contentLength := int64(len(chunk))
+	uploaded, err := s.client.UploadPart(ctx, &s3.UploadPartInput{
+		Body:           bytes.NewReader(chunk),
+		Bucket:         aws.String(s.domain.Bucket()),
+		Key:            aws.String(session.Path),
+		PartNumber:     aws.Int32(partNumber),
+		UploadId:       aws.String(session.UploadID),
+		ContentLength:  &contentLength,
+		ChecksumSHA256: aws.String(checksum),
+	})
+	if err != nil {
+		return durablePart{}, fmt.Errorf("upload part %d: %w", partNumber, err)
+	}
+	etag := strings.TrimSpace(aws.ToString(uploaded.ETag))
+	if etag == "" {
+		return durablePart{}, fmt.Errorf("upload part %d: empty etag", partNumber)
 	}
 
+	return durablePart{
+		Number:         partNumber,
+		Size:           contentLength,
+		ETag:           etag,
+		ChecksumSHA256: checksum,
+	}, nil
+}
+
+func (s *S3Store) findRemotePart(
+	ctx context.Context,
+	session s3Session,
+	partNumber int32,
+) (durablePart, bool, error) {
+	marker := strconv.FormatInt(int64(partNumber-1), 10)
+	maxParts := int32(1)
+	result, err := s.client.ListParts(ctx, &s3.ListPartsInput{
+		Bucket:           aws.String(s.domain.Bucket()),
+		Key:              aws.String(session.Path),
+		UploadId:         aws.String(session.UploadID),
+		PartNumberMarker: aws.String(marker),
+		MaxParts:         &maxParts,
+	})
+	if err != nil {
+		return durablePart{}, false, fmt.Errorf("list multipart part %d: %w", partNumber, err)
+	}
+	if len(result.Parts) == 0 || aws.ToInt32(result.Parts[0].PartNumber) != partNumber {
+		return durablePart{}, false, nil
+	}
+
+	return fromS3Part(result.Parts[0]), true, nil
+}
+
+func (s *S3Store) listRemoteParts(ctx context.Context, session s3Session) ([]durablePart, error) {
+	parts := make([]durablePart, 0, len(session.Parts))
+	var marker *string
+	for {
+		result, err := s.client.ListParts(ctx, &s3.ListPartsInput{
+			Bucket:           aws.String(s.domain.Bucket()),
+			Key:              aws.String(session.Path),
+			UploadId:         aws.String(session.UploadID),
+			PartNumberMarker: marker,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, part := range result.Parts {
+			parts = append(parts, fromS3Part(part))
+		}
+		if !aws.ToBool(result.IsTruncated) {
+			break
+		}
+		if strings.TrimSpace(aws.ToString(result.NextPartNumberMarker)) == "" {
+			return nil, errors.New("list multipart parts: truncated result has no next marker")
+		}
+		marker = result.NextPartNumberMarker
+	}
+	sort.Slice(parts, func(i, j int) bool { return parts[i].Number < parts[j].Number })
+	return parts, nil
+}
+
+func (s *S3Store) objectMatchesSession(ctx context.Context, session s3Session) (bool, error) {
+	result, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.domain.Bucket()),
+		Key:    aws.String(session.Path),
+	})
+	if err != nil {
+		return false, err
+	}
+	return aws.ToInt64(result.ContentLength) == session.UploadLength, nil
+}
+
+func (s *S3Store) completeResult(session s3Session) CompleteResult {
+	return CompleteResult{
+		Size:            session.UploadLength,
+		RelativePath:    session.Path,
+		URL:             s.buildURL(session.Path),
+		MimeType:        session.MimeType,
+		OriginalName:    session.OriginalName,
+		FileName:        session.FileName,
+		FinalizationKey: session.FinalizationKey,
+		Quarantined:     true,
+	}
+}
+
+type s3Session struct {
+	Session
+	UploadID  string
+	Parts     map[int32]durablePart
+	ExpiresAt time.Time
+}
+
+func validateRemoteParts(session s3Session, remote []durablePart) error {
+	if len(remote) != len(session.Parts) {
+		return fmt.Errorf("multipart parts mismatch: durable=%d remote=%d", len(session.Parts), len(remote))
+	}
+	var total int64
+	for _, part := range remote {
+		durable, ok := session.Parts[part.Number]
+		if !ok {
+			return fmt.Errorf("multipart part %d is not recorded", part.Number)
+		}
+		if durable.Size != part.Size || durable.ETag != part.ETag || durable.ChecksumSHA256 != part.ChecksumSHA256 {
+			return fmt.Errorf("multipart part %d does not match durable state", part.Number)
+		}
+		total += part.Size
+	}
+	if total != session.UploadLength {
+		return fmt.Errorf("multipart size mismatch: expected=%d actual=%d", session.UploadLength, total)
+	}
 	return nil
+}
+
+func fromS3Part(part awss3types.Part) durablePart {
+	return durablePart{
+		Number:         aws.ToInt32(part.PartNumber),
+		Size:           aws.ToInt64(part.Size),
+		ETag:           aws.ToString(part.ETag),
+		ChecksumSHA256: aws.ToString(part.ChecksumSHA256),
+	}
+}
+
+func checksumSHA256(data []byte) string {
+	sum := sha256.Sum256(data)
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func (s *S3Store) buildURL(key string) string {
+	link, _ := url.JoinPath(s.domain.Host(), s.domain.Bucket(), key)
+	return link
 }
 
 func buildKey(prefix string, metadata map[string]string, fileName string) (string, error) {
@@ -498,113 +651,4 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return aws.String(value)
-}
-
-type s3SessionDTO struct {
-	ID           string             `json:"id"`
-	UploadLength int64              `json:"uploadLength"`
-	Offset       int64              `json:"offset"`
-	Metadata     map[string]string  `json:"metadata,omitempty"`
-	Path         string             `json:"path"`
-	URL          string             `json:"url,omitempty"`
-	OriginalName string             `json:"originalName"`
-	FileName     string             `json:"fileName"`
-	MimeType     string             `json:"mimeType,omitempty"`
-	OwnerID      int64              `json:"ownerId"`
-	OwnerUUID    sharedtypes.UserID `json:"ownerUuid"`
-	CreatedAt    time.Time          `json:"createdAt"`
-	UpdatedAt    time.Time          `json:"updatedAt"`
-	UploadID     string             `json:"uploadId"`
-	Parts        map[int32]string   `json:"parts,omitempty"`
-}
-
-func toSessionDTO(session s3Session) s3SessionDTO {
-	return s3SessionDTO{
-		ID:           session.ID,
-		UploadLength: session.UploadLength,
-		Offset:       session.Offset,
-		Metadata:     session.Metadata,
-		Path:         session.Path,
-		URL:          session.URL,
-		OriginalName: session.OriginalName,
-		FileName:     session.FileName,
-		MimeType:     session.MimeType,
-		OwnerID:      session.OwnerID,
-		OwnerUUID:    session.OwnerUUID,
-		CreatedAt:    session.CreatedAt,
-		UpdatedAt:    session.UpdatedAt,
-		UploadID:     session.UploadID,
-		Parts:        session.Parts,
-	}
-}
-
-func (dto s3SessionDTO) toSession() s3Session {
-	parts := dto.Parts
-	if parts == nil {
-		parts = make(map[int32]string)
-	}
-	return s3Session{
-		Session: Session{
-			ID:           dto.ID,
-			UploadLength: dto.UploadLength,
-			Offset:       dto.Offset,
-			Metadata:     dto.Metadata,
-			Path:         dto.Path,
-			URL:          dto.URL,
-			OriginalName: dto.OriginalName,
-			FileName:     dto.FileName,
-			MimeType:     dto.MimeType,
-			OwnerID:      dto.OwnerID,
-			OwnerUUID:    dto.OwnerUUID,
-			CreatedAt:    dto.CreatedAt,
-			UpdatedAt:    dto.UpdatedAt,
-		},
-		UploadID: dto.UploadID,
-		Parts:    parts,
-	}
-}
-
-//nolint:tagliatelle // maintain legacy snake_case fields for compatibility with stored sessions
-type s3SessionLegacy struct {
-	ID           string             `json:"ID"`
-	UploadLength int64              `json:"UploadLength"`
-	Offset       int64              `json:"Offset"`
-	Metadata     map[string]string  `json:"Metadata"`
-	Path         string             `json:"Path"`
-	URL          string             `json:"URL"`
-	OriginalName string             `json:"OriginalName"`
-	FileName     string             `json:"FileName"`
-	MimeType     string             `json:"MimeType"`
-	OwnerID      int64              `json:"OwnerID"`
-	OwnerUUID    sharedtypes.UserID `json:"OwnerUUID"`
-	CreatedAt    time.Time          `json:"CreatedAt"`
-	UpdatedAt    time.Time          `json:"UpdatedAt"`
-	UploadID     string             `json:"upload_id"`
-	Parts        map[int32]string   `json:"parts"`
-}
-
-func (legacy s3SessionLegacy) toSession() s3Session {
-	parts := legacy.Parts
-	if parts == nil {
-		parts = make(map[int32]string)
-	}
-	return s3Session{
-		Session: Session{
-			ID:           legacy.ID,
-			UploadLength: legacy.UploadLength,
-			Offset:       legacy.Offset,
-			Metadata:     legacy.Metadata,
-			Path:         legacy.Path,
-			URL:          legacy.URL,
-			OriginalName: legacy.OriginalName,
-			FileName:     legacy.FileName,
-			MimeType:     legacy.MimeType,
-			OwnerID:      legacy.OwnerID,
-			OwnerUUID:    legacy.OwnerUUID,
-			CreatedAt:    legacy.CreatedAt,
-			UpdatedAt:    legacy.UpdatedAt,
-		},
-		UploadID: legacy.UploadID,
-		Parts:    parts,
-	}
 }

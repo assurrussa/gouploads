@@ -15,12 +15,13 @@ listed in `reference/externalconsumer`.
 
 - upload file models and public file contracts;
 - local and S3 storage configuration contracts;
-- TUS store contracts;
+- TUS store contracts, durable S3 multipart session state, and fencing;
 - upload handler and strategy interfaces;
 - image/video resize request and callback request contracts;
 - upload, resize, listen, and delete outbox job factories;
 - cleanup use case factories;
-- embedded `files` table migrations exposed by `host.MigrationsFS`.
+- embedded `files` and `upload_sessions` migrations exposed by
+  `host.MigrationsFS`.
 
 The outbox backend owns its own job storage migrations. Host projects must run
 those migrations in addition to the `gouploads` file migration.
@@ -57,6 +58,12 @@ reach.
            AccessKey: accessKey,
            SecretKey: secretKey,
        },
+       Tus: host.StorageTusConfig{
+           PartSize: host.ParseSize("8MB"),
+           SessionTTL: 24 * time.Hour,
+           LeaseTTL: 30 * time.Second,
+           QuarantinePrefix: "quarantine/uploads",
+       },
        Image: host.ImagePipelineConfig{
            ResizerHost: resizerJobsURL,
            WebhookCallbackHost: callbackURL,
@@ -70,8 +77,15 @@ reach.
    }
    ```
 
-2. Add `host.BootstrapDependencies()` to the host dependency container if the
-   host uses `godi`.
+2. Run all `host.MigrationFiles()` and build the TUS store. S3 mode requires
+   the same PostgreSQL client used by the host composition root:
+
+   ```go
+   tusStore, err := host.NewTusStore(cfg, database)
+   ```
+
+   Add `host.BootstrapDependencies()` to the host dependency container if the
+   host uses `godi`; its TUS provider has the same database requirement.
 
 3. Build an upload handler with host-owned auth context extraction.
 
@@ -141,6 +155,31 @@ stable so repeated host deployments do not create duplicate migration history.
 The host must also run the outbox backend migrations used by its outbox storage
 implementation.
 
+The `upload_sessions` migration is mandatory for S3 TUS. Protocol metadata,
+part checksums, offset, lease owner, monotonic fencing revision, expiry, and the
+stable finalization key live in PostgreSQL. Redis may still be used elsewhere
+by the host, but it is not the source of truth for TUS sessions.
+
+## Durable S3 TUS Semantics
+
+- Each PATCH claims a short database-clock lease and increments `revision`.
+- Only the matching lease owner and revision can commit the uploaded part and
+  advance `Upload-Offset`; stale replicas receive a conflict.
+- A retry after a crash compares part number, size, ETag, and SHA-256 through
+  S3 `ListParts` before reusing an already uploaded part.
+- Finalization is fenced and repeatable. A completed object is recovered with
+  `HeadObject` if the process died after S3 completion but before the database
+  commit. `FinalizationKey` is stable across retries for downstream idempotency.
+- Incomplete objects use private ACL and the configured quarantine prefix.
+  Protocol completion does not make an object public; validation/promotion is
+  owned by the host media layer.
+- Cleanup also lists old multipart uploads under that prefix and aborts entries
+  that have no matching durable session. The cleanup threshold protects an
+  in-flight CreateMultipartUpload-to-database-insert window.
+- `STORAGE_TUS_PART_SIZE` is the exact size of every non-final PATCH. The final
+  PATCH may be smaller. The transport rejects concurrent offsets and invalid
+  intermediate chunk sizes.
+
 ## Test Support
 
 Consumer tests may import `github.com/assurrussa/gouploads/hosttest` for stable
@@ -178,7 +217,8 @@ depend on them. The external consumer probe compiles both normal and
 Run the import policy against host repositories:
 
 ```bash
-go run ./cmd/importpolicy --repo-root ../site --consumers backend,goadmin,fixtures/second-go-host
+go run ./cmd/importpolicy --repo-root ../site --consumers backend,fixtures/second-go-host
+go run ./cmd/importpolicy --repo-root ../goadmin --consumers .
 ```
 
 Runtime host code should only import `gouploads/host`. Test files and packages

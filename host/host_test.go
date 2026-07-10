@@ -43,6 +43,23 @@ func TestNewCleanTusRequest(t *testing.T) {
 	require.Equal(t, host.CleanTusRequest{Before: before}, host.NewCleanTusRequest(before))
 }
 
+func TestNewTusStoreRequiresDatabaseForS3(t *testing.T) {
+	store, err := host.NewTusStore(host.StorageConfig{
+		Driver: host.StorageDriverS3,
+		Tus: host.StorageTusConfig{
+			PartSize:         host.ParseSize("5MB"),
+			LeaseTTL:         30 * time.Second,
+			SessionTTL:       time.Hour,
+			QuarantinePrefix: "quarantine/uploads",
+		},
+	}, nil)
+
+	require.Nil(t, store)
+	require.ErrorContains(t, err, "database is required")
+	require.Error(t, host.ErrTusUploadBusy)
+	require.Equal(t, host.TusStatusActive, host.TusStatus("active"))
+}
+
 func TestAfterProcessPayloadHelpers(t *testing.T) {
 	userID := host.NewUserID()
 

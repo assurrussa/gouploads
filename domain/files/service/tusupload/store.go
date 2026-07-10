@@ -16,10 +16,22 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("tus upload not found")
-	ErrOffsetMismatch = errors.New("tus upload offset mismatch")
-	ErrLengthExceeded = errors.New("tus upload length exceeded")
-	ErrChunkTooSmall  = errors.New("tus upload chunk is too small")
+	ErrNotFound        = errors.New("tus upload not found")
+	ErrOffsetMismatch  = errors.New("tus upload offset mismatch")
+	ErrLengthExceeded  = errors.New("tus upload length exceeded")
+	ErrChunkTooSmall   = errors.New("tus upload chunk is too small")
+	ErrChunkSize       = errors.New("tus upload intermediate chunk must match the configured part size")
+	ErrUploadBusy      = errors.New("tus upload is busy")
+	ErrFenceLost       = errors.New("tus upload fence lost")
+	ErrUploadFinalized = errors.New("tus upload is already finalized")
+)
+
+type Status string
+
+const (
+	StatusActive     Status = "active"
+	StatusFinalizing Status = "finalizing"
+	StatusReady      Status = "ready"
 )
 
 type Store interface {
@@ -45,31 +57,37 @@ type CreateRequest struct {
 }
 
 type Session struct {
-	ID           string             `json:"id"`
-	UploadLength int64              `json:"uploadLength"`
-	Offset       int64              `json:"offset"`
-	Metadata     map[string]string  `json:"metadata,omitempty"`
-	Path         string             `json:"path"`
-	URL          string             `json:"url,omitempty"`
-	OriginalName string             `json:"originalName"`
-	FileName     string             `json:"fileName"`
-	MimeType     string             `json:"mimeType,omitempty"`
-	OwnerID      int64              `json:"ownerId"`
-	OwnerUUID    sharedtypes.UserID `json:"ownerUuid"`
-	CreatedAt    time.Time          `json:"createdAt"`
-	UpdatedAt    time.Time          `json:"updatedAt"`
+	ID              string             `json:"id"`
+	UploadLength    int64              `json:"uploadLength"`
+	Offset          int64              `json:"offset"`
+	Metadata        map[string]string  `json:"metadata,omitempty"`
+	Path            string             `json:"path"`
+	URL             string             `json:"url,omitempty"`
+	OriginalName    string             `json:"originalName"`
+	FileName        string             `json:"fileName"`
+	MimeType        string             `json:"mimeType,omitempty"`
+	OwnerID         int64              `json:"ownerId"`
+	OwnerUUID       sharedtypes.UserID `json:"ownerUuid"`
+	CreatedAt       time.Time          `json:"createdAt"`
+	UpdatedAt       time.Time          `json:"updatedAt"`
+	Status          Status             `json:"status"`
+	Revision        int64              `json:"revision"`
+	Quarantined     bool               `json:"quarantined"`
+	FinalizationKey string             `json:"finalizationKey,omitempty"`
 }
 
 type CompleteResult struct {
-	Reader       io.ReadCloser
-	Size         int64
-	RelativePath string
-	URL          string
-	MimeType     string
-	OriginalName string
-	FileName     string
-	Width        int
-	Height       int
+	Reader          io.ReadCloser
+	Size            int64
+	RelativePath    string
+	URL             string
+	MimeType        string
+	OriginalName    string
+	FileName        string
+	Width           int
+	Height          int
+	FinalizationKey string
+	Quarantined     bool
 }
 
 type FileStore struct {
@@ -133,17 +151,20 @@ func (s *FileStore) Create(_ context.Context, req CreateRequest) (Session, error
 	}
 
 	return Session{
-		ID:           id,
-		UploadLength: req.UploadLength,
-		Offset:       0,
-		Metadata:     cloneMetadata(req.Metadata),
-		Path:         dataPath,
-		OriginalName: req.OriginalName,
-		FileName:     req.FileName,
-		OwnerID:      req.OwnerID,
-		OwnerUUID:    req.OwnerUUID,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:              id,
+		UploadLength:    req.UploadLength,
+		Offset:          0,
+		Metadata:        cloneMetadata(req.Metadata),
+		Path:            dataPath,
+		OriginalName:    req.OriginalName,
+		FileName:        req.FileName,
+		OwnerID:         req.OwnerID,
+		OwnerUUID:       req.OwnerUUID,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		Status:          StatusActive,
+		Quarantined:     true,
+		FinalizationKey: id,
 	}, nil
 }
 
@@ -167,18 +188,21 @@ func (s *FileStore) Get(_ context.Context, id string) (Session, error) {
 	}
 
 	return Session{
-		ID:           meta.ID,
-		UploadLength: meta.UploadLength,
-		Offset:       info.Size(),
-		Metadata:     cloneMetadata(meta.Metadata),
-		Path:         dataPath,
-		OriginalName: meta.OriginalName,
-		FileName:     meta.FileName,
-		MimeType:     meta.MimeType,
-		OwnerID:      meta.OwnerID,
-		OwnerUUID:    meta.OwnerUUID,
-		CreatedAt:    meta.CreatedAt,
-		UpdatedAt:    meta.UpdatedAt,
+		ID:              meta.ID,
+		UploadLength:    meta.UploadLength,
+		Offset:          info.Size(),
+		Metadata:        cloneMetadata(meta.Metadata),
+		Path:            dataPath,
+		OriginalName:    meta.OriginalName,
+		FileName:        meta.FileName,
+		MimeType:        meta.MimeType,
+		OwnerID:         meta.OwnerID,
+		OwnerUUID:       meta.OwnerUUID,
+		CreatedAt:       meta.CreatedAt,
+		UpdatedAt:       meta.UpdatedAt,
+		Status:          StatusActive,
+		Quarantined:     true,
+		FinalizationKey: meta.ID,
 	}, nil
 }
 
@@ -257,11 +281,13 @@ func (s *FileStore) Complete(ctx context.Context, id string) (CompleteResult, er
 	}
 
 	return CompleteResult{
-		Reader:       file,
-		Size:         info.Size(),
-		OriginalName: session.OriginalName,
-		FileName:     session.FileName,
-		MimeType:     session.MimeType,
+		Reader:          file,
+		Size:            info.Size(),
+		OriginalName:    session.OriginalName,
+		FileName:        session.FileName,
+		MimeType:        session.MimeType,
+		FinalizationKey: session.FinalizationKey,
+		Quarantined:     true,
 	}, nil
 }
 

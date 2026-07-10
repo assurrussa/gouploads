@@ -40,10 +40,12 @@ type StorageS3Config struct {
 }
 
 type StorageTusConfig struct {
-	PartSize        ParseSize     `toml:"part_size" long:"storage-tus-part-size" env:"STORAGE_TUS_PART_SIZE" value-default:"5MB"`
-	SessionTTL      time.Duration `toml:"session_ttl" long:"storage-tus-session-ttl" env:"STORAGE_TUS_SESSION_TTL" value-default:"24h" validate:"min=1m"`
-	CleanupInterval time.Duration `toml:"cleanup_interval" long:"storage-tus-cleanup-interval" env:"STORAGE_TUS_CLEANUP_INTERVAL" value-default:"1h" validate:"min=1m"`
-	CleanupSpec     string        `toml:"cleanup_spec" long:"storage-tus-cleanup-spec" env:"STORAGE_TUS_CLEANUP_SPEC"`
+	PartSize         ParseSize     `toml:"part_size" long:"storage-tus-part-size" env:"STORAGE_TUS_PART_SIZE" value-default:"5MB"`
+	SessionTTL       time.Duration `toml:"session_ttl" long:"storage-tus-session-ttl" env:"STORAGE_TUS_SESSION_TTL" value-default:"24h" validate:"min=1m"`
+	LeaseTTL         time.Duration `toml:"lease_ttl" long:"storage-tus-lease-ttl" env:"STORAGE_TUS_LEASE_TTL" value-default:"30s" validate:"min=1s,max=5m"`
+	QuarantinePrefix string        `toml:"quarantine_prefix" long:"storage-tus-quarantine-prefix" env:"STORAGE_TUS_QUARANTINE_PREFIX" value-default:"quarantine/uploads" validate:"required"`
+	CleanupInterval  time.Duration `toml:"cleanup_interval" long:"storage-tus-cleanup-interval" env:"STORAGE_TUS_CLEANUP_INTERVAL" value-default:"1h" validate:"min=1m"`
+	CleanupSpec      string        `toml:"cleanup_spec" long:"storage-tus-cleanup-spec" env:"STORAGE_TUS_CLEANUP_SPEC"`
 }
 
 type VideoPipelineConfig struct {

@@ -12,6 +12,20 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: tests-service
+          POSTGRES_PASSWORD: tests-service
+          POSTGRES_DB: tests-db-pgsql
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tests-service -d tests-db-pgsql"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v5
 
@@ -39,3 +53,9 @@ jobs:
 
       - name: Test Race
         run: go test -race -v ./...
+
+      - name: Test durable TUS PostgreSQL fencing
+        run: go test -tags integration ./domain/files/service/tusupload -run TestIntegration_PostgresSessionRepository -count=1
+        env:
+          TEST_PSQL_ADDRESS_LOCAL: 127.0.0.1
+          TEST_PSQL_PORT_LOCAL: 5432

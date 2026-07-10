@@ -1,11 +1,59 @@
 # Implementation Notes
 
+## 2026-07-10: Durable Multi-Replica TUS Foundation
+
+- Replaced Redis-only S3 TUS session state in the production DI path with a
+  PostgreSQL `upload_sessions` state machine. Redis is no longer required to
+  resume an S3 upload after a restart or on another web replica.
+- Added database-clock leases and monotonic revision fences. PATCH commits are
+  conditional on session ID, expected offset, lease owner, unexpired lease,
+  and exact revision; stale workers cannot advance durable state.
+- S3 multipart uploads now start under a configurable quarantine prefix with
+  private ACL and SHA-256 checksums. The configured general S3 ACL is
+  deliberately ignored for incomplete TUS objects.
+- Added crash reconciliation through `ListParts`: a retry can accept an exact
+  part number/size/ETag/checksum match after S3 succeeded but the database
+  commit did not. Mismatched parts are re-uploaded only by the current fence
+  owner.
+- Extended cleanup with `ListMultipartUploads` reconciliation so old S3
+  multipart uploads that have no durable PostgreSQL session are aborted after
+  the retention threshold.
+- Added fenced, repeatable finalization and `HeadObject` recovery for a crash
+  after S3 completion but before the database status commit. A stable unique
+  finalization key is returned for downstream CMS/media idempotency.
+- Kept completed protocol objects quarantined. TUS completion does not grant
+  public access; validation and promotion remain a host/CMS media adapter
+  responsibility.
+- Added public `host.NewTusStore`, TUS request/session/result aliases, status
+  constants, and stable sentinel errors. Existing hosts can continue to use
+  local filesystem mode; S3 construction without PostgreSQL now fails early.
+- Added tests for two-store resume, concurrent PATCH, crash reconciliation,
+  finalize-crash recovery, competing/repeat finalize, quarantine and orphan
+  cleanup, private ACL, and a real PostgreSQL CAS/fencing flow. CI and release
+  readiness now include the PostgreSQL integration gate.
+- Fixed the formatter target so `gci` uses the same repository-only Go file
+  list as `gofumpt`; repository-local module caches are no longer traversed or
+  mutated by `make fmt`.
+- Updated the release import-policy target for the current repository topology:
+  `goadmin` is a sibling repository, not a directory under `site`, and is
+  checked through its own repository root.
+- Used the repository's existing AWS SDK for Go v2 version and verified the
+  current `UploadPart`, `ListParts`, checksum, and completed-part fields before
+  implementing recovery.
+- Tradeoff: S3-compatible providers must preserve the requested SHA-256 part
+  checksum in `ListParts` to reuse a crash-orphaned part. If they do not, the
+  current fence owner safely re-uploads that part instead of trusting size or
+  ETag alone.
+- Tradeoff: every non-final PATCH must equal the configured S3 part size. This
+  keeps TUS offsets and S3 part numbering deterministic; larger intermediate
+  chunks are rejected instead of creating multipart gaps.
+
 ## 2026-06-04: Agent Project Initialization
 
 - Goal: initialize project-facing agent guidance for future work in
   `gouploads` without changing code behavior.
-- Used `$project-context-router` to resolve shared context at
-  `/Users/amir/agents/agent-context`, then compared the local repository docs
+- Used `$project-context-router` to resolve shared context through
+  `AGENT_CONTEXT_ROOT`, then compared the local repository docs
   and code with the shared `gouploads`, `media-resizer`, and `outbox` platform
   pages.
 - Kept `AGENTS.md` focused on agent workflow, source order, public import

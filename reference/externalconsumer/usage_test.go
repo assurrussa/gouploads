@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -32,7 +33,10 @@ func TestHostSurfaceCoversEmbeddingWorkflow(t *testing.T) {
 			ResizerToken:        "video-token",
 		},
 		Tus: host.StorageTusConfig{
-			PartSize: host.ParseSize("8MB"),
+			PartSize:         host.ParseSize("8MB"),
+			SessionTTL:       24 * time.Hour,
+			LeaseTTL:         30 * time.Second,
+			QuarantinePrefix: "quarantine/uploads",
 		},
 	}
 	require.Equal(t, "https://cdn.example.test", host.FilesBaseURL(cfg))
@@ -88,6 +92,11 @@ func TestHostSurfaceCoversEmbeddingWorkflow(t *testing.T) {
 	_ = host.OutboxJobDeps{}
 	_ = host.NewFileRepo
 	_ = host.MustFileRepo
+	_ = host.NewTusStore
+	_ = host.TusCreateRequest{}
+	_ = host.TusSession{Status: host.TusStatusActive, Quarantined: true}
+	_ = host.TusCompleteResult{FinalizationKey: "stable-key", Quarantined: true}
+	_ = host.ErrTusFenceLost
 	_ = hosttest.SaveFileInput{}
 	_ = hosttest.NewListenResizeRequestMatcher
 }

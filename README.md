@@ -10,7 +10,9 @@
 `gouploads` is a powerful, extensible Go library and service designed for handling file uploads, media processing, and storage orchestration. Built with the widely-used [gofiber](https://github.com/gofiber/fiber) framework, `gouploads` excels at managing modern upload complexities out of the box.
 
 Key Features:
-- **Resumable Uploads**: Full support for the [Tus](https://tus.io/) protocol, allowing robust, resumable uploads for large files.
+- **Resumable Uploads**: TUS over S3 multipart with PostgreSQL-backed protocol
+  state, cross-replica resume, offset fencing, crash reconciliation, and
+  idempotent finalization.
 - **Storage Agnostic**: Built-in support for both Local file system and S3/Ceph storage via `aws-sdk-go-v2`.
 - **Media Processing Pipelines**: Integrated structures for video and image resizing/compression callbacks.
 - **Transaction Outbox Integration**: Works seamlessly with `outbox` patterns to guarantee the execution of post-upload background jobs (like resizing, webhook firing, or database cleanup).
@@ -83,6 +85,8 @@ curl -X POST http://localhost:3000/api/v1/uploads \
 Some of the main configurations include:
 - `STORAGE_DRIVER`: `local` or `s3`
 - `STORAGE_S3_ENDPOINT`, `STORAGE_S3_BUCKET`, `STORAGE_S3_REGION`
+- `STORAGE_TUS_PART_SIZE`, `STORAGE_TUS_SESSION_TTL`,
+  `STORAGE_TUS_LEASE_TTL`, and `STORAGE_TUS_QUARANTINE_PREFIX`
 - Sub-pipelines logic per media type (`STORAGE_IMAGE_DEFAULT_FORMAT`, `STORAGE_VIDEO_RESIZER_HOST`, etc).
 
 ## Stable Host Surface
@@ -97,8 +101,16 @@ cleanup use case factories, outbox job registration, and DI bootstrap helpers.
 Host projects remain responsible for local environment mapping, auth context
 extraction, route mounting, object-type policy, and deployment topology.
 It also exposes the embedded `files` table migrations through `host.MigrationsFS`
-and `host.MigrationFiles`. Hosts still need to run the storage migrations owned
-by their selected outbox backend.
+and `host.MigrationFiles`, including durable `upload_sessions` state. S3 hosts
+construct the TUS store with `host.NewTusStore(cfg, database)`; PostgreSQL is
+the source of truth and Redis is not required for TUS session durability. Hosts
+still need to run the storage migrations owned by their selected outbox
+backend.
+
+S3 TUS objects are always created with private ACL under the configured
+quarantine prefix. `TusCompleteResult.Quarantined` remains true after protocol
+finalization: a host or CMS media adapter must validate and promote the object
+before exposing it through a public URL.
 
 The supported external test-support package is:
 
@@ -118,7 +130,8 @@ internal implementation details.
 To check a host repository:
 
 ```bash
-go run ./cmd/importpolicy --repo-root ../site --consumers backend,goadmin,fixtures/second-go-host
+go run ./cmd/importpolicy --repo-root ../site --consumers backend,fixtures/second-go-host
+go run ./cmd/importpolicy --repo-root ../goadmin --consumers .
 ```
 
 For the full host integration contract, see [docs/host-integration.md](docs/host-integration.md).
