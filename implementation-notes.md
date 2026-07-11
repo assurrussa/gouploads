@@ -1,5 +1,27 @@
 # Implementation Notes
 
+## 2026-07-11: Quarantine Promotion Boundary
+
+- Added `host.NewQuarantinePromoter` as the supported post-validation boundary
+  that moves a completed object out of the private quarantine prefix and
+  returns checksum, stable public URL, size, MIME type, and dimensions for CMS
+  media metadata.
+- Promotion is idempotent by the durable TUS finalization key. An ambiguous
+  storage commit is recovered only when the deterministic destination object
+  exists and its bytes still match the completed upload size.
+- Promotion rejects incomplete metadata, unsafe finalization keys, source paths
+  outside the configured quarantine prefix, destinations inside quarantine,
+  and relative or non-HTTP public URLs. TUS completion alone still does not
+  make an object public.
+- Reused the existing storage contracts through aliases on `gouploads/host` so
+  consumers do not need to import infrastructure packages to construct the
+  promoter. This is an additive facade promotion; storage ownership remains in
+  `gouploads` and CMS owns validation policy and media metadata.
+- Made the expired-quarantine cleanup fixture derive its threshold from the
+  created session timestamp. The previous fixed repository clock became stale
+  relative to the production clock used by `S3Store.Create` and made the full
+  repeated race gate date-dependent.
+
 ## 2026-07-10: Durable Multi-Replica TUS Foundation
 
 - Replaced Redis-only S3 TUS session state in the production DI path with a

@@ -10,6 +10,7 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/service/tusupload"
 	"github.com/assurrussa/gouploads/domain/files/service/uploadservice"
 	fileshared "github.com/assurrussa/gouploads/domain/files/shared"
+	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 )
 
 var (
@@ -62,6 +63,12 @@ type (
 	UploadValidatorFunc   = uploadservice.UploadValidatorFunc
 	UserType              = fileshared.UserType
 	ValidationError       = uploadservice.ValidationError
+	Storage               = filestorage.Storage
+	SaveFileInput         = filestorage.SaveFileInput
+	CommitInput           = filestorage.CommitInput
+	StoredFile            = filestorage.StoredFile
+	ExistFileInput        = filestorage.ExistFileInput
+	ExistFile             = filestorage.ExistFile
 )
 
 const (

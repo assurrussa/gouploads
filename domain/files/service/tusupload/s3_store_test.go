@@ -235,8 +235,7 @@ func TestS3Store_CleanupAbortsExpiredQuarantine(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	repo.advance(2 * defaultSessionTTL)
-	removed, err := store.Cleanup(ctx, repo.now())
+	removed, err := store.Cleanup(ctx, session.CreatedAt.Add(2*defaultSessionTTL))
 	require.NoError(t, err)
 	require.Equal(t, 1, removed)
 	_, err = store.Get(ctx, session.ID)
@@ -319,12 +318,6 @@ func newMemorySessionRepository() *memorySessionRepository {
 		sessions: make(map[string]s3Session),
 		leases:   make(map[string]memoryLease),
 	}
-}
-
-func (r *memorySessionRepository) now() time.Time {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.clock
 }
 
 func (r *memorySessionRepository) advance(duration time.Duration) {
