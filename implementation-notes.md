@@ -174,3 +174,16 @@
 - Added explicit validation for `cmd/externalconsumerprobe` subprocess
   arguments before invoking `go list` or `go test`, so the clean-consumer gate
   can keep executing the Go tool without `gosec` suppressions.
+- Split the reusable release gate into pre-tag `publish-readiness` and post-tag
+  `release-readiness`. The former now runs the complete local check, durable
+  PostgreSQL TUS integration, consumer probes, import policy, and a clean-diff
+  assertion; the latter additionally resolves the exact published version.
+- Selected `v0.9.0-alpha.0` as the expected prerelease for the new durable TUS
+  migration and host constructor contract. This supersedes the older planning
+  note that mentioned `v0.8.0`; `v0.8.2` is already the published baseline.
+- Made the Makefile-owned Go, module, GOPATH, and linter caches authoritative
+  defaults (while still allowing command-line overrides). Environment-provided
+  system cache paths previously made the coverage gate fail in sandboxed hosts.
+- Removed parse-time `go list` expansion from the coverage recipe. Running
+  `go test ./...` directly keeps package discovery inside the exported
+  repository-local cache environment and avoids an untracked partial profile.

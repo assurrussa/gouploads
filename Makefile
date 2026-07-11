@@ -1,20 +1,28 @@
 .DEFAULT_GOAL := check
-.PHONY: check release-readiness tidy-check test-surface test-surface-integration test-tus-postgres-integration externalconsumer-local externalconsumer-published import-policy-site tidy generate fmt lint vet test test-race bench-all cover-html
+.PHONY: check publish-readiness release-readiness release-version-check tidy-check test-surface test-surface-integration test-tus-postgres-integration externalconsumer-local externalconsumer-published import-policy-site tidy generate fmt lint vet test test-race bench-all cover-html
 GO_MODULE := $(shell go list -m)
 GO_FILES := $(shell find . -type f -name '*.go' -not -path './.cache/*' -not -path './.go-cache/*' -not -path './tmp/*' -not -path './vendor/*')
 SITE_REPO ?= ../site
 GOADMIN_REPO ?= $(abspath $(SITE_REPO)/../goadmin)
-GOCACHE ?= $(CURDIR)/.go-cache/gocache
-GOMODCACHE ?= $(CURDIR)/.go-cache/gomodcache
-GOPATH ?= $(CURDIR)/.go-cache/gopath
-GOLANGCI_LINT_CACHE ?= $(CURDIR)/.cache/golangci-lint
+GOCACHE := $(CURDIR)/.go-cache/gocache
+GOMODCACHE := $(CURDIR)/.go-cache/gomodcache
+GOPATH := $(CURDIR)/.go-cache/gopath
+GOLANGCI_LINT_CACHE := $(CURDIR)/.cache/golangci-lint
 export GOCACHE
+export GOMODCACHE
 export GOPATH
 export GOLANGCI_LINT_CACHE
 
 check: tidy generate fmt vet lint test test-race cover-html
 
-release-readiness: tidy-check vet test-surface test-surface-integration test-tus-postgres-integration externalconsumer-local test import-policy-site
+release-version-check:
+	@printf '%s\n' "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' || \
+		(echo "VERSION must be an exact semver tag" && exit 2)
+
+publish-readiness: release-version-check check test-surface test-surface-integration test-tus-postgres-integration externalconsumer-local import-policy-site
+	@git diff --exit-code
+
+release-readiness: publish-readiness externalconsumer-published
 
 tidy-check:
 	go mod tidy -diff
@@ -33,7 +41,7 @@ externalconsumer-local:
 	go run ./cmd/externalconsumerprobe --local-path "$(CURDIR)" --go-mod-cache "$(GOMODCACHE)"
 
 externalconsumer-published:
-	@test -n "$(VERSION)" || (echo "VERSION is required, for example: make externalconsumer-published VERSION=v0.8.0" && exit 2)
+	@test -n "$(VERSION)" || (echo "VERSION is required, for example: make externalconsumer-published VERSION=v0.9.0-alpha.0" && exit 2)
 	mkdir -p "$(GOMODCACHE)"
 	go run ./cmd/externalconsumerprobe --version "$(VERSION)" --go-mod-cache "$(GOMODCACHE)"
 
@@ -76,5 +84,5 @@ bench-all:
 	go test -bench=. -benchmem ./...
 
 cover-html:
-	@go test -coverprofile=./coverage.text -covermode=atomic $(shell go list ./...)
+	@go test -coverprofile=./coverage.text -covermode=atomic ./...
 	@go tool cover -html=./coverage.text -o ./cover.html && rm ./coverage.text
