@@ -10,6 +10,18 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/service/tusupload"
 	"github.com/assurrussa/gouploads/domain/files/service/uploadservice"
 	fileshared "github.com/assurrussa/gouploads/domain/files/shared"
+	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+)
+
+var (
+	ErrTusNotFound        = tusupload.ErrNotFound
+	ErrTusOffsetMismatch  = tusupload.ErrOffsetMismatch
+	ErrTusLengthExceeded  = tusupload.ErrLengthExceeded
+	ErrTusChunkTooSmall   = tusupload.ErrChunkTooSmall
+	ErrTusChunkSize       = tusupload.ErrChunkSize
+	ErrTusUploadBusy      = tusupload.ErrUploadBusy
+	ErrTusFenceLost       = tusupload.ErrFenceLost
+	ErrTusUploadFinalized = tusupload.ErrUploadFinalized
 )
 
 type (
@@ -41,12 +53,22 @@ type (
 	SingleRequest         = uploadservice.SingleRequest
 	Status                = fileshared.Status
 	TusStore              = tusupload.Store
+	TusCreateRequest      = tusupload.CreateRequest
+	TusSession            = tusupload.Session
+	TusCompleteResult     = tusupload.CompleteResult
+	TusStatus             = tusupload.Status
 	UploadedFile          = uploadservice.UploadedFile
 	UploadService         = uploadservice.Service
 	UploadValidator       = uploadservice.UploadValidator
 	UploadValidatorFunc   = uploadservice.UploadValidatorFunc
 	UserType              = fileshared.UserType
 	ValidationError       = uploadservice.ValidationError
+	Storage               = filestorage.Storage
+	SaveFileInput         = filestorage.SaveFileInput
+	CommitInput           = filestorage.CommitInput
+	StoredFile            = filestorage.StoredFile
+	ExistFileInput        = filestorage.ExistFileInput
+	ExistFile             = filestorage.ExistFile
 )
 
 const (
@@ -67,7 +89,14 @@ const (
 	StatusFailed                   Status               = fileshared.StatusFailed
 	UserTypeAdmin                  UserType             = fileshared.UserTypeAdmin
 	UserTypeUser                   UserType             = fileshared.UserTypeUser
+	TusStatusActive                TusStatus            = tusupload.StatusActive
+	TusStatusFinalizing            TusStatus            = tusupload.StatusFinalizing
+	TusStatusReady                 TusStatus            = tusupload.StatusReady
 )
+
+func NewTusStore(cfg StorageConfig, database pgsql.Client) (TusStore, error) {
+	return tusupload.BuildDurableStore(cfg, database)
+}
 
 func ObjectIDPtr(id int64) *ObjectID {
 	objectID := ObjectID(id)

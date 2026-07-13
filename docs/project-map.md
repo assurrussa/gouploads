@@ -1,6 +1,6 @@
 # Project Map
 
-Verified against the local repository on 2026-06-04.
+Verified against the local repository on 2026-07-10.
 
 ## Purpose
 
@@ -46,16 +46,17 @@ external consumer manifest and release docs explicitly promote them.
   structs re-exported narrowly through `host`.
 - `di`: internal dependency module bootstrap re-exported through
   `host.BootstrapDependencies()`.
-- `db/migrations` and `host/migrations`: `files` table SQL. `host/migrations`
-  is embedded and exposed through `host.MigrationsFS()` and
-  `host.MigrationFiles()`.
+- `db/migrations` and `host/migrations`: `files` and durable
+  `upload_sessions` SQL. `host/migrations` is embedded and exposed through
+  `host.MigrationsFS()` and `host.MigrationFiles()`.
 - `tools/toolsmocks`: repository-local `go generate` helper over `mockgen`.
 
 ## Runtime Flow
 
 1. A host maps local env/config into `host.StorageConfig`.
-2. The host wires database, Redis, transaction manager, logger, TUS store, file
-   repository, upload use cases, and optional `host.BootstrapDependencies()`.
+2. The host runs gouploads migrations and wires database, transaction manager,
+   logger, TUS store, file repository, upload use cases, and optional
+   `host.BootstrapDependencies()`. Redis is not TUS durable state.
 3. The host creates `host.NewUploadHandler(...)` with an auth/session-aware
    `ContextBuilder` and URL composer.
 4. The host registers `host.UploadStrategy` implementations for contexts such
@@ -119,6 +120,8 @@ TUS:
 
 - `STORAGE_TUS_PART_SIZE`
 - `STORAGE_TUS_SESSION_TTL`
+- `STORAGE_TUS_LEASE_TTL`
+- `STORAGE_TUS_QUARANTINE_PREFIX`
 - `STORAGE_TUS_CLEANUP_INTERVAL`
 - `STORAGE_TUS_CLEANUP_SPEC`
 
@@ -142,12 +145,14 @@ single env values.
   race tests, and coverage HTML.
 - `make test-surface`: public facade and probe packages.
 - `make test-surface-integration`: `hosttest` integration build-tag surface.
+- `make test-tus-postgres-integration`: real PostgreSQL fencing and
+  cross-repository session-state gate.
 - `make externalconsumer-local`: generated clean consumer using local
   `replace`.
 - `make externalconsumer-published VERSION=vX.Y.Z`: generated clean consumer
   resolving a published tag without local `replace`.
-- `go run ./cmd/importpolicy --repo-root ../site --consumers backend,goadmin,fixtures/second-go-host`:
-  strict sibling host import boundary check.
+- `make import-policy-site`: strict checks for `site` consumers and the sibling
+  `goadmin` repository using their actual repository roots.
 
 The Makefile sets repository-local `.go-cache` locations. Direct `go` commands
 in sandboxed environments should set `GOCACHE` and `GOPATH` under this repo.

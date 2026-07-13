@@ -4,35 +4,39 @@ This checklist is the reusable-boundary gate for `gouploads`.
 
 ## Local Readiness
 
-Run:
+Before tagging, run:
 
 ```bash
-make release-readiness
+make publish-readiness VERSION=v0.9.0-alpha.0
 ```
 
 This verifies `go.mod`/`go.sum` tidiness, the host facade, host test-support
-package, integration-tag `hosttest` surface, external consumer manifest, local
+package, integration-tag `hosttest` surface, PostgreSQL TUS fencing test,
+external consumer manifest, local
 clean consumer probe, integration-tag clean consumer probe, import-policy
 checker, and the full module test suite.
 The Makefile uses repository-local `.go-cache` paths by default so the check is
 stable in sandboxed local environments without polluting scanned Go package
 roots.
 
-If the sibling `../site` repository exists, the target also runs the import
-policy against `backend`, `goadmin`, and `fixtures/second-go-host`.
+If the sibling repositories exist, the target also runs the import policy
+against `site/backend`, `site/fixtures/second-go-host`, and the separate
+`goadmin` repository.
 Requested consumer roots are required to exist. A typo in `--repo-root` or a
 consumer path must fail the gate instead of silently checking nothing.
 
 ## Release Sequence
 
-Use a new semver tag for any public surface or release-gate change. For the
-current host/test facade and readiness-gate expansion, prefer `v0.8.0`.
+The durable multi-replica TUS contract adds a migration and changes the public
+host construction surface, so the expected next prerelease is
+`v0.9.0-alpha.0`. The published `v0.8.2` baseline remains unchanged until that
+prerelease actually resolves from a clean consumer.
 
-1. Run `make release-readiness`.
+1. Run `make publish-readiness VERSION=v0.9.0-alpha.0`.
 2. Commit the `gouploads` changes.
-3. Tag the commit, for example `git tag v0.8.0`.
+3. Tag the commit, for example `git tag v0.9.0-alpha.0`.
 4. Push the commit and tag.
-5. Run `make externalconsumer-published VERSION=v0.8.0`.
+5. Run `make release-readiness VERSION=v0.9.0-alpha.0`.
 6. Update host projects to the published version and re-run their platform
    boundary checks.
 
@@ -62,9 +66,15 @@ They are compiled only with `-tags integration`; keep their required
 
 ## Migration Contract
 
-The `files` table migration is exposed through `host.MigrationsFS()` and
-`host.MigrationFiles()`. Keep `host/migrations` synchronized with
-`db/migrations`; `go test ./host` checks this.
+The `files` and `upload_sessions` migrations are exposed through
+`host.MigrationsFS()` and `host.MigrationFiles()`. Keep `host/migrations`
+synchronized with `db/migrations`; `go test ./host` checks this. S3 TUS is not
+release-ready if a host omits `upload_sessions` or constructs a Redis-only
+session store.
+
+Run `make test-tus-postgres-integration` against PostgreSQL before tagging. The
+test proves competing lease exclusion, offset CAS, monotonic fencing revision,
+cross-repository visibility, and competing finalize exclusion.
 
 Outbox storage migrations are not owned by `gouploads`; document them as a host
 requirement for whichever outbox backend the host uses.

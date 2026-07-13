@@ -19,6 +19,12 @@
 - **Resize Webhook**: Callback from the media processor into a host HTTP route.
   The library owns the canonical request contract; the host owns transport
   parsing, auth, and route policy.
+- **TUS Fence**: Monotonic PostgreSQL session revision bound to a short lease.
+  Only its current owner may advance the durable offset or finalize multipart
+  state.
+- **Quarantine Object**: Private S3 multipart object that is not public merely
+  because TUS protocol finalization succeeded. Promotion follows host/CMS media
+  validation.
 
 ## Rules
 
@@ -32,3 +38,5 @@
   Published reusable-boundary readiness additionally requires
   `make externalconsumer-published VERSION=<tag>` to pass against a pushed tag
   without local `replace`.
+- PostgreSQL is the durable source of truth for S3 TUS. Redis must not be the
+  only copy of protocol session metadata.

@@ -24,13 +24,6 @@ import (
 func TestIntegration_S3Store_IntegrationFlow(t *testing.T) {
 	ctx := context.Background()
 
-	endpointRedisAddr := getenv("TEST_REDIS_ADDR", "integration-redis-tests")
-	endpointRedisAddrLocal := getenv("TEST_REDIS_LOCAL_ADDR", "")
-	if endpointRedisAddrLocal != "" {
-		endpointRedisAddr = endpointRedisAddrLocal
-	}
-	endpointRedisPort := getenv("TEST_REDIS_PORT", "33795")
-	endpointRedis := endpointRedisAddr + ":" + endpointRedisPort
 	endpoint := getenv("TEST_S3_ENDPOINT", "http://localhost:9090")
 	accessKey := getenv("TEST_S3_ACCESS_KEY", "minioadmin")
 	secretKey := getenv("TEST_S3_SECRET_KEY", "minioadmin")
@@ -66,22 +59,26 @@ func TestIntegration_S3Store_IntegrationFlow(t *testing.T) {
 		}
 	}
 
-	redisClient, redisCleanup := testshelpers.PrepareRedis(
-		ctx, t, "tus-integration",
-		testshelpers.WithRedisAddress(endpointRedis),
-	)
-	defer redisCleanup(ctx)
+	database, _, databaseCleanup := testshelpers.PrepareDB(ctx, t, "tusintegration")
+	defer databaseCleanup(ctx)
+	repo, err := newPostgresSessionRepository(database)
+	require.NoError(t, err)
 
 	disableSSL := strings.HasPrefix(endpoint, "http://")
 	domain := ceph.NewDomainHost(endpoint, bucket, "public-read", true, disableSSL, true)
-	store, err := NewS3Store(client, domain, redisClient, S3StoreConfig{
-		Prefix:   "tmp/uploads",
+	storeA, err := NewS3Store(client, domain, repo, S3StoreConfig{
+		Prefix:   defaultS3StorePrefix,
+		PartSize: ceph.MinPartSize,
+	})
+	require.NoError(t, err)
+	storeB, err := NewS3Store(client, domain, repo, S3StoreConfig{
+		Prefix:   defaultS3StorePrefix,
 		PartSize: ceph.MinPartSize,
 	})
 	require.NoError(t, err)
 
 	payload := []byte("hello tus integration")
-	session, err := store.Create(ctx, CreateRequest{
+	session, err := storeA.Create(ctx, CreateRequest{
 		UploadLength: int64(len(payload)),
 		OriginalName: "hello.txt",
 		FileName:     "hello.txt",
@@ -92,11 +89,14 @@ func TestIntegration_S3Store_IntegrationFlow(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = store.Append(ctx, session.ID, 0, payload, "text/plain")
+	_, err = storeB.Append(ctx, session.ID, 0, payload, "text/plain")
 	require.NoError(t, err)
 
-	complete, err := store.Complete(ctx, session.ID)
+	complete, err := storeA.Complete(ctx, session.ID)
 	require.NoError(t, err)
+	repeated, err := storeB.Complete(ctx, session.ID)
+	require.NoError(t, err)
+	require.Equal(t, complete.FinalizationKey, repeated.FinalizationKey)
 
 	_, err = client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),

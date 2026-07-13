@@ -5,26 +5,35 @@ import (
 	"net/http"
 	"path/filepath"
 
+	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/assurrussa/gouploads/config"
-	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/ceph"
 )
 
-func BuildStore(storageCfg config.StorageConfig, redis redisClient) (Store, error) {
+func BuildStore(storageCfg config.StorageConfig, _ redisClient) (Store, error) {
 	if storageCfg.Driver != config.StorageDriverS3 {
 		return NewFileStore(filepath.Join(storageCfg.Local.Root, "tmp", "tus"))
 	}
 
-	return buildS3Store(storageCfg, redis)
+	return nil, errors.New("tus store: S3 requires BuildDurableStore with PostgreSQL")
 }
 
-func buildS3Store(storageCfg config.StorageConfig, redis redisClient) (Store, error) {
-	if redis == nil {
-		return nil, errors.New("tus store: redis client is required for s3")
+func BuildDurableStore(storageCfg config.StorageConfig, database pgsql.Client) (Store, error) {
+	if storageCfg.Driver != config.StorageDriverS3 {
+		return NewFileStore(filepath.Join(storageCfg.Local.Root, "tmp", "tus"))
+	}
+
+	return buildS3Store(storageCfg, database)
+}
+
+func buildS3Store(storageCfg config.StorageConfig, database pgsql.Client) (Store, error) {
+	repo, err := newPostgresSessionRepository(database)
+	if err != nil {
+		return nil, err
 	}
 
 	s3cfg := storageCfg.S3
@@ -62,10 +71,11 @@ func buildS3Store(storageCfg config.StorageConfig, redis redisClient) (Store, er
 	)
 
 	partSize := int64(storageCfg.Tus.PartSize.Value())
-	store, err := NewS3Store(s3Client, domain, redis, S3StoreConfig{
-		Prefix:   filestorage.FolderPrefixPathTemp.String(),
+	store, err := NewS3Store(s3Client, domain, repo, S3StoreConfig{
+		Prefix:   storageCfg.Tus.QuarantinePrefix,
 		PartSize: partSize,
 		TTL:      storageCfg.Tus.SessionTTL,
+		LeaseTTL: storageCfg.Tus.LeaseTTL,
 	})
 	if err != nil {
 		return nil, err

@@ -19,7 +19,7 @@ func main() {
 	flag.Parse()
 
 	if len(consumers) == 0 {
-		consumers = csvFlag{"backend", "goadmin", "fixtures/second-go-host"}
+		consumers = csvFlag{"backend", "fixtures/second-go-host"}
 	}
 
 	report, err := importpolicy.Check(importpolicy.Config{
