@@ -2,8 +2,8 @@
 .PHONY: check publish-readiness release-readiness release-version-check tidy-check test-surface test-surface-integration test-tus-postgres-integration externalconsumer-local externalconsumer-published import-policy-site tidy generate fmt lint vet test test-race bench-all cover-html
 GO_MODULE := $(shell go list -m)
 GO_FILES := $(shell find . -type f -name '*.go' -not -path './.cache/*' -not -path './.go-cache/*' -not -path './tmp/*' -not -path './vendor/*')
-SITE_REPO ?= ../site
-GOADMIN_REPO ?= $(abspath $(SITE_REPO)/../goadmin)
+IMPORT_POLICY_REPO_ROOT ?= ..
+IMPORT_POLICY_CONSUMERS ?= site/backend,goadmin,site/fixtures/second-go-host
 GOCACHE := $(CURDIR)/.go-cache/gocache
 GOMODCACHE := $(CURDIR)/.go-cache/gomodcache
 GOPATH := $(CURDIR)/.go-cache/gopath
@@ -46,15 +46,10 @@ externalconsumer-published:
 	go run ./cmd/externalconsumerprobe --version "$(VERSION)" --go-mod-cache "$(GOMODCACHE)"
 
 import-policy-site:
-	@if [ -d "$(SITE_REPO)" ]; then \
-		go run ./cmd/importpolicy --repo-root "$(SITE_REPO)" --consumers backend,fixtures/second-go-host; \
+	@if [ -d "$(IMPORT_POLICY_REPO_ROOT)" ]; then \
+		go run ./cmd/importpolicy --repo-root "$(IMPORT_POLICY_REPO_ROOT)" --consumers "$(IMPORT_POLICY_CONSUMERS)"; \
 	else \
-		echo "Skipping site import policy: $(SITE_REPO) not found"; \
-	fi
-	@if [ -d "$(GOADMIN_REPO)" ]; then \
-		go run ./cmd/importpolicy --repo-root "$(GOADMIN_REPO)" --consumers .; \
-	else \
-		echo "Skipping goadmin import policy: $(GOADMIN_REPO) not found"; \
+		echo "Skipping site import policy: $(IMPORT_POLICY_REPO_ROOT) not found"; \
 	fi
 
 tidy:

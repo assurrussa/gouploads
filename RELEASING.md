@@ -19,9 +19,9 @@ The Makefile uses repository-local `.go-cache` paths by default so the check is
 stable in sandboxed local environments without polluting scanned Go package
 roots.
 
-If the sibling repositories exist, the target also runs the import policy
-against `site/backend`, `site/fixtures/second-go-host`, and the separate
-`goadmin` repository.
+If the sibling `../site` repository exists, the target also runs the import
+policy against `site/backend`, `goadmin`, and `site/fixtures/second-go-host`
+from the parent workspace root.
 Requested consumer roots are required to exist. A typo in `--repo-root` or a
 consumer path must fail the gate instead of silently checking nothing.
 

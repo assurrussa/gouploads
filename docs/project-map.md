@@ -151,8 +151,8 @@ single env values.
   `replace`.
 - `make externalconsumer-published VERSION=vX.Y.Z`: generated clean consumer
   resolving a published tag without local `replace`.
-- `make import-policy-site`: strict checks for `site` consumers and the sibling
-  `goadmin` repository using their actual repository roots.
+- `go run ./cmd/importpolicy --repo-root .. --consumers site/backend,goadmin,site/fixtures/second-go-host`:
+  strict sibling host import boundary check.
 
 The Makefile sets repository-local `.go-cache` locations. Direct `go` commands
 in sandboxed environments should set `GOCACHE` and `GOPATH` under this repo.

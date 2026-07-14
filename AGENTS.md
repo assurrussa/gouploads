@@ -85,7 +85,7 @@ Use the Makefile targets because they set repository-local Go cache paths.
 - `make externalconsumer-local`: clean consumer probe with local `replace`.
 - `make externalconsumer-published VERSION=vX.Y.Z`: clean consumer probe against
   a pushed published tag.
-- `go run ./cmd/importpolicy --repo-root ../site --consumers backend,goadmin,fixtures/second-go-host`:
+- `go run ./cmd/importpolicy --repo-root .. --consumers site/backend,goadmin,site/fixtures/second-go-host`:
   strict host import boundary check when the sibling `../site` repo exists.
 
 Direct `go` commands may need local cache env vars in sandboxed environments:

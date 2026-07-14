@@ -217,8 +217,7 @@ depend on them. The external consumer probe compiles both normal and
 Run the import policy against host repositories:
 
 ```bash
-go run ./cmd/importpolicy --repo-root ../site --consumers backend,fixtures/second-go-host
-go run ./cmd/importpolicy --repo-root ../goadmin --consumers .
+go run ./cmd/importpolicy --repo-root .. --consumers site/backend,goadmin,site/fixtures/second-go-host
 ```
 
 Runtime host code should only import `gouploads/host`. Test files and packages
