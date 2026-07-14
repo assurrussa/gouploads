@@ -65,7 +65,11 @@ func TestHostSurfaceCoversEmbeddingWorkflow(t *testing.T) {
 	require.NotPanics(t, func() {
 		handler.RegisterStrategy("default", consumerStrategy{})
 	})
-	require.NotNil(t, host.NewFiberUploadHandler(handler))
+	fiberHandler := host.NewFiberUploadHandler(handler)
+	require.NotNil(t, fiberHandler)
+	_ = host.UploadRouteGuards{}
+	_ = fiberHandler.RegisterGroupRoutesWithGuards
+	_ = fiberHandler.RegisterCMSTusRoutes
 
 	request := host.BuildListenResizeRequest(host.ListenResizeInput{
 		ExternalID: 42,

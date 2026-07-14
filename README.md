@@ -100,6 +100,21 @@ store contracts, upload handler contracts, resize webhook request helpers,
 cleanup use case factories, outbox job registration, and DI bootstrap helpers.
 Host projects remain responsible for local environment mapping, auth context
 extraction, route mounting, object-type policy, and deployment topology.
+
+`host.NewStorage(cfg)` is the supported constructor for the object store used
+by embedded features. It selects local filesystem or S3-compatible storage;
+the S3 contract supports AWS endpoints and path-style MinIO with static
+credentials. The returned `host.Storage` includes idempotent `DeleteBatch`, so
+a CMS worker can delete an approved original/variant object set without
+importing storage internals.
+
+`FiberUploadHandler.RegisterCMSTusRoutes` mounts only
+`OPTIONS/POST/HEAD/PATCH` under the CMS prefix. It deliberately omits generic
+completion, listing, file reads and delete. CMS finalization consumes the
+quarantined session through its own lifecycle and decides whether an asset is
+eligible for purge. `UploadRouteGuards` keeps generic read, create/resume and
+delete authorization independent when the full upload surface is used.
+
 It also exposes the embedded `files` table migrations through `host.MigrationsFS`
 and `host.MigrationFiles`, including durable `upload_sessions` state. S3 hosts
 construct the TUS store with `host.NewTusStore(cfg, database)`; PostgreSQL is

@@ -7,7 +7,7 @@ This checklist is the reusable-boundary gate for `gouploads`.
 Before tagging, run:
 
 ```bash
-make publish-readiness VERSION=v0.9.0
+make publish-readiness VERSION=v0.10.0-alpha.1
 ```
 
 This verifies `go.mod`/`go.sum` tidiness, the host facade, host test-support
@@ -27,16 +27,16 @@ consumer path must fail the gate instead of silently checking nothing.
 
 ## Release Sequence
 
-The durable multi-replica TUS contract adds a migration and changes the public
-host construction surface. The alpha candidate has been verified by the host
-projects, so the next release is the stable `v0.9.0`. The published `v0.8.2`
-baseline remains unchanged until the stable tag resolves from a clean consumer.
+The published stable baseline is `v0.9.0`. The current source candidate is
+`v0.10.0-alpha.1`; it adds the stable `host.NewStorage` facade, CMS-only TUS
+route registration and hardened separation between create/resume and generic
+delete capabilities.
 
-1. Run `make publish-readiness VERSION=v0.9.0`.
+1. Run `make publish-readiness VERSION=v0.10.0-alpha.1`.
 2. Commit the `gouploads` changes.
-3. Tag the commit, for example `git tag v0.9.0`.
+3. Tag the reviewed commit, for example `git tag v0.10.0-alpha.1`.
 4. Push the commit and tag.
-5. Run `make release-readiness VERSION=v0.9.0`.
+5. Run `make release-readiness VERSION=v0.10.0-alpha.1`.
 6. Update host projects to the published version and re-run their platform
    boundary checks.
 
@@ -71,6 +71,11 @@ The `files` and `upload_sessions` migrations are exposed through
 synchronized with `db/migrations`; `go test ./host` checks this. S3 TUS is not
 release-ready if a host omits `upload_sessions` or constructs a Redis-only
 session store.
+
+The candidate must also prove local and S3/MinIO `NewStorage` construction,
+`DeleteBatch`, CMS TUS omission of completion/delete routes, and independent
+route guards. These are supported host contracts, not permission shortcuts for
+CMS purge policy.
 
 Run `make test-tus-postgres-integration` against PostgreSQL before tagging. The
 test proves competing lease exclusion, offset CAS, monotonic fencing revision,
