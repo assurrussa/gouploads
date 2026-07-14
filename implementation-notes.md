@@ -1,5 +1,16 @@
 # Implementation Notes
 
+## 2026-07-14: Stable v0.9.0 Promotion
+
+- Promoted the verified durable multi-replica TUS and quarantine-promotion
+  contracts from `v0.9.0-alpha.0` to stable `v0.9.0` without changing their
+  runtime semantics or supported `host`/`hosttest` import boundaries.
+- Kept PostgreSQL fencing, integration-tag consumer compilation, strict import
+  policy, and the published clean-consumer probe as mandatory release gates.
+- Corrected the workspace-root import-policy invocation so sibling `goadmin`
+  and `site` consumers are scanned together without weakening missing-root
+  failures.
+
 ## 2026-07-11: Quarantine Promotion Boundary
 
 - Added `host.NewQuarantinePromoter` as the supported post-validation boundary

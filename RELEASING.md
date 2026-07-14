@@ -7,7 +7,7 @@ This checklist is the reusable-boundary gate for `gouploads`.
 Before tagging, run:
 
 ```bash
-make publish-readiness VERSION=v0.9.0-alpha.0
+make publish-readiness VERSION=v0.9.0
 ```
 
 This verifies `go.mod`/`go.sum` tidiness, the host facade, host test-support
@@ -19,24 +19,24 @@ The Makefile uses repository-local `.go-cache` paths by default so the check is
 stable in sandboxed local environments without polluting scanned Go package
 roots.
 
-If the sibling repositories exist, the target also runs the import policy
-against `site/backend`, `site/fixtures/second-go-host`, and the separate
-`goadmin` repository.
+If the sibling `../site` repository exists, the target also runs the import
+policy against `site/backend`, `goadmin`, and `site/fixtures/second-go-host`
+from the parent workspace root.
 Requested consumer roots are required to exist. A typo in `--repo-root` or a
 consumer path must fail the gate instead of silently checking nothing.
 
 ## Release Sequence
 
 The durable multi-replica TUS contract adds a migration and changes the public
-host construction surface, so the expected next prerelease is
-`v0.9.0-alpha.0`. The published `v0.8.2` baseline remains unchanged until that
-prerelease actually resolves from a clean consumer.
+host construction surface. The alpha candidate has been verified by the host
+projects, so the next release is the stable `v0.9.0`. The published `v0.8.2`
+baseline remains unchanged until the stable tag resolves from a clean consumer.
 
-1. Run `make publish-readiness VERSION=v0.9.0-alpha.0`.
+1. Run `make publish-readiness VERSION=v0.9.0`.
 2. Commit the `gouploads` changes.
-3. Tag the commit, for example `git tag v0.9.0-alpha.0`.
+3. Tag the commit, for example `git tag v0.9.0`.
 4. Push the commit and tag.
-5. Run `make release-readiness VERSION=v0.9.0-alpha.0`.
+5. Run `make release-readiness VERSION=v0.9.0`.
 6. Update host projects to the published version and re-run their platform
    boundary checks.
 
