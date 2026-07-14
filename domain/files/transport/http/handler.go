@@ -57,7 +57,6 @@ type Handler struct {
 	contextBuilder ContextBuilder
 	urlComposer    URLComposer
 	strategies     map[string]uploadstrategies.Strategy
-	basePrefixURL  string
 }
 
 // NewHandler creates a new generic upload handler.
@@ -85,11 +84,6 @@ func (h *Handler) RegisterStrategy(contextName string, strategy uploadstrategies
 	h.strategies[strings.ToLower(contextName)] = strategy
 }
 
-// SetPrefix set prefix for base URL.
-func (h *Handler) SetPrefix(prefix string) {
-	h.basePrefixURL = prefix
-}
-
 // --- Handlers ---
 
 func (h *Handler) TusOptions(c fiber.Ctx) error {
@@ -111,6 +105,14 @@ func (h *Handler) TusOptions(c fiber.Ctx) error {
 }
 
 func (h *Handler) TusCreate(c fiber.Ctx) error {
+	return h.tusCreate(c, false)
+}
+
+func (h *Handler) TusCreateCMS(c fiber.Ctx) error {
+	return h.tusCreate(c, true)
+}
+
+func (h *Handler) tusCreate(c fiber.Ctx, cmsOnly bool) error {
 	setTusHeaders(c)
 
 	if !isTusResumable(c) {
@@ -144,13 +146,20 @@ func (h *Handler) TusCreate(c fiber.Ctx) error {
 
 	contextValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "context")))
 
-	objectType, objectID, err := h.parseTusObject(metadata)
-	if err != nil {
-		return h.jsonError(c, fiber.StatusBadRequest, err.Error())
-	}
-
-	if objectID <= 0 {
-		return h.jsonError(c, fiber.StatusBadRequest, "entity_id is required")
+	var objectType fileshared.FileObjectType
+	var objectID fileshared.FileObjectID
+	if cmsOnly {
+		if contextValue != "cms" {
+			return h.jsonError(c, fiber.StatusBadRequest, "CMS upload context is required")
+		}
+		if h.getStrategy(contextValue) == nil {
+			return h.jsonError(c, fiber.StatusInternalServerError, "CMS upload strategy is not configured")
+		}
+	} else {
+		objectType, objectID, err = h.parseTusObject(metadata)
+		if err != nil {
+			return h.jsonError(c, fiber.StatusBadRequest, err.Error())
+		}
 	}
 
 	fileTypeValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "file_type")))
@@ -192,30 +201,34 @@ func (h *Handler) TusCreate(c fiber.Ctx) error {
 	deleteID := parseInt64(metadataValue(metadata, "replace_file_id", "deleteId", "delete_id"))
 
 	fileName := uuid.New().String() + ext
+	sessionMetadata := map[string]string{
+		"file_name":       fileName,
+		"filename":        filename,
+		"context":         contextValue,
+		"file_type":       fileTypeValue,
+		"skip_resize":     strconv.FormatBool(skipResize),
+		"replace_file_id": strconv.FormatInt(deleteID, 10),
+	}
+	if !cmsOnly {
+		sessionMetadata["entity_type"] = objectType.String()
+		sessionMetadata["entity_id"] = objectID.String()
+	}
 	session, err := h.tusStore.Create(c, tusupload.CreateRequest{
 		UploadLength: uploadLength,
 		OriginalName: filename,
 		FileName:     fileName,
-		Metadata: map[string]string{
-			"file_name":       fileName,
-			"filename":        filename,
-			"entity_type":     objectType.String(),
-			"entity_id":       objectID.String(),
-			"context":         contextValue,
-			"file_type":       fileTypeValue,
-			"skip_resize":     strconv.FormatBool(skipResize),
-			"replace_file_id": strconv.FormatInt(deleteID, 10),
-		},
-		OwnerID:   uCtx.UserID,
-		OwnerUUID: uCtx.UserUUID,
+		Metadata:     sessionMetadata,
+		OwnerID:      uCtx.UserID,
+		OwnerUUID:    uCtx.UserUUID,
 	})
 	if err != nil {
 		h.logger.ErrorContext(c, "failed to create tus upload", logger.Error(err))
 		return h.jsonError(c, fiber.StatusInternalServerError, "failed to create upload")
 	}
 
-	// We use relative path here, assuming the router group prefix matches
-	location := fmt.Sprintf("%s/tus/%s", h.basePrefixURL, session.ID)
+	// Derive the resumable URL from the route that handled this request. One
+	// handler can be mounted on generic and CMS-only prefixes concurrently.
+	location := strings.TrimRight(c.Path(), "/") + "/" + session.ID
 	c.Set("Location", location)
 
 	return c.SendStatus(http.StatusCreated)
@@ -249,6 +262,14 @@ func (h *Handler) TusHead(c fiber.Ctx) error {
 }
 
 func (h *Handler) TusPatch(c fiber.Ctx) error {
+	return h.tusPatch(c, false)
+}
+
+func (h *Handler) TusPatchCMS(c fiber.Ctx) error {
+	return h.tusPatch(c, true)
+}
+
+func (h *Handler) tusPatch(c fiber.Ctx, cmsOnly bool) error {
 	setTusHeaders(c)
 
 	if !isTusResumable(c) {
@@ -289,7 +310,7 @@ func (h *Handler) TusPatch(c fiber.Ctx) error {
 		return c.SendStatus(http.StatusRequestEntityTooLarge)
 	}
 
-	mimeType, err := h.resolveTusPatchMimeType(c, session, body, offset)
+	mimeType, err := h.resolveTusPatchMimeType(c, session, body, offset, cmsOnly)
 	if err != nil {
 		return err
 	}
@@ -877,6 +898,12 @@ func (h *Handler) resolveUploadStrategy(
 	} else {
 		config = h.resolveConfig(objectType, objectID, contextValue, fileType)
 	}
+	if config == nil {
+		return resolveUploadStrategyResult{}, resolveUploadStrategyError{
+			kind: resolveUploadStrategyErrorInternal,
+			err:  fmt.Errorf("upload strategy %q returned nil config", contextValue),
+		}
+	}
 
 	if skipResize {
 		config.SkipResizer = true
@@ -1036,6 +1063,7 @@ func (h *Handler) resolveTusPatchMimeType(
 	session tusupload.Session,
 	body []byte,
 	offset int64,
+	cmsOnly bool,
 ) (string, error) {
 	if offset != 0 {
 		return "", nil
@@ -1045,12 +1073,21 @@ func (h *Handler) resolveTusPatchMimeType(
 	filename := strings.TrimSpace(metadataValue(metadata, "filename", "file_name", "fileName"))
 	ext := strings.ToLower(filepath.Ext(filename))
 
-	objectType, objectID, err := h.parseTusObject(metadata)
-	if err != nil {
-		return "", h.jsonError(c, fiber.StatusBadRequest, err.Error())
+	var objectType fileshared.FileObjectType
+	var objectID fileshared.FileObjectID
+	var err error
+	contextValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "context")))
+	if cmsOnly {
+		if contextValue != "cms" || h.getStrategy(contextValue) == nil {
+			return "", h.jsonError(c, fiber.StatusInternalServerError, "CMS upload strategy is not configured")
+		}
+	} else {
+		objectType, objectID, err = h.parseTusObject(metadata)
+		if err != nil {
+			return "", h.jsonError(c, fiber.StatusBadRequest, err.Error())
+		}
 	}
 
-	contextValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "context")))
 	fileTypeValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "file_type")))
 	fileType := commonshared.GetFileTypeString(fileTypeValue)
 	skipResize := parseBoolFlag(metadataValue(metadata, "skip_resize"))

@@ -2,13 +2,80 @@ package host_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/gouploads/host"
 )
+
+func TestFiberUploadHandlerSplitsRouteGuards(t *testing.T) {
+	t.Parallel()
+
+	app := fiber.New()
+	handler := host.NewFiberUploadHandler(host.NewUploadHandler(nil, nil, nil, nil, nil, nil))
+	handler.RegisterGroupRoutesWithGuards("/files", app, host.UploadRouteGuards{
+		Read:   []fiber.Handler{rejectWithStatus(http.StatusUnauthorized)},
+		Create: []fiber.Handler{rejectWithStatus(http.StatusPaymentRequired)},
+		Delete: []fiber.Handler{rejectWithStatus(http.StatusForbidden)},
+	})
+
+	requireRouteStatus(t, app, http.MethodGet, "/files", http.StatusUnauthorized)
+	requireRouteStatus(t, app, http.MethodPost, "/files", http.StatusPaymentRequired)
+	requireRouteStatus(t, app, http.MethodPost, "/files/tus", http.StatusPaymentRequired)
+	requireRouteStatus(t, app, http.MethodDelete, "/files/1", http.StatusForbidden)
+}
+
+func TestFiberUploadHandlerRegistersCMSOnlyTusSurface(t *testing.T) {
+	t.Parallel()
+
+	app := fiber.New()
+	handler := host.NewFiberUploadHandler(host.NewUploadHandler(nil, nil, nil, nil, nil, nil))
+	handler.RegisterCMSTusRoutes(
+		"/admin/api/cms/v1/uploads",
+		app,
+		rejectWithStatus(http.StatusForbidden),
+	)
+
+	requireRouteStatus(t, app, http.MethodOptions, "/admin/api/cms/v1/uploads/tus", http.StatusForbidden)
+	requireRouteStatus(t, app, http.MethodPost, "/admin/api/cms/v1/uploads/tus", http.StatusForbidden)
+	requireRouteStatus(t, app, http.MethodHead, "/admin/api/cms/v1/uploads/tus/upload-1", http.StatusForbidden)
+	requireRouteStatus(t, app, http.MethodPatch, "/admin/api/cms/v1/uploads/tus/upload-1", http.StatusForbidden)
+
+	openApp := fiber.New()
+	openHandler := host.NewFiberUploadHandler(host.NewUploadHandler(nil, nil, nil, nil, nil, nil))
+	openHandler.RegisterCMSTusRoutes("/admin/api/cms/v1/uploads", openApp)
+	requireRouteStatus(
+		t,
+		openApp,
+		http.MethodPost,
+		"/admin/api/cms/v1/uploads/tus/upload-1/complete",
+		http.StatusNotFound,
+	)
+	requireRouteStatus(t, openApp, http.MethodGet, "/admin/api/cms/v1/uploads", http.StatusNotFound)
+	requireRouteStatus(t, openApp, http.MethodDelete, "/admin/api/cms/v1/uploads/1", http.StatusNotFound)
+}
+
+func rejectWithStatus(status int) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		return c.SendStatus(status)
+	}
+}
+
+func requireRouteStatus(t *testing.T, app *fiber.App, method, target string, want int) {
+	t.Helper()
+
+	response, err := app.Test(
+		httptest.NewRequestWithContext(t.Context(), method, target, nil),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
+	require.Equal(t, want, response.StatusCode)
+}
 
 func TestObjectIDPtr(t *testing.T) {
 	got := host.ObjectIDPtr(42)
@@ -58,6 +125,18 @@ func TestNewTusStoreRequiresDatabaseForS3(t *testing.T) {
 	require.ErrorContains(t, err, "database is required")
 	require.Error(t, host.ErrTusUploadBusy)
 	require.Equal(t, host.TusStatusActive, host.TusStatus("active"))
+}
+
+func TestNewStorageBuildsLocalFacadeAndRejectsUnknownDriver(t *testing.T) {
+	t.Parallel()
+	storage, err := host.NewStorage(host.StorageConfig{
+		Driver: host.StorageDriverLocal,
+		Local:  host.StorageLocalConfig{Root: t.TempDir(), BaseURL: "https://files.example.test"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, storage)
+	_, err = host.NewStorage(host.StorageConfig{Driver: "unknown"})
+	require.ErrorContains(t, err, "unsupported storage driver")
 }
 
 func TestAfterProcessPayloadHelpers(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"testing"
@@ -736,6 +737,101 @@ func TestUploads_TusCreate_Success(t *testing.T) {
 
 	ts.Require().Equal(http.StatusCreated, resp.StatusCode)
 	ts.Require().NotEmpty(resp.Header.Get("Location"))
+}
+
+func TestUploads_CMSTusCreateAndPatchDoNotRequireGenericEntity(t *testing.T) {
+	_, _, ts := NewHandlerSuite(t)
+	ts.handler.RegisterStrategy("cms", cmsOnlyUploadStrategy{})
+
+	metadata := encodeTusMetadata(map[string]string{
+		"filename":  "cms.png",
+		"context":   "cms",
+		"file_type": "image",
+	})
+	app, req := ts.fiberApp.CreateRequest(
+		http.MethodPost,
+		sharedtypes.NewRequestID(),
+		func(c fiber.Ctx) error { return ts.handler.TusCreateCMS(c) },
+	)
+	req.Header.Set("Tus-Resumable", tusupload.Version)
+	req.Header.Set("Upload-Length", "8")
+	req.Header.Set("Upload-Metadata", metadata)
+
+	resp, _ := ts.fiberApp.Send(app, req)
+	ts.T().Cleanup(func() { ts.Require().NoError(resp.Body.Close()) })
+	ts.Require().Equal(http.StatusCreated, resp.StatusCode)
+	uploadID := path.Base(resp.Header.Get("Location"))
+	ts.Require().NotEmpty(uploadID)
+
+	patchApp := fiber.New()
+	patchApp.Patch("/tus/:id", ts.handler.TusPatchCMS)
+	req = httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPatch,
+		"/tus/"+uploadID,
+		bytes.NewReader([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}),
+	)
+	req.Header.Set("Tus-Resumable", tusupload.Version)
+	req.Header.Set("Content-Type", tusupload.ContentType)
+	req.Header.Set("Upload-Offset", "0")
+
+	resp, err := patchApp.Test(req)
+	ts.Require().NoError(err)
+	ts.T().Cleanup(func() { ts.Require().NoError(resp.Body.Close()) })
+	ts.Require().Equal(http.StatusNoContent, resp.StatusCode)
+
+	session, err := ts.tusStore.Get(context.Background(), uploadID)
+	ts.Require().NoError(err)
+	ts.Require().Equal("cms", session.Metadata["context"])
+	ts.Require().NotContains(session.Metadata, "entity_type")
+	ts.Require().NotContains(session.Metadata, "entity_id")
+}
+
+func TestUploads_CMSTusCreateFailsClosedWhenStrategyReturnsNilConfig(t *testing.T) {
+	_, _, ts := NewHandlerSuite(t)
+	ts.handler.RegisterStrategy("cms", nilConfigUploadStrategy{})
+
+	metadata := encodeTusMetadata(map[string]string{
+		"filename":  "cms.png",
+		"context":   "cms",
+		"file_type": "image",
+	})
+	app, req := ts.fiberApp.CreateRequest(
+		http.MethodPost,
+		sharedtypes.NewRequestID(),
+		func(c fiber.Ctx) error { return ts.handler.TusCreateCMS(c) },
+	)
+	req.Header.Set("Tus-Resumable", tusupload.Version)
+	req.Header.Set("Upload-Length", "8")
+	req.Header.Set("Upload-Metadata", metadata)
+
+	resp, _ := ts.fiberApp.Send(app, req)
+	ts.T().Cleanup(func() { ts.Require().NoError(resp.Body.Close()) })
+	ts.Require().Equal(http.StatusInternalServerError, resp.StatusCode)
+}
+
+type cmsOnlyUploadStrategy struct{}
+
+type nilConfigUploadStrategy struct{ cmsOnlyUploadStrategy }
+
+func (nilConfigUploadStrategy) GetConfig(context.Context, uploadstrategies.UploadContext) *uploadservice.FileUploadConfig {
+	return nil
+}
+
+func (cmsOnlyUploadStrategy) CanUpload(context.Context, uploadstrategies.UploadContext) error {
+	return nil
+}
+
+func (cmsOnlyUploadStrategy) GetConfig(context.Context, uploadstrategies.UploadContext) *uploadservice.FileUploadConfig {
+	return &uploadservice.FileUploadConfig{
+		MaxFileSize:       10 * 1024 * 1024,
+		AllowedExtensions: []string{".png"},
+		AllowedMimeTypes:  map[string][]string{".png": {"image/png"}},
+	}
+}
+
+func (cmsOnlyUploadStrategy) GetAfterJobs(context.Context, uploadstrategies.UploadContext) ([]shared.FileEventAfterJob, error) {
+	return nil, nil
 }
 
 func TestUploads_TusHead_Success(t *testing.T) {

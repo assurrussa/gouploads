@@ -73,6 +73,15 @@ type FiberUploadHandler struct {
 	inner *uploadhttp.FiberUploadHandlerWrapper
 }
 
+// UploadRouteGuards keeps read, create/resume, and delete authorization
+// independent. Common handlers run before every route in the group.
+type UploadRouteGuards struct {
+	Common []fiber.Handler
+	Read   []fiber.Handler
+	Create []fiber.Handler
+	Delete []fiber.Handler
+}
+
 func NewFiberUploadHandler(handler *UploadHandler) *FiberUploadHandler {
 	return &FiberUploadHandler{
 		inner: uploadhttp.NewFiberUploadHandlerWrapper(handler.inner),
@@ -85,6 +94,29 @@ func (h *FiberUploadHandler) RegisterStrategy(contextName string, strategy Uploa
 
 func (h *FiberUploadHandler) RegisterGroupRoutes(prefix string, router fiber.Router, middlewares ...fiber.Handler) {
 	h.inner.RegisterGroupRoutes(prefix, router, middlewares...)
+}
+
+func (h *FiberUploadHandler) RegisterGroupRoutesWithGuards(
+	prefix string,
+	router fiber.Router,
+	guards UploadRouteGuards,
+) {
+	h.inner.RegisterGroupRoutesWithGuards(prefix, router, uploadhttp.RouteGuards{
+		Common: guards.Common,
+		Read:   guards.Read,
+		Create: guards.Create,
+		Delete: guards.Delete,
+	})
+}
+
+// RegisterCMSTusRoutes mounts OPTIONS/POST/HEAD/PATCH under prefix/tus.
+// It deliberately omits generic completion, listing, file reads, and delete.
+func (h *FiberUploadHandler) RegisterCMSTusRoutes(
+	prefix string,
+	router fiber.Router,
+	middlewares ...fiber.Handler,
+) {
+	h.inner.RegisterCMSTusRoutes(prefix, router, middlewares...)
 }
 
 type uploadStrategyAdapter struct {
