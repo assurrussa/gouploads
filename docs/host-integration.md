@@ -40,6 +40,12 @@ Every host application owns:
 - migration execution order;
 - media-resizer deployment URL, API token, and callback URL.
 
+Host-owned `object_type` values are supported when they are stable lowercase
+identifiers: they must start with `a-z`, contain only `a-z`, `0-9`, or `_`, and
+be at most 64 bytes. Values such as `post`, `author`, and `media_asset_2` are
+valid. Treat these identifiers as persisted storage contracts; do not derive
+them from user input or mutable display names.
+
 The media-resizer process is an external service. `gouploads` only needs its
 `/jobs` URL and API token, plus the callback URL that the media-resizer can
 reach.

@@ -712,12 +712,12 @@ func TestUploads_ListFiles(t *testing.T) {
 
 // --- TUS Tests ---
 
-func TestUploads_TusCreate_Success(t *testing.T) {
+func TestUploads_TusCreate_AcceptsHostOwnedObjectType(t *testing.T) {
 	_, _, ts := NewHandlerSuite(t)
 
 	metadata := map[string]string{
 		"filename":    "test.png",
-		"entity_type": shared.ObjectTypeExercise.String(),
+		"entity_type": shared.FileObjectType("post").String(),
 		"entity_id":   "123",
 	}
 	encodedMetadata := encodeTusMetadata(metadata)

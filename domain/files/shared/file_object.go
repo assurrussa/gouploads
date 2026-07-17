@@ -51,12 +51,23 @@ const (
 )
 
 func (o FileObjectType) Validate() error {
-	switch o {
-	case ObjectTypeAdmin, ObjectTypeBonusLesson, ObjectTypeKnowledgeBase, ObjectTypeExercise:
-		return nil
+	const maxObjectTypeLength = 64
+
+	value := string(o)
+	if len(value) == 0 || len(value) > maxObjectTypeLength || value[0] < 'a' || value[0] > 'z' {
+		return fmt.Errorf("invalid object type: %s", o)
 	}
 
-	return fmt.Errorf("invalid object type: %s", o)
+	for i := 1; i < len(value); i++ {
+		char := value[i]
+		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '_' {
+			continue
+		}
+
+		return fmt.Errorf("invalid object type: %s", o)
+	}
+
+	return nil
 }
 
 func (o FileObjectType) String() string {

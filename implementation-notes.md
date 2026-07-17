@@ -1,5 +1,15 @@
 # Implementation Notes
 
+## 2026-07-17: Host-owned file object types
+
+- Replaced the closed legacy `FileObjectType` allowlist with a bounded safe
+  identifier contract so hosts can attach uploads to domain-owned objects such
+  as `post` and `author` without importing or modifying upload internals.
+- Kept path and metadata safety explicit: identifiers are ASCII lowercase
+  snake-case tokens, start with a letter, and are limited to 64 bytes.
+- Added focused acceptance and rejection tests. Existing built-in object type
+  constants remain source-compatible and valid.
+
 ## 2026-07-14: Stable v0.9.0 Promotion
 
 - Promoted the verified durable multi-replica TUS and quarantine-promotion
