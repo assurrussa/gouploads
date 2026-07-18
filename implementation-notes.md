@@ -1,5 +1,15 @@
 # Implementation Notes
 
+## 2026-07-18: Deterministic MockGen Refresh
+
+- Accepted the repository's current source-mode `toolsmocks` output for 19
+  mocks. Their generated APIs, imports, and method bodies are unchanged; the
+  final formatted diff is limited to MockGen source/command headers produced
+  by the checked-in generator/tool versions.
+- This removes persistent clean-generation drift from `make check` and the
+  consuming `site` repository's `task platform:repo-check` without changing the
+  public `host` or `hosttest` surfaces.
+
 ## 2026-07-14: Stable v0.9.0 Promotion
 
 - Promoted the verified durable multi-replica TUS and quarantine-promotion
