@@ -583,8 +583,15 @@ func validateRemoteParts(session s3Session, remote []durablePart) error {
 		if !ok {
 			return fmt.Errorf("multipart part %d is not recorded", part.Number)
 		}
-		if durable.Size != part.Size || durable.ETag != part.ETag || durable.ChecksumSHA256 != part.ChecksumSHA256 {
+		if durable.Size != part.Size || durable.ETag != part.ETag {
 			return fmt.Errorf("multipart part %d does not match durable state", part.Number)
+		}
+		// S3-compatible providers are allowed to omit checksum extensions from
+		// ListParts. Yandex Object Storage, for example, returns only part number,
+		// size, and ETag. Keep checksum validation when the provider exposes it,
+		// while treating the durable UploadPart ETag as the remote identity proof.
+		if part.ChecksumSHA256 != "" && durable.ChecksumSHA256 != part.ChecksumSHA256 {
+			return fmt.Errorf("multipart part %d checksum does not match durable state", part.Number)
 		}
 		total += part.Size
 	}

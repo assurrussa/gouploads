@@ -7,7 +7,7 @@ This checklist is the reusable-boundary gate for `gouploads`.
 Before tagging, run:
 
 ```bash
-make publish-readiness VERSION=v0.10.0-alpha.1
+make publish-readiness VERSION=v0.10.0-alpha.2
 ```
 
 This verifies `go.mod`/`go.sum` tidiness, the host facade, host test-support
@@ -28,15 +28,16 @@ consumer path must fail the gate instead of silently checking nothing.
 ## Release Sequence
 
 The published stable baseline is `v0.9.0`. The current source candidate is
-`v0.10.0-alpha.1`; it adds the stable `host.NewStorage` facade, CMS-only TUS
-route registration and hardened separation between create/resume and generic
-delete capabilities.
+`v0.10.0-alpha.2`; it adds the stable `host.NewStorage` facade, CMS-only TUS
+route registration, hardened separation between create/resume and generic
+delete capabilities, and Yandex Object Storage-compatible multipart
+finalization when `ListParts` omits checksum extensions.
 
-1. Run `make publish-readiness VERSION=v0.10.0-alpha.1`.
+1. Run `make publish-readiness VERSION=v0.10.0-alpha.2`.
 2. Commit the `gouploads` changes.
-3. Tag the reviewed commit, for example `git tag v0.10.0-alpha.1`.
+3. Tag the reviewed commit, for example `git tag v0.10.0-alpha.2`.
 4. Push the commit and tag.
-5. Run `make release-readiness VERSION=v0.10.0-alpha.1`.
+5. Run `make release-readiness VERSION=v0.10.0-alpha.2`.
 6. Update host projects to the published version and re-run their platform
    boundary checks.
 

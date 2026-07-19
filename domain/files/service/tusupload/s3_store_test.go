@@ -76,6 +76,36 @@ func TestS3Store_DurableCrossReplicaResumeAndIdempotentFinalize(t *testing.T) {
 	client.mu.Unlock()
 }
 
+func TestS3Store_FinalizesWhenListPartsOmitsChecksum(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := newMemorySessionRepository()
+	client := newFakeS3Client()
+	client.omitListPartChecksums = true
+	store := newTestS3Store(t, client, repo)
+	payload := []byte("complete payload")
+
+	session, err := store.Create(ctx, CreateRequest{
+		UploadLength: int64(len(payload)),
+		OriginalName: "test.txt",
+		FileName:     "test.txt",
+	})
+	require.NoError(t, err)
+
+	_, err = store.Append(ctx, session.ID, 0, payload, "text/plain")
+	require.NoError(t, err)
+
+	result, err := store.Complete(ctx, session.ID)
+	require.NoError(t, err)
+	require.Equal(t, session.UploadLength, result.Size)
+
+	client.mu.Lock()
+	require.Len(t, client.completeInputs, 1)
+	require.Nil(t, client.completeInputs[0].MultipartUpload.Parts[0].ChecksumSHA256)
+	client.mu.Unlock()
+}
+
 func TestS3Store_ConcurrentPatchUsesSingleFence(t *testing.T) {
 	t.Parallel()
 
@@ -547,17 +577,18 @@ func maxTime(left, right time.Time) time.Time {
 }
 
 type fakeS3Client struct {
-	mu              sync.Mutex
-	nextUploadID    int
-	createInputs    []s3.CreateMultipartUploadInput
-	uploadInputs    []s3.UploadPartInput
-	completeInputs  []s3.CompleteMultipartUploadInput
-	abortInputs     []s3.AbortMultipartUploadInput
-	uploads         map[string]*fakeMultipartUpload
-	uploadStarted   chan struct{}
-	releaseUpload   chan struct{}
-	completeStarted chan struct{}
-	releaseComplete chan struct{}
+	mu                    sync.Mutex
+	nextUploadID          int
+	createInputs          []s3.CreateMultipartUploadInput
+	uploadInputs          []s3.UploadPartInput
+	completeInputs        []s3.CompleteMultipartUploadInput
+	abortInputs           []s3.AbortMultipartUploadInput
+	uploads               map[string]*fakeMultipartUpload
+	uploadStarted         chan struct{}
+	releaseUpload         chan struct{}
+	completeStarted       chan struct{}
+	releaseComplete       chan struct{}
+	omitListPartChecksums bool
 }
 
 type fakeMultipartUpload struct {
@@ -669,7 +700,11 @@ func (f *fakeS3Client) ListParts(
 	}
 	parts := make([]awss3types.Part, 0, limit)
 	for _, number := range numbers[:limit] {
-		parts = append(parts, upload.parts[int32(number)])
+		part := upload.parts[int32(number)]
+		if f.omitListPartChecksums {
+			part.ChecksumSHA256 = nil
+		}
+		parts = append(parts, part)
 	}
 	result := &s3.ListPartsOutput{Parts: parts, IsTruncated: aws.Bool(limit < len(numbers))}
 	if limit > 0 && limit < len(numbers) {
