@@ -33,6 +33,7 @@ type TestSuite struct {
 
 	fileRepositoryMock *sendresizefilemocks.MockfileRepository
 	resizeClientMock   *sendresizefilemocks.MockresizeClient
+	sourceResolverMock *sendresizefilemocks.MocksourceURLResolver
 	eventStreamMock    *eventstreammocks.MockEventStream
 
 	imagePipeline config.ImagePipelineConfig
@@ -53,7 +54,12 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 		ctrl := gomock.NewController(t)
 		fileRepositoryMock := sendresizefilemocks.NewMockfileRepository(ctrl)
 		resizeClientMock := sendresizefilemocks.NewMockresizeClient(ctrl)
+		sourceResolverMock := sendresizefilemocks.NewMocksourceURLResolver(ctrl)
 		eventStreamMock := eventstreammocks.NewMockEventStream(ctrl)
+		sourceResolverMock.EXPECT().
+			Resolve(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, source string) (string, error) { return source, nil }).
+			AnyTimes()
 		videoPipeline := config.VideoPipelineConfig{
 			ResizerHost:         "https://resizer.example.com/images/jobs",
 			WebhookCallbackHost: "https://webhook.example.com/hook/images/resizer",
@@ -116,6 +122,7 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 		useCase := sendresizefile.Must(sendresizefile.NewOptions(
 			fileRepositoryMock,
 			resizeClientMock,
+			sourceResolverMock,
 			eventStreamMock,
 			imagePipeline,
 			videoPipeline,
@@ -126,6 +133,7 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 			useCase:            useCase,
 			fileRepositoryMock: fileRepositoryMock,
 			resizeClientMock:   resizeClientMock,
+			sourceResolverMock: sourceResolverMock,
 			eventStreamMock:    eventStreamMock,
 			imagePipeline:      imagePipeline,
 			videoPipeline:      videoPipeline,
@@ -137,7 +145,7 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 func TestHandle_MustInit(t *testing.T) {
 	assert.Panics(t, func() {
 		sendresizefile.Must(sendresizefile.NewOptions(
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			config.ImagePipelineConfig{}, config.VideoPipelineConfig{}, nil,
 		))
 	})

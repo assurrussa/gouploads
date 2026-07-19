@@ -6,6 +6,7 @@ const (
 	KeyFilesLoaderFileRepo      = "app.files.loader_file_repo"
 	KeyFilesTusStore            = "app.files.tus_store"
 	KeyFilesStorage             = "app.files.storage"
+	KeyFilesSourceURLResolver   = "app.files.source_url_resolver"
 	KeyFilesResizerSettings     = "app.files.resizer_settings_cache"
 	KeyFilesClientResizer       = "app.files.client_resizer"
 	KeyFilesUploadService       = "app.files.upload_service"

@@ -253,3 +253,35 @@
   durable part commit exists, because size alone cannot prove content identity.
 - Added a provider-compatible unit test whose fake `ListParts` omits checksum
   fields while `UploadPart` still receives and persists SHA-256.
+
+## 2026-07-19: Private media source URLs
+
+- Goal: keep S3/TUS objects private while giving the storage-agnostic
+  media-resizer a time-limited HTTP GET URL at dispatch time.
+- Decision: preserve the public `host.Storage` interface and introduce a narrow
+  source URL resolver through the stable `host` facade.
+- Decision: keep the unsigned source reference in `send_resize_file` outbox
+  payloads. S3 signing happens only when the dispatch use case is about to call
+  media-resizer.
+- Decision: add explicit `STORAGE_S3_SOURCE_HOST` and
+  `STORAGE_S3_SOURCE_URL_TTL`; do not infer the source proxy from
+  `STORAGE_S3_HOST`.
+- Decision: default the source TTL to six hours and reject non-positive values
+  or values above the AWS SigV4 seven-day maximum.
+- Decision: rewrite only scheme and host after signing. Preserve `Path`,
+  `RawPath`, and `RawQuery` byte-for-byte so an upstream S3 service can verify
+  the signature.
+- Compatibility: an empty S3 source host returns the presigned origin URL;
+  local storage returns the existing source URL unchanged.
+- Out of scope: queue cleanup, zero job ID behavior, and terminal failure/DLQ
+  redesign.
+
+## Verification
+
+- Focused source resolver, dispatch use case, host facade, and external
+  consumer tests passed.
+- `go test -tags integration ./infrastructure/storage/files/sourceurl -run TestIntegrationPrivateS3SourceThroughProxy -count=1 -v` - passed against
+  private MinIO: the unsigned origin request returned 403 and the signed
+  request through the host-rewriting proxy returned 200.
+- `make check` - passed, including tidy/generate/fmt/vet, lint with zero
+  issues, all tests, repeated race tests, and coverage.

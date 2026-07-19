@@ -139,6 +139,18 @@ func TestNewStorageBuildsLocalFacadeAndRejectsUnknownDriver(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported storage driver")
 }
 
+func TestNewSourceURLResolverKeepsLocalSourceURL(t *testing.T) {
+	t.Parallel()
+
+	resolver, err := host.NewSourceURLResolver(host.StorageConfig{Driver: host.StorageDriverLocal})
+	require.NoError(t, err)
+
+	const source = "http://backend:8080/uploads/image.jpg?cache=1"
+	got, err := resolver.Resolve(context.Background(), source)
+	require.NoError(t, err)
+	require.Equal(t, source, got)
+}
+
 func TestAfterProcessPayloadHelpers(t *testing.T) {
 	userID := host.NewUserID()
 

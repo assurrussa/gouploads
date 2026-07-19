@@ -13,6 +13,7 @@ func ModuleBootstrap() sharedgodi.Dependencies {
 		sharedgodi.NewDependency(provideFileLoader, sharedgodi.WithKey(KeyFilesLoader)),
 		sharedgodi.NewDependency(provideTusStore, sharedgodi.WithKey(KeyFilesTusStore)),
 		sharedgodi.NewDependency(provideFileStorage, sharedgodi.WithKey(KeyFilesStorage)),
+		sharedgodi.NewDependency(provideSourceURLResolver, sharedgodi.WithKey(KeyFilesSourceURLResolver)),
 		sharedgodi.NewDependency(provideResizerSettingsCache, sharedgodi.WithKey(KeyFilesResizerSettings)),
 		sharedgodi.NewDependency(provideClientResizer, sharedgodi.WithKey(KeyFilesClientResizer)),
 		sharedgodi.NewDependency(provideUploadService, sharedgodi.WithKey(KeyFilesUploadService)),

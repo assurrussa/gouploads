@@ -25,6 +25,9 @@
 - **Quarantine Object**: Private S3 multipart object that is not public merely
   because TUS protocol finalization succeeded. Promotion follows host/CMS media
   validation.
+- **Source URL Resolver**: Narrow dispatch-time policy that converts a durable
+  local/S3 source reference into the HTTP URL given to media-resizer without
+  expanding the storage CRUD interface.
 
 ## Rules
 

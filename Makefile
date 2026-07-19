@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := check
-.PHONY: check publish-readiness release-readiness release-version-check tidy-check test-surface test-surface-integration test-tus-postgres-integration externalconsumer-local externalconsumer-published import-policy-site tidy generate fmt lint vet test test-race bench-all cover-html
+.PHONY: check publish-readiness release-readiness release-version-check tidy-check test-surface test-surface-integration test-tus-postgres-integration test-source-url-s3-integration externalconsumer-local externalconsumer-published import-policy-site tidy generate fmt lint vet test test-race bench-all cover-html
 GO_MODULE := $(shell go list -m)
 GO_FILES := $(shell find . -type f -name '*.go' -not -path './.cache/*' -not -path './.go-cache/*' -not -path './tmp/*' -not -path './vendor/*')
 IMPORT_POLICY_REPO_ROOT ?= ..
@@ -19,7 +19,7 @@ release-version-check:
 	@printf '%s\n' "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' || \
 		(echo "VERSION must be an exact semver tag" && exit 2)
 
-publish-readiness: release-version-check check test-surface test-surface-integration test-tus-postgres-integration externalconsumer-local import-policy-site
+publish-readiness: release-version-check check test-surface test-surface-integration test-tus-postgres-integration test-source-url-s3-integration externalconsumer-local import-policy-site
 	@git diff --exit-code
 
 release-readiness: publish-readiness externalconsumer-published
@@ -35,6 +35,9 @@ test-surface-integration:
 
 test-tus-postgres-integration:
 	go test -tags integration ./domain/files/service/tusupload -run TestIntegration_PostgresSessionRepository -count=1
+
+test-source-url-s3-integration:
+	go test -tags integration ./infrastructure/storage/files/sourceurl -run TestIntegrationPrivateS3SourceThroughProxy -count=1
 
 externalconsumer-local:
 	mkdir -p "$(GOMODCACHE)"

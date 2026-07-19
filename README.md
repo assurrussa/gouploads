@@ -85,6 +85,8 @@ curl -X POST http://localhost:3000/api/v1/uploads \
 Some of the main configurations include:
 - `STORAGE_DRIVER`: `local` or `s3`
 - `STORAGE_S3_ENDPOINT`, `STORAGE_S3_BUCKET`, `STORAGE_S3_REGION`
+- `STORAGE_S3_SOURCE_HOST` and `STORAGE_S3_SOURCE_URL_TTL` for time-limited
+  media-resizer source GET URLs
 - `STORAGE_TUS_PART_SIZE`, `STORAGE_TUS_SESSION_TTL`,
   `STORAGE_TUS_LEASE_TTL`, and `STORAGE_TUS_QUARANTINE_PREFIX`
 - Sub-pipelines logic per media type (`STORAGE_IMAGE_DEFAULT_FORMAT`, `STORAGE_VIDEO_RESIZER_HOST`, etc).
@@ -126,6 +128,14 @@ S3 TUS objects are always created with private ACL under the configured
 quarantine prefix. `TusCompleteResult.Quarantined` remains true after protocol
 finalization: a host or CMS media adapter must validate and promote the object
 before exposing it through a public URL.
+
+`host.NewSourceURLResolver(cfg)` is the stable narrow source-read facade. In S3
+mode it creates an AWS SigV4 presigned `GetObject` URL immediately before media
+dispatch. When `STORAGE_S3_SOURCE_HOST` is set, only scheme/host are replaced;
+the signed path and query remain unchanged for a credential-free reverse proxy
+that restores the S3 origin `Host`. An empty source host returns the presigned
+origin URL. Local storage keeps the existing URL unchanged. The TTL defaults to
+`6h` and cannot exceed the SigV4 seven-day maximum.
 
 The supported external test-support package is:
 

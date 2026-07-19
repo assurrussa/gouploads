@@ -18,6 +18,7 @@ type OptOptionsSetter func(o *Options)
 func NewOptions(
 	fileRepository fileRepository,
 	remoteClient resizeClient,
+	sourceResolver sourceURLResolver,
 	eventStream eventstream.EventStream,
 	imagePipeline config.ImagePipelineConfig,
 	videoPipeline config.VideoPipelineConfig,
@@ -30,6 +31,7 @@ func NewOptions(
 
 	o.fileRepository = fileRepository
 	o.remoteClient = remoteClient
+	o.sourceResolver = sourceResolver
 	o.eventStream = eventStream
 	o.imagePipeline = imagePipeline
 	o.videoPipeline = videoPipeline
@@ -45,6 +47,7 @@ func (o *Options) Validate() error {
 	errs := new(errors461e464ebed9.ValidationErrors)
 	errs.Add(errors461e464ebed9.NewValidationError("fileRepository", _validate_Options_fileRepository(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("remoteClient", _validate_Options_remoteClient(o)))
+	errs.Add(errors461e464ebed9.NewValidationError("sourceResolver", _validate_Options_sourceResolver(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("eventStream", _validate_Options_eventStream(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("imagePipeline", _validate_Options_imagePipeline(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("videoPipeline", _validate_Options_videoPipeline(o)))
@@ -62,6 +65,13 @@ func _validate_Options_fileRepository(o *Options) error {
 func _validate_Options_remoteClient(o *Options) error {
 	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.remoteClient, "required"); err != nil {
 		return fmt461e464ebed9.Errorf("field `remoteClient` did not pass the test: %w", err)
+	}
+	return nil
+}
+
+func _validate_Options_sourceResolver(o *Options) error {
+	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.sourceResolver, "required"); err != nil {
+		return fmt461e464ebed9.Errorf("field `sourceResolver` did not pass the test: %w", err)
 	}
 	return nil
 }

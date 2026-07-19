@@ -29,10 +29,15 @@ type resizeClient interface {
 	SendResize(ctx context.Context, req clientresizer.Request) (clientresizer.Response, error)
 }
 
+type sourceURLResolver interface {
+	Resolve(ctx context.Context, source string) (string, error)
+}
+
 //go:generate options-gen -out-filename=usecase_options.gen.go -from-struct=Options
 type Options struct {
 	fileRepository fileRepository             `option:"mandatory" validate:"required"`
 	remoteClient   resizeClient               `option:"mandatory" validate:"required"`
+	sourceResolver sourceURLResolver          `option:"mandatory" validate:"required"`
 	eventStream    eventstream.EventStream    `option:"mandatory" validate:"required"`
 	imagePipeline  config.ImagePipelineConfig `option:"mandatory" validate:"required"`
 	videoPipeline  config.VideoPipelineConfig `option:"mandatory" validate:"required"`
@@ -94,6 +99,12 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 			fileModel, jobID, jobStatus, shared.FileUploadTaskStatusFailed,
 		))
 	}()
+
+	sourceURL, err := u.sourceResolver.Resolve(ctx, req.FilePath)
+	if err != nil {
+		return Response{}, fmt.Errorf("resolve source URL: %w", err)
+	}
+	req.FilePath = sourceURL
 
 	payload, err := u.createPayload(fileModel, req)
 	if err != nil {

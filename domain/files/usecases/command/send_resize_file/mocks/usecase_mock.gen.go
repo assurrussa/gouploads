@@ -96,3 +96,42 @@ func (mr *MockresizeClientMockRecorder) SendResize(ctx, req any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendResize", reflect.TypeOf((*MockresizeClient)(nil).SendResize), ctx, req)
 }
+
+// MocksourceURLResolver is a mock of sourceURLResolver interface.
+type MocksourceURLResolver struct {
+	ctrl     *gomock.Controller
+	recorder *MocksourceURLResolverMockRecorder
+	isgomock struct{}
+}
+
+// MocksourceURLResolverMockRecorder is the mock recorder for MocksourceURLResolver.
+type MocksourceURLResolverMockRecorder struct {
+	mock *MocksourceURLResolver
+}
+
+// NewMocksourceURLResolver creates a new mock instance.
+func NewMocksourceURLResolver(ctrl *gomock.Controller) *MocksourceURLResolver {
+	mock := &MocksourceURLResolver{ctrl: ctrl}
+	mock.recorder = &MocksourceURLResolverMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MocksourceURLResolver) EXPECT() *MocksourceURLResolverMockRecorder {
+	return m.recorder
+}
+
+// Resolve mocks base method.
+func (m *MocksourceURLResolver) Resolve(ctx context.Context, source string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Resolve", ctx, source)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Resolve indicates an expected call of Resolve.
+func (mr *MocksourceURLResolverMockRecorder) Resolve(ctx, source any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resolve", reflect.TypeOf((*MocksourceURLResolver)(nil).Resolve), ctx, source)
+}

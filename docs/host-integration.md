@@ -50,6 +50,14 @@ The media-resizer process is an external service. `gouploads` only needs its
 `/jobs` URL and API token, plus the callback URL that the media-resizer can
 reach.
 
+For private S3 objects, `host.NewSourceURLResolver` signs `GetObject` at
+dispatch time. `STORAGE_S3_SOURCE_HOST` is intentionally independent of the
+public `STORAGE_S3_HOST`. A source proxy must preserve the complete path/query,
+restore the origin `Host` before forwarding to S3, avoid logging query strings,
+and permit only GET/HEAD. It does not need S3 credentials. Empty source host is
+a backward-compatible direct-presigned-origin fallback; local storage remains
+pass-through.
+
 ## Minimal Runtime Wiring
 
 1. Map local configuration into `host.StorageConfig`.
@@ -59,6 +67,8 @@ reach.
        Driver: host.StorageDriverS3,
        S3: host.StorageS3Config{
            Endpoint: endpoint,
+           SourceHost: sourceProxyURL,
+           SourceURLTTL: 6 * time.Hour,
            Region: region,
            Bucket: bucket,
            AccessKey: accessKey,

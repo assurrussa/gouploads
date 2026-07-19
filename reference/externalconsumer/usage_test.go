@@ -19,8 +19,14 @@ func TestHostSurfaceCoversEmbeddingWorkflow(t *testing.T) {
 		Driver:       host.StorageDriverS3,
 		AppDomainURL: "https://app.example.test",
 		S3: host.StorageS3Config{
-			Host:   "https://cdn.example.test",
-			Bucket: "media",
+			Endpoint:     "https://storage.example.test",
+			Host:         "https://cdn.example.test",
+			SourceHost:   "https://source-proxy.example.test",
+			SourceURLTTL: 6 * time.Hour,
+			Region:       "test-region-1",
+			Bucket:       "media",
+			AccessKey:    "test-access-key",
+			SecretKey:    "test-secret-key",
 		},
 		Image: host.ImagePipelineConfig{
 			ResizerHost:         "http://media-resizer:18085/jobs",
@@ -41,6 +47,9 @@ func TestHostSurfaceCoversEmbeddingWorkflow(t *testing.T) {
 	}
 	require.Equal(t, "https://cdn.example.test", host.FilesBaseURL(cfg))
 	require.Equal(t, "media", host.FilesBucket(cfg))
+	sourceResolver, err := host.NewSourceURLResolver(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, sourceResolver)
 
 	deps := host.BootstrapDependencies()
 	require.NotEmpty(t, deps.List())

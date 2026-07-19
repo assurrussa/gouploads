@@ -33,6 +33,7 @@ import (
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/ceph"
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/local"
+	"github.com/assurrussa/gouploads/infrastructure/storage/files/sourceurl"
 )
 
 func provideFileRepo(db pgsql.Client, tx pgsql.TxManager) (*filerepo.Repo, error) {
@@ -102,6 +103,10 @@ func provideFileStorage(cfg uploadconfig.StorageConfig) (filestorage.Storage, er
 		}
 		return storage, nil
 	}
+}
+
+func provideSourceURLResolver(cfg uploadconfig.StorageConfig) (sourceurl.Resolver, error) {
+	return sourceurl.New(cfg)
 }
 
 func provideUploadService(
@@ -203,6 +208,7 @@ func provideUseCaseDeleteFile(
 func provideUseCaseSendResizeFile(
 	repo *filerepo.Repo,
 	resizer *clientresizer.Service,
+	sourceResolver sourceurl.Resolver,
 	eventStream *inmemeventstream.Service,
 	uploadCfg uploadconfig.StorageConfig,
 	lg logger.Logger,
@@ -210,6 +216,7 @@ func provideUseCaseSendResizeFile(
 	return sendresizefile.New(sendresizefile.NewOptions(
 		repo,
 		resizer,
+		sourceResolver,
 		eventStream,
 		uploadCfg.Image,
 		uploadCfg.Video,

@@ -26,6 +26,8 @@ type StorageLocalConfig struct {
 type StorageS3Config struct {
 	Endpoint       string        `toml:"endpoint" long:"storage-s3-endpoint" env:"STORAGE_S3_ENDPOINT"`
 	Host           string        `toml:"host" long:"storage-s3-host" env:"STORAGE_S3_HOST"`
+	SourceHost     string        `toml:"source_host" long:"storage-s3-source-host" env:"STORAGE_S3_SOURCE_HOST" validate:"omitempty,url"`
+	SourceURLTTL   time.Duration `toml:"source_url_ttl" long:"storage-s3-source-url-ttl" env:"STORAGE_S3_SOURCE_URL_TTL" value-default:"6h" validate:"min=1m,max=168h"`
 	ACL            string        `toml:"acl" long:"storage-s3-acl" env:"STORAGE_S3_ACL" value-default:"public-read"`
 	Region         string        `toml:"region" long:"storage-s3-region" env:"STORAGE_S3_REGION"`
 	Bucket         string        `toml:"bucket" long:"storage-s3-bucket" env:"STORAGE_S3_BUCKET"`
