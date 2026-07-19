@@ -10,6 +10,16 @@
 - Added focused acceptance and rejection tests. Existing built-in object type
   constants remain source-compatible and valid.
 
+## 2026-07-18: Deterministic MockGen Refresh
+
+- Accepted the repository's current source-mode `toolsmocks` output for 19
+  mocks. Their generated APIs, imports, and method bodies are unchanged; the
+  final formatted diff is limited to MockGen source/command headers produced
+  by the checked-in generator/tool versions.
+- This removes persistent clean-generation drift from `make check` and the
+  consuming `site` repository's `task platform:repo-check` without changing the
+  public `host` or `hosttest` surfaces.
+
 ## 2026-07-14: Stable v0.9.0 Promotion
 
 - Promoted the verified durable multi-replica TUS and quarantine-promotion
@@ -230,3 +240,16 @@
 - Removed parse-time `go list` expansion from the coverage recipe. Running
   `go test ./...` directly keeps package discovery inside the exported
   repository-local cache environment and avoids an untracked partial profile.
+
+# Yandex Object Storage multipart finalization compatibility
+
+- Yandex Object Storage accepts per-part SHA-256 input but its `ListParts`
+  response exposes only part number, size, and ETag. Requiring a non-empty
+  remote checksum caused valid TUS uploads to fail during finalization with
+  `multipart part 1 does not match durable state`.
+- Finalization now always verifies the durable size and ETag and verifies
+  SHA-256 only when the provider returns it. Crash reconciliation remains
+  conservative: a remote part without a checksum is re-uploaded when no
+  durable part commit exists, because size alone cannot prove content identity.
+- Added a provider-compatible unit test whose fake `ListParts` omits checksum
+  fields while `UploadPart` still receives and persists SHA-256.

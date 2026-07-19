@@ -172,7 +172,10 @@ by the host, but it is not the source of truth for TUS sessions.
 - Only the matching lease owner and revision can commit the uploaded part and
   advance `Upload-Offset`; stale replicas receive a conflict.
 - A retry after a crash compares part number, size, ETag, and SHA-256 through
-  S3 `ListParts` before reusing an already uploaded part.
+  S3 `ListParts` before reusing an already uploaded part. Finalization requires
+  the durable part number, size, and ETag to match; it also compares SHA-256
+  when the S3-compatible provider includes that optional field in `ListParts`.
+  Providers such as Yandex Object Storage omit it from that response.
 - Finalization is fenced and repeatable. A completed object is recovered with
   `HeadObject` if the process died after S3 completion but before the database
   commit. `FinalizationKey` is stable across retries for downstream idempotency.
