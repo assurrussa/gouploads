@@ -156,6 +156,9 @@ single env values.
 
 The Makefile sets repository-local `.go-cache` locations. Direct `go` commands
 in sandboxed environments should set `GOCACHE` and `GOPATH` under this repo.
+PostgreSQL integration targets preserve explicit local address/port overrides
+and otherwise resolve the published port of a running Compose
+`integration-postgres-tests` service for host-side execution.
 
 ## Cross-Project Context
 

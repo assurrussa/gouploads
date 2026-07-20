@@ -379,3 +379,27 @@
   the shared Go build cache; the isolated rerun with a dedicated temporary
   `GOCACHE` passed both generated consumer probes. This was an execution-cache
   issue, not a module-contract failure.
+
+## 2026-07-20: Host-side PostgreSQL release-gate discovery
+
+- `make publish-readiness` previously passed the Docker-network default
+  `integration-postgres-tests:5432` to Go tests even when Make ran on the host,
+  so the gate failed at DNS resolution despite a healthy Compose PostgreSQL
+  service published on a host port.
+- Added one PostgreSQL integration wrapper shared by the TUS fencing and
+  portable-media targets. Explicit `TEST_PSQL_ADDRESS_LOCAL` and
+  `TEST_PSQL_PORT_LOCAL` values remain authoritative; otherwise the wrapper
+  resolves the live Compose service by its stable service label and reads the
+  actual published port instead of assuming a project-specific container name
+  or fixed host port.
+- Native non-Compose runners fall back to `127.0.0.1:5432`. Container runners
+  retain the existing internal service DNS default. Dependency provisioning
+  remains outside this reusable module's release gate.
+- Multiple matching Compose services fail with an actionable override message
+  rather than selecting an arbitrary database.
+- Verification passed for shell syntax, explicit override preservation,
+  automatic discovery of the live `127.0.0.1:54325` mapping, the focused TUS
+  target, and every functional stage of
+  `make publish-readiness VERSION=v0.10.0-alpha.4`. The aggregate target then
+  stopped only at its intentional final `git diff --exit-code` because this
+  implementation was still uncommitted.

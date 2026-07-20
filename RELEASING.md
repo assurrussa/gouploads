@@ -20,6 +20,14 @@ The Makefile uses repository-local `.go-cache` paths by default so the check is
 stable in sandboxed local environments without polluting scanned Go package
 roots.
 
+PostgreSQL integration targets honor explicit `TEST_PSQL_ADDRESS_LOCAL` and
+`TEST_PSQL_PORT_LOCAL` values first. Without overrides, host-side runs discover
+the published port of the live Compose service named
+`integration-postgres-tests`; native non-Compose runs fall back to
+`127.0.0.1:5432`. Container-side runs retain the internal
+`integration-postgres-tests:5432` default. The gate verifies dependencies but
+does not provision them.
+
 If the sibling `../site` repository exists, the target also runs the import
 policy against `site/backend`, `goadmin`, and `site/fixtures/second-go-host`
 from the parent workspace root.

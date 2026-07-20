@@ -34,13 +34,13 @@ test-surface-integration:
 	go test -tags integration ./hosttest -count=1
 
 test-tus-postgres-integration:
-	go test -tags integration ./domain/files/service/tusupload -run TestIntegration_PostgresSessionRepository -count=1
+	sh ./scripts/with-integration-postgres.sh go test -tags integration ./domain/files/service/tusupload -run TestIntegration_PostgresSessionRepository -count=1
 
 test-source-url-s3-integration:
 	go test -tags integration ./infrastructure/storage/files/sourceurl -run TestIntegrationPrivateS3SourceDirectPresignedGET -count=1
 
 test-portable-s3-media-e2e:
-	go test -tags integration ./integration/portablemedia -run TestIntegrationPortableS3Media -count=1
+	sh ./scripts/with-integration-postgres.sh go test -tags integration ./integration/portablemedia -run TestIntegrationPortableS3Media -count=1
 
 externalconsumer-local:
 	mkdir -p "$(GOMODCACHE)"
