@@ -83,4 +83,8 @@ func TestIntegration_PostgresSessionRepositoryFencesCompetingReplicas(t *testing
 	repeated, err := repoA.Get(ctx, session.ID)
 	require.NoError(t, err)
 	require.Equal(t, ready.FinalizationKey, repeated.FinalizationKey)
+
+	expired, err := repoA.ListExpired(ctx, ready.ExpiresAt.Add(time.Second), 10)
+	require.NoError(t, err)
+	require.Contains(t, expired, session.ID, "abandoned ready sessions must remain eligible for staging cleanup")
 }

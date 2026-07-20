@@ -246,7 +246,7 @@ func buildEventFileEnvelope(fileModel model.File) *shared.FileUploadEventFile {
 		ID:           fileModel.ID,
 		FileName:     fileModel.FileName,
 		OriginalName: fileModel.OriginalFileName,
-		URL:          fileModel.GetPublicURL(),
+		URL:          "",
 		Size:         fileModel.Size,
 		MimeType:     fileModel.MimeType,
 		Width:        fileModel.GetWidth(),

@@ -10,18 +10,18 @@ import (
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 )
 
-var _ gomock.Matcher = CephMatcher{}
+var _ gomock.Matcher = S3Matcher{}
 
-// CephMatcher is intended to be used only in tests.
-type CephMatcher struct {
+// S3Matcher is intended to be used only in tests.
+type S3Matcher struct {
 	*BaseMatcher[filestorage.SaveFileInput]
 }
 
-func NewCephMatcher(name string, expected filestorage.SaveFileInput) *CephMatcher {
-	return &CephMatcher{NewBaseMatcher[filestorage.SaveFileInput](name, expected, checkCephFields)}
+func NewS3Matcher(name string, expected filestorage.SaveFileInput) *S3Matcher {
+	return &S3Matcher{NewBaseMatcher[filestorage.SaveFileInput](name, expected, checkS3Fields)}
 }
 
-func checkCephFields(
+func checkS3Fields(
 	expected filestorage.SaveFileInput,
 	got filestorage.SaveFileInput,
 	unequalFields []string,

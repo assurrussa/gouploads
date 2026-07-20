@@ -1,4 +1,4 @@
-package ceph
+package s3store
 
 import (
 	"bytes"
@@ -27,6 +27,10 @@ func Upload(
 	reader io.Reader,
 	optFns ...func(*s3.Options),
 ) error {
+	// Public access is owned exclusively by bucket policy. Clearing ACL here
+	// enforces the portable contract even if an internal caller supplies one.
+	input.ACL = ""
+
 	mpu, err := client.CreateMultipartUpload(ctx, input, optFns...)
 	if err != nil {
 		return fmt.Errorf("can't create multipart: %w", err)

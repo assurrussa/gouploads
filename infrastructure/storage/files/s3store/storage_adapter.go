@@ -1,4 +1,4 @@
-package ceph
+package s3store
 
 import (
 	"context"
@@ -28,7 +28,7 @@ const maxDeleteObjects = 1000
 
 func NewStorageAdapter(client Client, domain DomainHost) (*StorageAdapter, error) {
 	if client == nil {
-		return nil, errors.New("ceph storage: client is required")
+		return nil, errors.New("s3 storage: client is required")
 	}
 
 	return &StorageAdapter{
@@ -45,7 +45,7 @@ func (s *StorageAdapter) Exists(ctx context.Context, input filestorage.ExistFile
 	}
 
 	_, err = s.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(s.domain.Bucket()),
+		Bucket: aws.String(s.domain.BucketForKey(key)),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -62,10 +62,10 @@ func (s *StorageAdapter) Exists(ctx context.Context, input filestorage.ExistFile
 func (s *StorageAdapter) SavePersist(ctx context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
 	relDir, err := sanitizeRelativePath(input.Dir)
 	if err != nil {
-		return filestorage.StoredFile{}, fmt.Errorf("local storage: dir: %w", err)
+		return filestorage.StoredFile{}, fmt.Errorf("s3 storage: dir: %w", err)
 	}
 
-	input.Dir = filestorage.DirPersistPath(relDir)
+	input.Dir = relDir
 
 	return s.saveFile(ctx, input)
 }
@@ -73,10 +73,13 @@ func (s *StorageAdapter) SavePersist(ctx context.Context, input filestorage.Save
 func (s *StorageAdapter) SaveTemp(ctx context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
 	relDir, err := sanitizeRelativePath(input.Dir)
 	if err != nil {
-		return filestorage.StoredFile{}, fmt.Errorf("local storage: dir: %w", err)
+		return filestorage.StoredFile{}, fmt.Errorf("s3 storage: dir: %w", err)
 	}
 
-	input.Dir = filestorage.DirTemptPath(relDir)
+	if !s.domain.IsStagingKey(relDir) {
+		relDir = path.Join(s.domain.StagingPrefix(), relDir)
+	}
+	input.Dir = relDir
 
 	return s.saveFile(ctx, input)
 }
@@ -96,28 +99,34 @@ func (s *StorageAdapter) Commit(ctx context.Context, input filestorage.CommitInp
 		return filestorage.StoredFile{}, err
 	}
 
-	copySource := encodeCopySource(s.domain.Bucket(), tempKey)
+	sourceBucket := s.domain.BucketForKey(tempKey)
+	destinationBucket := s.domain.Bucket()
+	head, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(sourceBucket),
+		Key:    aws.String(tempKey),
+	})
+	if err != nil {
+		return filestorage.StoredFile{}, fmt.Errorf("head source object %s: %w", tempKey, err)
+	}
+
+	copySource := encodeCopySource(sourceBucket, tempKey)
 	_, err = s.client.CopyObject(ctx, &s3.CopyObjectInput{
-		Bucket:     aws.String(s.domain.Bucket()),
-		Key:        aws.String(destKey),
-		CopySource: aws.String(copySource),
-		ACL:        types.ObjectCannedACL(s.domain.ACL()),
+		Bucket:            aws.String(destinationBucket),
+		Key:               aws.String(destKey),
+		CopySource:        aws.String(copySource),
+		ContentType:       head.ContentType,
+		CacheControl:      aws.String(publicCacheControl),
+		MetadataDirective: types.MetadataDirectiveReplace,
 	})
 	if err != nil {
 		return filestorage.StoredFile{}, fmt.Errorf("copy object %s -> %s: %w", tempKey, destKey, err)
 	}
 
-	_, err = s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-		Bucket: aws.String(s.domain.Bucket()),
-		Delete: &types.Delete{Objects: []types.ObjectIdentifier{
-			{Key: aws.String(tempKey)},
-		}},
-	})
-	if err != nil {
+	if err := s.deleteObjects(ctx, sourceBucket, []string{tempKey}); err != nil {
 		return filestorage.StoredFile{}, fmt.Errorf("delete temp object %s: %w", tempKey, err)
 	}
 
-	size, mimeType, err := s.objectMetadata(ctx, destKey)
+	size, mimeType, err := s.objectMetadata(ctx, destinationBucket, destKey)
 	if err != nil {
 		// metadata lookup failed; continue with defaults
 		size = 0
@@ -126,7 +135,7 @@ func (s *StorageAdapter) Commit(ctx context.Context, input filestorage.CommitInp
 
 	return filestorage.StoredFile{
 		RelativePath: destKey,
-		URL:          buildURL(s.domain, destKey),
+		URL:          "",
 		Size:         size,
 		MimeType:     mimeType,
 	}, nil
@@ -139,7 +148,7 @@ func (s *StorageAdapter) Open(ctx context.Context, relativePath string) (io.Read
 	}
 
 	resp, err := s.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.domain.Bucket()),
+		Bucket: aws.String(s.domain.BucketForKey(key)),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -159,7 +168,7 @@ func (s *StorageAdapter) Delete(ctx context.Context, relativePath string) error 
 		return fmt.Errorf("sanitize path: %w", err)
 	}
 
-	return s.deleteObjects(ctx, []string{key})
+	return s.deleteObjects(ctx, s.domain.BucketForKey(key), []string{key})
 }
 
 func (s *StorageAdapter) DeleteBatch(ctx context.Context, relativePaths []string) error {
@@ -172,7 +181,18 @@ func (s *StorageAdapter) DeleteBatch(ctx context.Context, relativePaths []string
 		return err
 	}
 
-	return s.deleteObjects(ctx, keys)
+	byBucket := make(map[string][]string, 2)
+	for _, key := range keys {
+		bucket := s.domain.BucketForKey(key)
+		byBucket[bucket] = append(byBucket[bucket], key)
+	}
+	for bucket, bucketKeys := range byBucket {
+		if err := s.deleteObjects(ctx, bucket, bucketKeys); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func sanitizeKeys(paths []string) ([]string, error) {
@@ -194,7 +214,7 @@ func sanitizeKeys(paths []string) ([]string, error) {
 	return keys, nil
 }
 
-func (s *StorageAdapter) deleteObjects(ctx context.Context, keys []string) error {
+func (s *StorageAdapter) deleteObjects(ctx context.Context, bucket string, keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -211,10 +231,11 @@ func (s *StorageAdapter) deleteObjects(ctx context.Context, keys []string) error
 			objects[i] = types.ObjectIdentifier{Key: aws.String(key)}
 		}
 
-		if _, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-			Bucket: aws.String(s.domain.Bucket()),
+		output, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(bucket),
 			Delete: &types.Delete{Objects: objects},
-		}); err != nil {
+		})
+		if err != nil {
 			if len(keys) == 1 {
 				return fmt.Errorf("delete object %s: %w", keys[0], err)
 			}
@@ -225,14 +246,24 @@ func (s *StorageAdapter) deleteObjects(ctx context.Context, keys []string) error
 			}
 			return fmt.Errorf("delete objects batch starting with %s: %w", first, err)
 		}
+		if output != nil && len(output.Errors) > 0 {
+			failure := output.Errors[0]
+			return fmt.Errorf(
+				"delete objects: provider rejected %d object(s), first key=%q code=%q message=%q",
+				len(output.Errors),
+				aws.ToString(failure.Key),
+				aws.ToString(failure.Code),
+				aws.ToString(failure.Message),
+			)
+		}
 	}
 
 	return nil
 }
 
-func (s *StorageAdapter) objectMetadata(ctx context.Context, key string) (int64, string, error) {
+func (s *StorageAdapter) objectMetadata(ctx context.Context, bucket, key string) (int64, string, error) {
 	resp, err := s.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.domain.Bucket()),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 		Range:  aws.String("bytes=0-0"),
 	})
@@ -269,14 +300,14 @@ func (s *StorageAdapter) saveFile(ctx context.Context, input filestorage.SaveFil
 	}
 
 	counter := &countingReader{Reader: input.Reader}
-	linkURL, err := s.storage.UploadFile(ctx, counter, key, input.MimeType)
+	_, err = s.storage.UploadFile(ctx, counter, key, input.MimeType)
 	if err != nil {
 		return filestorage.StoredFile{}, err
 	}
 
 	return filestorage.StoredFile{
 		RelativePath: key,
-		URL:          linkURL,
+		URL:          "",
 		Size:         counter.Size(),
 		MimeType:     input.MimeType,
 	}, nil
@@ -305,11 +336,6 @@ func buildKey(dir, fileName string) (string, error) {
 
 	joined := path.Join(dirPath, sanitizedFile)
 	return filesanitize.EnsureRelativePath(joined)
-}
-
-func buildURL(domain DomainHost, key string) string {
-	link, _ := url.JoinPath(domain.Host(), domain.Bucket(), key)
-	return link
 }
 
 func encodeCopySource(bucket, key string) string {

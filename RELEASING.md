@@ -7,11 +7,12 @@ This checklist is the reusable-boundary gate for `gouploads`.
 Before tagging, run:
 
 ```bash
-make publish-readiness VERSION=v0.10.0-alpha.3
+make publish-readiness VERSION=v0.10.0-alpha.4
 ```
 
 This verifies `go.mod`/`go.sum` tidiness, the host facade, host test-support
 package, integration-tag `hosttest` surface, PostgreSQL TUS fencing test,
+direct-source S3 integration, mandatory portable-media MinIO/PostgreSQL E2E,
 external consumer manifest, local
 clean consumer probe, integration-tag clean consumer probe, import-policy
 checker, and the full module test suite.
@@ -28,15 +29,16 @@ consumer path must fail the gate instead of silently checking nothing.
 ## Release Sequence
 
 The published stable baseline is `v0.9.0`. The current source candidate is
-`v0.10.0-alpha.3`; it adds dispatch-time presigned S3 source GET URLs through
-the stable `host.NewSourceURLResolver` facade, explicit source proxy/TTL config,
-direct-origin and local fallbacks, and private S3 proxy integration coverage.
+`v0.10.0-alpha.4`; it adds the portable public/staging S3 contract, direct
+presigned source reads, immutable final keys and checksums, streaming artifact
+finalization, location redaction, no-ACL storage behavior, and the stable
+`host.NewStorageContractChecker` facade.
 
-1. Run `make publish-readiness VERSION=v0.10.0-alpha.3`.
+1. Run `make publish-readiness VERSION=v0.10.0-alpha.4`.
 2. Commit the `gouploads` changes.
-3. Tag the reviewed commit, for example `git tag v0.10.0-alpha.3`.
+3. Tag the reviewed commit, for example `git tag v0.10.0-alpha.4`.
 4. Push the commit and tag.
-5. Run `make release-readiness VERSION=v0.10.0-alpha.3`.
+5. Run `make release-readiness VERSION=v0.10.0-alpha.4`.
 6. Update host projects to the published version and re-run their platform
    boundary checks.
 

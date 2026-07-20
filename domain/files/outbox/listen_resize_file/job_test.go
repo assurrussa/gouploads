@@ -64,8 +64,8 @@ func TestJobHandle_Success(t *testing.T) {
 		"",
 		map[string]any{"file_id": "123"},
 		[]usecase.Artifact{
-			{Preset: "medium", URL: "https://ceph.example.com/image.png"},
-			{Preset: "small", URL: "https://ceph.example.com/small.png"},
+			{Preset: "medium", URL: "https://s3store.example.com/image.png"},
+			{Preset: "small", URL: "https://s3store.example.com/small.png"},
 		},
 	)
 	payloadBytes, err := listenresizefilejob.MarshalPayload(payload)
@@ -93,8 +93,8 @@ func TestJobHandle_Error_UseCase(t *testing.T) {
 		"",
 		map[string]any{"file_id": "123"},
 		[]usecase.Artifact{
-			{Preset: "medium", URL: "https://ceph.example.com/image.png"},
-			{Preset: "small", URL: "https://ceph.example.com/small.png"},
+			{Preset: "medium", URL: "https://s3store.example.com/image.png"},
+			{Preset: "small", URL: "https://s3store.example.com/small.png"},
 		},
 	)
 	payloadBytes, err := listenresizefilejob.MarshalPayload(payload)

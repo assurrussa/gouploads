@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/assurrussa/goshared/pkg/logger"
+	"github.com/assurrussa/outbox/outbox"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
@@ -75,12 +76,22 @@ func (j *Job) Handle(ctx context.Context, payload string) error {
 	}
 
 	_, err = j.uploadFileUseCase.Handle(ctx, uploadfile.Request{
-		FileID:    data.FileID,
-		Artifacts: artifacts,
+		FileID:           data.FileID,
+		Artifacts:        artifacts,
+		CleanupOnFailure: isTerminalAttempt(ctx, j.MaxAttempts()),
 	})
 	if err != nil {
 		return fmt.Errorf("get task %d: %w", data.FileID, err)
 	}
 
 	return nil
+}
+
+func isTerminalAttempt(ctx context.Context, maxAttempts int) bool {
+	metadata, ok := outbox.JobMetadataFromContext(ctx)
+	return terminalAttempt(metadata.Attempt, maxAttempts, ok)
+}
+
+func terminalAttempt(attempt, maxAttempts int, hasMetadata bool) bool {
+	return hasMetadata && maxAttempts > 0 && attempt >= maxAttempts
 }

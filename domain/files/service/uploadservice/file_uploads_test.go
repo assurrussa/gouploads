@@ -54,7 +54,6 @@ func NewTestFileSuite(t *testing.T) (context.Context, context.CancelFunc, *TestF
 			mockFileRepository,
 			logger.Discard(),
 			storage,
-			"https://ceph.localhost",
 		))
 
 		return &TestFileSuite{

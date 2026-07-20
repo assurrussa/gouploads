@@ -1,4 +1,4 @@
-package ceph
+package s3store
 
 import (
 	"context"
@@ -75,7 +75,7 @@ type S3Storage interface {
 }
 
 type S3Client interface {
-	// Upload загрузка файла в ceph
+	// Upload загружает файл в S3-совместимое хранилище.
 	Upload(
 		ctx context.Context,
 		input s3.CreateMultipartUploadInput,

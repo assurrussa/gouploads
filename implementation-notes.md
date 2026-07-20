@@ -1,5 +1,47 @@
 # Implementation Notes
 
+## 2026-07-20: Portable S3 media implementation
+
+- Started implementation from docs/tasks/portable-s3-media.md.
+- The stable boundary remains host and hosttest; S3 adapter details stay
+  internal.
+- Chosen implementation order is public config/key/storage contracts first,
+  then streaming finalization/checker, then host adoption and release evidence.
+- Publication of v0.10.0-alpha.4 is tracked separately from local code
+  readiness and will not be claimed before the pushed-tag clean-consumer gate.
+- Replaced the former provider/proxy-oriented S3 config with a generic endpoint,
+  delivery base, public prefix and optional staging bucket. The 2026-07-19
+  source-host rewrite and the older ACL/quarantine notes below are superseded
+  for the new portable contract; they remain historical context only.
+- Renamed the deep generic adapter from `ceph` to `s3store`, stopped sending
+  object ACLs, routed staging/public keys to the configured buckets, connected
+  SDK retries and applied private/immutable cache headers.
+- Finalization now validates same-origin signed artifact URLs, sends no API
+  secrets, redacts signed queries, streams with bounded memory, calculates
+  SHA-256 and commits DB metadata/outbox cleanup only after every final object
+  is durable.
+- Added the stable storage checker and a mandatory integration flow covering
+  MinIO, PostgreSQL, a signed-artifact server, both bucket topologies,
+  image/video/PDF, retry/partial cleanup, public Range, replacement and explicit
+  deletion. `make test-portable-s3-media-e2e` passes.
+- Context7 CLI documentation lookup was attempted three times but the local
+  Node runtimes were unusable. The exact checked-in AWS SDK v2 source was used
+  to verify retry, multipart, checksum and no-ACL call shapes before tests.
+- Module unit tests and the focused integration gate pass. Publication,
+  tagging/pushing and the post-tag clean-consumer gate were not performed.
+- Final review made public and staging prefixes explicitly non-overlapping,
+  restricted source presigning to the configured staging prefix, and made TUS
+  expiry cleanup remove a completed staging object as well as its durable
+  session. Normal post-handoff TUS session deletion deliberately retains the
+  source until finalization enqueues object cleanup. Regression tests cover
+  both lifecycle paths and the prefix invariants.
+- Finalization cleanup now runs only on the terminal outbox attempt using
+  outbox v0.10 job metadata, so a transient retry cannot delete deterministic
+  keys already written by a successful concurrent/retried attempt. Duplicate
+  completed callbacks are no-ops, a main artifact is mandatory, cleanup uses a
+  detached bounded context, and provider-reported per-key `DeleteObjects`
+  failures remain retryable.
+
 ## 2026-07-17: Host-owned file object types
 
 - Replaced the closed legacy `FileObjectType` allowlist with a bounded safe
@@ -285,3 +327,55 @@
   request through the host-rewriting proxy returned 200.
 - `make check` - passed, including tidy/generate/fmt/vet, lint with zero
   issues, all tests, repeated race tests, and coverage.
+
+## 2026-07-20: Portable S3 media architecture
+
+- Replaced provider URLs in managed records with relative object keys and
+  canonical edge composition through `StoragePublicConfig`.
+- Renamed the internal generic adapter directory from `ceph` to `s3store` and
+  removed ACL fields from multipart create/copy paths. Bucket policy now owns
+  public access.
+- Centralized explicit S3 validation/defaults so storage, TUS, source signing,
+  DI, and the contract checker agree on endpoint, buckets, prefixes, TTL,
+  timeout, credentials, and retry behavior.
+- Kept the public `host.Storage` interface intact. Public/staging bucket routing
+  is selected internally from the key prefix.
+- Chose deterministic final keys based on the existing file-record slug and
+  preset name. Extensions come from the validated artifact MIME, never the
+  original filename or signed artifact URL.
+- Kept media-resizer's signed-artifact webhook contract. Artifact downloads use
+  a secret-free client, block redirects by default, restrict origin and MIME,
+  redact signed queries, and stream with bounded size plus SHA-256 accounting.
+- Enqueued staging deletion in the same DB transaction as final metadata and
+  after-jobs. Partial finals and failed DB finalization schedule idempotent
+  path-only cleanup jobs; those internal cleanup jobs no longer query file ID
+  zero or publish staging locations.
+- Added `host.StorageContractChecker` as an explicit operator probe. It avoids
+  `ListBucket`, validates private staging and public HEAD/GET/Range behavior,
+  and always attempts cleanup.
+- Context7 documentation lookup was attempted as required, but the available
+  CLI runtimes were broken locally. AWS SDK retry/presign behavior was instead
+  verified against the exact installed module source before implementation.
+- Final local verification passed on 2026-07-20: `make check` completed tidy,
+  generation, formatting, vet, lint with zero issues, unit tests, repeated race
+  tests and coverage. The semver check accepts `v0.10.0-alpha.4`.
+- All pre-tag publish-readiness components passed against local dependencies:
+  stable surface tests, `hosttest`, PostgreSQL TUS integration, direct
+  presigned MinIO source integration, portable media E2E, local clean-consumer
+  probe and the `site`/`goadmin` import policy. The final clean-diff assertion
+  intentionally remains a post-commit release step.
+- The portable media E2E was also re-run through the owning `site` facade,
+  `task storage:test:e2e`, and passed without a skip.
+- Hardened the lowest multipart helper to clear any ACL supplied by an internal
+  caller before `CreateMultipartUpload`; tests now prove this invariant in
+  addition to adapter-level create/copy assertions.
+- Final verification re-ran every pre-tag component independently on
+  2026-07-20: PostgreSQL TUS CAS/lifecycle integration, direct presigned MinIO
+  source GET, stable surface and `hosttest` integration, local external
+  consumer, cross-repository import policy, exact `v0.10.0-alpha.4` semver
+  validation and the portable-media E2E all passed. The E2E was run both from
+  this repository and through `site`'s `task storage:test:e2e` facade.
+- A parallel external-consumer run initially hit a sandbox permission error in
+  the shared Go build cache; the isolated rerun with a dedicated temporary
+  `GOCACHE` passed both generated consumer probes. This was an execution-cache
+  issue, not a module-contract failure.

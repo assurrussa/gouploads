@@ -200,11 +200,11 @@ func (ts *HandlerSuite) assertFileMatchesCreateModel(payload filePayload) {
 	ts.Require().Equal("sample.png", payload.OriginalName)
 	ts.Require().Equal("image/png", payload.MimeType)
 	ts.Require().EqualValues(2048, payload.Size)
-	ts.Require().Equal("https://ceph.localhost/admin/tmp/uploads/sample-stored.png", payload.URL)
-	ts.Require().Equal(payload.URL, payload.PublicURL)
-	ts.Require().Equal(payload.PublicURL, payload.ThumbnailURL)
-	ts.Require().Equal("admin/tmp/uploads/sample-stored.png", payload.FullPath)
-	ts.Require().Equal("admin/tmp/uploads", payload.FolderPath)
+	ts.Require().Empty(payload.URL)
+	ts.Require().Empty(payload.PublicURL)
+	ts.Require().Empty(payload.ThumbnailURL)
+	ts.Require().Empty(payload.FullPath)
+	ts.Require().Empty(payload.FolderPath)
 	ts.Require().Equal("queued", payload.Status)
 	ts.Require().True(payload.IsPrimary)
 	ts.Require().Equal(640, payload.Width)
@@ -246,7 +246,7 @@ func NewHandlerSuite(t *testing.T) (context.Context, context.CancelFunc, *Handle
 			if strings.HasPrefix(path, "http") {
 				return path
 			}
-			return "https://ceph.localhost/" + strings.TrimPrefix(path, "/")
+			return "https://s3store.localhost/" + strings.TrimPrefix(path, "/")
 		}
 
 		handler := uploadshandler.NewHandler(
@@ -492,6 +492,42 @@ func TestUploads_GetTask_SuccessWithFile(t *testing.T) {
 	ts.Require().Equal(fiber.StatusOK, resp.StatusCode)
 	got := decodeSingleResponse(ts.T(), respBody)
 	ts.assertFileMatchesCreateModel(got.File)
+}
+
+func TestUploads_GetTask_CompletedExposesCanonicalLocations(t *testing.T) {
+	_, _, ts := NewHandlerSuite(t)
+
+	expected := createModel()
+	data := expected.GetData()
+	data.Uploader.Status = shared.FileUploadTaskStatusCompleted
+	expected.SetData(data)
+	expected.URL = ""
+	expected.FolderPath = "media/v1/post/134/file-slug"
+	expected.FileName = "main.png"
+	ts.mockTaskUploader.EXPECT().GetFile(gomock.Any(), int64(16)).Return(expected, nil)
+
+	reqID := sharedtypes.NewRequestID()
+	app, req := ts.fiberApp.CreateRequest(
+		http.MethodGet,
+		reqID,
+		func(c fiber.Ctx) error { return ts.handler.GetFile(c) },
+	)
+	req.URL.Path = "/files/upload/tasks/16"
+	req.RequestURI = "/files/upload/tasks/16"
+	app.Add([]string{http.MethodGet}, "/files/upload/tasks/:id", func(c fiber.Ctx) error {
+		return ts.handler.GetFile(c)
+	})
+
+	resp, respBody := ts.fiberApp.Send(app, req)
+	ts.T().Cleanup(func() { ts.Require().NoError(resp.Body.Close()) })
+
+	ts.Require().Equal(fiber.StatusOK, resp.StatusCode)
+	got := decodeSingleResponse(ts.T(), respBody).File
+	ts.Equal("https://s3store.localhost/media/v1/post/134/file-slug/main.png", got.URL)
+	ts.Equal(got.URL, got.PublicURL)
+	ts.Equal("media/v1/post/134/file-slug/main.png", got.FullPath)
+	ts.Equal("media/v1/post/134/file-slug", got.FolderPath)
+	ts.Equal("completed", got.Status)
 }
 
 func TestUploads_GetTask_NotFound(t *testing.T) {

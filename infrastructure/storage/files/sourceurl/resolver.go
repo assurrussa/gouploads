@@ -11,6 +11,7 @@ import (
 
 	"github.com/assurrussa/goshared/pkg/filesanitize"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
@@ -18,7 +19,7 @@ import (
 )
 
 const (
-	DefaultS3URLTTL = 6 * time.Hour
+	DefaultS3URLTTL = 15 * time.Minute
 	MaxS3URLTTL     = 7 * 24 * time.Hour
 )
 
@@ -35,10 +36,10 @@ func (passthroughResolver) Resolve(_ context.Context, source string) (string, er
 }
 
 type s3Resolver struct {
-	presigner  *awss3.PresignClient
-	bucket     string
-	sourceHost string
-	ttl        time.Duration
+	presigner     *awss3.PresignClient
+	bucket        string
+	stagingPrefix string
+	ttl           time.Duration
 }
 
 // New builds the resolver for the configured storage driver. Local storage
@@ -48,22 +49,14 @@ func New(cfg uploadconfig.StorageConfig) (Resolver, error) {
 		return passthroughResolver{}, nil
 	}
 
+	var err error
+	cfg, err = uploadconfig.NormalizeStorageConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("validate s3 storage config: %w", err)
+	}
 	storageCfg := cfg.S3
 	ttl := storageCfg.SourceURLTTL
-	if ttl == 0 {
-		ttl = DefaultS3URLTTL
-	}
-	if ttl < time.Minute || ttl > MaxS3URLTTL {
-		return nil, fmt.Errorf("s3 source URL TTL must be between 1m and %s", MaxS3URLTTL)
-	}
-	if strings.TrimSpace(storageCfg.Bucket) == "" {
-		return nil, errors.New("s3 source URL bucket is required")
-	}
-
-	sourceHost, err := normalizeSourceHost(storageCfg.SourceHost)
-	if err != nil {
-		return nil, err
-	}
+	bucket := strings.TrimSpace(storageCfg.StagingBucket)
 
 	httpClient := &http.Client{}
 	if storageCfg.Timeout > 0 {
@@ -77,25 +70,29 @@ func New(cfg uploadconfig.StorageConfig) (Resolver, error) {
 			storageCfg.SessionToken,
 		),
 		HTTPClient: httpClient,
+		Retryer: func() aws.Retryer {
+			return retry.NewStandard(func(options *retry.StandardOptions) {
+				options.MaxAttempts = storageCfg.MaxRetries + 1
+			})
+		},
 	}
 	client := awss3.NewFromConfig(awsCfg, func(options *awss3.Options) {
 		options.UsePathStyle = storageCfg.ForcePathStyle
 		if storageCfg.Endpoint != "" {
 			options.BaseEndpoint = aws.String(storageCfg.Endpoint)
 		}
-		options.EndpointOptions.DisableHTTPS = storageCfg.DisableSSL
 	})
 
 	return &s3Resolver{
-		presigner:  awss3.NewPresignClient(client),
-		bucket:     strings.Trim(storageCfg.Bucket, "/"),
-		sourceHost: sourceHost,
-		ttl:        ttl,
+		presigner:     awss3.NewPresignClient(client),
+		bucket:        strings.Trim(bucket, "/"),
+		stagingPrefix: strings.Trim(cfg.Tus.StagingPrefix, "/"),
+		ttl:           ttl,
 	}, nil
 }
 
 func (r *s3Resolver) Resolve(ctx context.Context, source string) (string, error) {
-	key, err := objectKey(source, r.bucket)
+	key, err := objectKey(source, r.bucket, r.stagingPrefix)
 	if err != nil {
 		return "", fmt.Errorf("resolve s3 source key: %w", err)
 	}
@@ -114,10 +111,10 @@ func (r *s3Resolver) Resolve(ctx context.Context, source string) (string, error)
 		return "", fmt.Errorf("presign s3 GetObject: %w", err)
 	}
 
-	return rewriteURLHost(request.URL, r.sourceHost)
+	return request.URL, nil
 }
 
-func objectKey(source, bucket string) (string, error) {
+func objectKey(source, bucket, stagingPrefix string) (string, error) {
 	raw := strings.TrimSpace(source)
 	if raw == "" {
 		return "", errors.New("source is required")
@@ -140,44 +137,9 @@ func objectKey(source, bucket string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	stagingPrefix = strings.Trim(stagingPrefix, "/")
+	if stagingPrefix == "" || (key != stagingPrefix && !strings.HasPrefix(key, stagingPrefix+"/")) {
+		return "", errors.New("source key is outside the configured staging prefix")
+	}
 	return key, nil
-}
-
-func normalizeSourceHost(raw string) (string, error) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return "", nil
-	}
-
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return "", fmt.Errorf("parse s3 source host: %w", err)
-	}
-	if parsed.Scheme == "" || parsed.Host == "" {
-		return "", errors.New("s3 source host requires scheme and host")
-	}
-	if parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errors.New("s3 source host must not contain userinfo, path, query, or fragment")
-	}
-
-	return parsed.Scheme + "://" + parsed.Host, nil
-}
-
-func rewriteURLHost(rawURL, sourceHost string) (string, error) {
-	if sourceHost == "" {
-		return rawURL, nil
-	}
-
-	signed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", fmt.Errorf("parse presigned URL: %w", err)
-	}
-	target, err := url.Parse(sourceHost)
-	if err != nil {
-		return "", fmt.Errorf("parse source host: %w", err)
-	}
-
-	signed.Scheme = target.Scheme
-	signed.Host = target.Host
-	return signed.String(), nil
 }

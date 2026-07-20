@@ -1,4 +1,4 @@
-package ceph_test
+package s3store_test
 
 import (
 	"bytes"
@@ -13,15 +13,15 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"github.com/assurrussa/gouploads/infrastructure/storage/files/ceph"
-	cephmocks "github.com/assurrussa/gouploads/infrastructure/storage/files/ceph/mocks"
+	"github.com/assurrussa/gouploads/infrastructure/storage/files/s3store"
+	s3storemocks "github.com/assurrussa/gouploads/infrastructure/storage/files/s3store/mocks"
 )
 
 func TestUpload(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	client := cephmocks.NewMockMultiPartUploader(ctrl)
+	client := s3storemocks.NewMockMultiPartUploader(ctrl)
 	input := stubInput()
 
 	tests := []struct {
@@ -120,7 +120,7 @@ func TestUpload(t *testing.T) {
 
 			reader := strings.NewReader("test")
 
-			if err := ceph.Upload(ctx, client, input, reader); err != nil {
+			if err := s3store.Upload(ctx, client, input, reader); err != nil {
 				assert.EqualError(t, err, tt.wantError)
 			} else {
 				assert.NoError(t, err)
@@ -140,7 +140,7 @@ func TestUpload_DoesNotUploadEmptyPart(t *testing.T) {
 	defer ctrl.Finish()
 
 	ctx := context.Background()
-	client := cephmocks.NewMockMultiPartUploader(ctrl)
+	client := s3storemocks.NewMockMultiPartUploader(ctrl)
 	key := "Key"
 	bucket := "bucket"
 	uploadID := "upload-id"
@@ -170,9 +170,9 @@ func TestUpload_DoesNotUploadEmptyPart(t *testing.T) {
 		CompleteMultipartUpload(ctx, gomock.Any()).
 		Return(&s3.CompleteMultipartUploadOutput{}, nil)
 
-	data := bytes.Repeat([]byte("a"), ceph.MinPartSize)
+	data := bytes.Repeat([]byte("a"), s3store.MinPartSize)
 	reader := bytes.NewReader(data)
 
 	input := &s3.CreateMultipartUploadInput{Key: &key}
-	require.NoError(t, ceph.Upload(ctx, client, input, reader))
+	require.NoError(t, s3store.Upload(ctx, client, input, reader))
 }

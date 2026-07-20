@@ -39,12 +39,17 @@ func WithFnCallAfterProcess(opt FnCallAfterProcess) OptOptionsSetter {
 	return func(o *Options) { o.fnCallAfterProcess = opt }
 }
 
+func WithDeliveryBaseURL(opt string) OptOptionsSetter {
+	return func(o *Options) { o.deliveryBaseURL = opt }
+}
+
 func (o *Options) Validate() error {
 	errs := new(errors461e464ebed9.ValidationErrors)
 	errs.Add(errors461e464ebed9.NewValidationError("transactor", _validate_Options_transactor(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("files", _validate_Options_files(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("eventStream", _validate_Options_eventStream(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("logger", _validate_Options_logger(o)))
+	errs.Add(errors461e464ebed9.NewValidationError("deliveryBaseURL", _validate_Options_deliveryBaseURL(o)))
 	return errs.AsError()
 }
 
@@ -72,6 +77,13 @@ func _validate_Options_eventStream(o *Options) error {
 func _validate_Options_logger(o *Options) error {
 	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.logger, "required"); err != nil {
 		return fmt461e464ebed9.Errorf("field `logger` did not pass the test: %w", err)
+	}
+	return nil
+}
+
+func _validate_Options_deliveryBaseURL(o *Options) error {
+	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.deliveryBaseURL, "omitempty,url"); err != nil {
+		return fmt461e464ebed9.Errorf("field `deliveryBaseURL` did not pass the test: %w", err)
 	}
 	return nil
 }

@@ -18,15 +18,18 @@ func TestHostSurfaceCoversEmbeddingWorkflow(t *testing.T) {
 	cfg := host.StorageConfig{
 		Driver:       host.StorageDriverS3,
 		AppDomainURL: "https://app.example.test",
+		Public: host.StoragePublicConfig{
+			BaseURL: "https://media.example.test",
+			Prefix:  "media/v1",
+		},
 		S3: host.StorageS3Config{
-			Endpoint:     "https://storage.example.test",
-			Host:         "https://cdn.example.test",
-			SourceHost:   "https://source-proxy.example.test",
-			SourceURLTTL: 6 * time.Hour,
-			Region:       "test-region-1",
-			Bucket:       "media",
-			AccessKey:    "test-access-key",
-			SecretKey:    "test-secret-key",
+			Endpoint:      "https://storage.example.test",
+			SourceURLTTL:  15 * time.Minute,
+			Region:        "test-region-1",
+			Bucket:        "media",
+			StagingBucket: "media-staging",
+			AccessKey:     "test-access-key",
+			SecretKey:     "test-secret-key",
 		},
 		Image: host.ImagePipelineConfig{
 			ResizerHost:         "http://media-resizer:18085/jobs",
@@ -39,17 +42,23 @@ func TestHostSurfaceCoversEmbeddingWorkflow(t *testing.T) {
 			ResizerToken:        "video-token",
 		},
 		Tus: host.StorageTusConfig{
-			PartSize:         host.ParseSize("8MB"),
-			SessionTTL:       24 * time.Hour,
-			LeaseTTL:         30 * time.Second,
-			QuarantinePrefix: "quarantine/uploads",
+			PartSize:      host.ParseSize("8MB"),
+			SessionTTL:    24 * time.Hour,
+			LeaseTTL:      30 * time.Second,
+			StagingPrefix: "staging/v1/tus",
 		},
 	}
-	require.Equal(t, "https://cdn.example.test", host.FilesBaseURL(cfg))
-	require.Equal(t, "media", host.FilesBucket(cfg))
+	require.Equal(t, "https://media.example.test", host.FilesBaseURL(cfg))
+	require.Empty(t, host.FilesBucket(cfg))
 	sourceResolver, err := host.NewSourceURLResolver(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, sourceResolver)
+	contractChecker, err := host.NewStorageContractChecker(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, contractChecker)
+	_ = host.StorageContractReport{}
+	_ = host.StorageContractCheck{}
+	_ = host.FilePreset{ChecksumSHA256: "sha256"}
 
 	deps := host.BootstrapDependencies()
 	require.NotEmpty(t, deps.List())
@@ -106,6 +115,7 @@ func TestHostSurfaceCoversEmbeddingWorkflow(t *testing.T) {
 	_ = host.NewFileRepo
 	_ = host.MustFileRepo
 	_ = host.NewTusStore
+	_ = host.NewStorageContractChecker
 	_ = host.TusCreateRequest{}
 	_ = host.TusSession{Status: host.TusStatusActive, Quarantined: true}
 	_ = host.TusCompleteResult{FinalizationKey: "stable-key", Quarantined: true}

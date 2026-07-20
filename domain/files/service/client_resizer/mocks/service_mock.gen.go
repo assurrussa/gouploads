@@ -42,21 +42,6 @@ func (m *MockhttpClient) EXPECT() *MockhttpClientMockRecorder {
 	return m.recorder
 }
 
-// DoWithRequest mocks base method.
-func (m *MockhttpClient) DoWithRequest(ctx context.Context, request transporthttp.Request) (*http.Response, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DoWithRequest", ctx, request)
-	ret0, _ := ret[0].(*http.Response)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DoWithRequest indicates an expected call of DoWithRequest.
-func (mr *MockhttpClientMockRecorder) DoWithRequest(ctx, request any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DoWithRequest", reflect.TypeOf((*MockhttpClient)(nil).DoWithRequest), ctx, request)
-}
-
 // DoWithRequestAndParse mocks base method.
 func (m *MockhttpClient) DoWithRequestAndParse(ctx context.Context, request transporthttp.Request, data any) error {
 	m.ctrl.T.Helper()
@@ -69,4 +54,43 @@ func (m *MockhttpClient) DoWithRequestAndParse(ctx context.Context, request tran
 func (mr *MockhttpClientMockRecorder) DoWithRequestAndParse(ctx, request, data any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DoWithRequestAndParse", reflect.TypeOf((*MockhttpClient)(nil).DoWithRequestAndParse), ctx, request, data)
+}
+
+// MockartifactHTTPClient is a mock of artifactHTTPClient interface.
+type MockartifactHTTPClient struct {
+	ctrl     *gomock.Controller
+	recorder *MockartifactHTTPClientMockRecorder
+	isgomock struct{}
+}
+
+// MockartifactHTTPClientMockRecorder is the mock recorder for MockartifactHTTPClient.
+type MockartifactHTTPClientMockRecorder struct {
+	mock *MockartifactHTTPClient
+}
+
+// NewMockartifactHTTPClient creates a new mock instance.
+func NewMockartifactHTTPClient(ctrl *gomock.Controller) *MockartifactHTTPClient {
+	mock := &MockartifactHTTPClient{ctrl: ctrl}
+	mock.recorder = &MockartifactHTTPClientMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockartifactHTTPClient) EXPECT() *MockartifactHTTPClientMockRecorder {
+	return m.recorder
+}
+
+// Do mocks base method.
+func (m *MockartifactHTTPClient) Do(request *http.Request) (*http.Response, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Do", request)
+	ret0, _ := ret[0].(*http.Response)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Do indicates an expected call of Do.
+func (mr *MockartifactHTTPClientMockRecorder) Do(request any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Do", reflect.TypeOf((*MockartifactHTTPClient)(nil).Do), request)
 }

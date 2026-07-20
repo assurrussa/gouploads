@@ -11,10 +11,10 @@ github.com/assurrussa/goredis v0.4.5 h1:CZid76IYQJbbigCnowRcZqEuv2GjO8N1HvT1CcvY
 github.com/assurrussa/goredis v0.4.5/go.mod h1:rAu2ccdCytJ7M8mBuKXmHFPhg1hOPnQMaA1Gt3drwwQ=
 github.com/assurrussa/goshared v1.0.3 h1:B1fKwfctvQ/jbfsJ4XtbaIohvHkv/gD4l+3YNiI1Chg=
 github.com/assurrussa/goshared v1.0.3/go.mod h1:5g0vwItycWDC2bDkcIO8fRB0HqN5oQAe6aUI75KSjMo=
-github.com/assurrussa/outbox v0.9.8 h1:I59t7JIMOJMkUcVgQRAFBBmOPIMmM49kZtX1X9PMO3Y=
-github.com/assurrussa/outbox v0.9.8/go.mod h1:fzNmhtaNHltUtnUsj5KMQPNlnEB9tY/Z5MfsxJYvBgg=
-github.com/assurrussa/outbox/backends/pgsql v0.0.0-20260604173053-6e73a5543d74 h1:KfavOQW4Zv4NZSql5JUQ0AOWsVBGhRLqA3l7F99x5C4=
-github.com/assurrussa/outbox/backends/pgsql v0.0.0-20260604173053-6e73a5543d74/go.mod h1:FhCfA+PMS0EaSCMowlI+YA8KrPPpumqJnEc1jm8dGpw=
+github.com/assurrussa/outbox v0.10.0 h1:hJ1ieBMhV2/UUxJ5a/KBMl7ePWSTMd6b8ADVlT13rbE=
+github.com/assurrussa/outbox v0.10.0/go.mod h1:fzNmhtaNHltUtnUsj5KMQPNlnEB9tY/Z5MfsxJYvBgg=
+github.com/assurrussa/outbox/backends/pgsql v0.10.0 h1:n/7YUGQLSE+xveTAc2Hr3y+kCK7qxNffbRHuMR8JfaI=
+github.com/assurrussa/outbox/backends/pgsql v0.10.0/go.mod h1:pgNRH+Zxphx7pu/FvARCl2CPHLrBpR0pH29B2OrYuJo=
 github.com/aws/aws-sdk-go-v2 v1.41.11 h1:9PRf7jyTMEUM6fuNRAJa2mO/skJfrF50rENJwf2LXqw=
 github.com/aws/aws-sdk-go-v2 v1.41.11/go.mod h1:iiUX27gOXRuYaoeUVXhUpPwjJHzISfPAjjcuhUbLSVs=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.12 h1:oRtsqWgxbpeXrOlxOoQStx2M9WNbIkPq4C4Xn1or6bc=

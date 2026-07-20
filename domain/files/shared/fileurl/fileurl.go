@@ -11,10 +11,7 @@ import (
 func BaseURL(cfg config.StorageConfig) string {
 	switch cfg.Driver {
 	case config.StorageDriverS3:
-		if base := sanitizeURL(cfg.S3.Host); base != "" {
-			return base
-		}
-		if base := sanitizeURL(cfg.S3.Endpoint); base != "" {
+		if base := sanitizeURL(cfg.Public.BaseURL); base != "" {
 			return base
 		}
 	case config.StorageDriverLocal:
@@ -26,12 +23,9 @@ func BaseURL(cfg config.StorageConfig) string {
 	return sanitizeURL(cfg.AppDomainURL)
 }
 
-// Bucket returns the configured bucket (for S3-like storage).
-func Bucket(cfg config.StorageConfig) string {
-	if cfg.Driver == config.StorageDriverS3 {
-		return strings.Trim(cfg.S3.Bucket, "/")
-	}
-
+// Bucket is retained for source compatibility. The portable delivery base is
+// already complete and never needs a provider bucket appended.
+func Bucket(_ config.StorageConfig) string {
 	return ""
 }
 
@@ -47,7 +41,7 @@ func ComposeFallback(baseURL, bucket, raw, fallback string) string {
 func Compose(baseURL, bucket, raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return strings.TrimRight(baseURL, "/")
+		return ""
 	}
 
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {

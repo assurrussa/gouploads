@@ -3,10 +3,13 @@ package clientresizer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/assurrussa/goshared/pkg/logger"
 	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
@@ -22,7 +25,10 @@ const (
 
 type httpClient interface {
 	DoWithRequestAndParse(ctx context.Context, request transporthttp.Request, data any) error
-	DoWithRequest(ctx context.Context, request transporthttp.Request) (*http.Response, error)
+}
+
+type artifactHTTPClient interface {
+	Do(request *http.Request) (*http.Response, error)
 }
 
 //go:generate options-gen -out-filename=service_options.gen.go -from-struct=Options
@@ -33,6 +39,7 @@ type Options struct {
 	imageResizerToken    string
 	videoResizerToken    string
 	tokenProvider        func(context.Context) (imageToken string, videoToken string)
+	artifactClient       artifactHTTPClient
 	logger               logger.Logger `option:"mandatory" validate:"required"`
 }
 
@@ -49,6 +56,13 @@ func Must(opts Options) *Service {
 }
 
 func New(opts Options) (*Service, error) {
+	if opts.artifactClient == nil {
+		opts.artifactClient = &http.Client{
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	}
 	if err := opts.Validate(); err != nil {
 		return nil, fmt.Errorf("validate options: %w", err)
 	}
@@ -83,51 +97,130 @@ func (s *Service) SendResize(ctx context.Context, req Request) (Response, error)
 }
 
 func (s *Service) DownloadFile(ctx context.Context, req RequestDownload) (ResponseDownload, error) {
-	rawToken := s.tokenForType(ctx, req.TypeMedia)
-
-	request := transporthttp.Request{
-		Method: http.MethodGet,
-		URL:    req.URL,
+	if err := req.Validate(); err != nil {
+		return ResponseDownload{}, fmt.Errorf("validate artifact request: %w", err)
 	}
-	if rawToken != "" {
-		if request.Headers == nil {
-			request.Headers = make(map[string]string)
+
+	artifactURL, err := validateArtifactURL(req.URL, s.mediaResizerURL(req.TypeMedia))
+	if err != nil {
+		return ResponseDownload{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, artifactURL.String(), nil)
+	if err != nil {
+		return ResponseDownload{}, fmt.Errorf("create artifact request: %w", err)
+	}
+
+	resp, err := s.artifactClient.Do(request)
+	if err != nil {
+		return ResponseDownload{}, fmt.Errorf(
+			"download artifact %s: %w",
+			safeURL(artifactURL),
+			redactTransportURL(err),
+		)
+	}
+	if resp == nil || resp.Body == nil {
+		return ResponseDownload{}, fmt.Errorf("download artifact %s: empty response", safeURL(artifactURL))
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		if _, finalURLErr := validateArtifactURL(resp.Request.URL.String(), s.mediaResizerURL(req.TypeMedia)); finalURLErr != nil {
+			_ = resp.Body.Close()
+			return ResponseDownload{}, fmt.Errorf("download artifact redirected outside allowed origin: %w", finalURLErr)
 		}
-		request.Headers[fiber.HeaderAuthorization] = "Bearer " + rawToken
-		request.Headers["X-API-Token"] = rawToken
-	}
-
-	resp, err := s.client.DoWithRequest(ctx, request)
-	if err != nil {
-		return ResponseDownload{}, fmt.Errorf("DoWithRequestAndParse : %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ResponseDownload{}, fmt.Errorf("ReadAll body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return ResponseDownload{}, fmt.Errorf("unexpected status code: %d %s", resp.StatusCode, string(data))
+		defer func() { _ = resp.Body.Close() }()
+		return ResponseDownload{}, fmt.Errorf(
+			"download artifact %s: unexpected status %d",
+			safeURL(artifactURL), resp.StatusCode,
+		)
 	}
 
 	s.logger.DebugContext(ctx,
-		"downloaded artifact for preset",
+		"opened artifact stream for preset",
 		slog.String("preset", req.Preset),
-		slog.String("url", req.URL),
-		slog.Int("bytes", len(data)),
-		slog.Float64("KB", float64(len(data))/1024),
-		slog.Float64("MB", float64(len(data))/(1024*1024)),
+		slog.String("url", safeURL(artifactURL)),
+		slog.Int64("content_length", resp.ContentLength),
 	)
 
 	return ResponseDownload{
-		Body: data,
+		Body:          resp.Body,
+		ContentType:   resp.Header.Get(fiber.HeaderContentType),
+		ContentLength: resp.ContentLength,
 	}, nil
 }
 
+func validateArtifactURL(rawArtifactURL, rawResizerURL string) (*url.URL, error) {
+	artifactURL, err := url.Parse(strings.TrimSpace(rawArtifactURL))
+	if err != nil {
+		return nil, errors.New("parse artifact URL")
+	}
+	resizerURL, err := url.Parse(strings.TrimSpace(rawResizerURL))
+	if err != nil {
+		return nil, fmt.Errorf("parse media-resizer URL: %w", err)
+	}
+	if artifactURL.User != nil || artifactURL.Scheme == "" || artifactURL.Host == "" {
+		return nil, errors.New("artifact URL requires an absolute origin without userinfo")
+	}
+	if !strings.EqualFold(artifactURL.Scheme, resizerURL.Scheme) || !strings.EqualFold(artifactURL.Host, resizerURL.Host) {
+		return nil, fmt.Errorf(
+			"artifact URL origin %s does not match media-resizer origin %s",
+			safeOrigin(artifactURL), safeOrigin(resizerURL),
+		)
+	}
+	if strings.EqualFold(artifactURL.Scheme, "http") && !isInternalHost(artifactURL.Hostname()) {
+		return nil, fmt.Errorf("external artifact origin %s requires HTTPS", safeOrigin(artifactURL))
+	}
+	if !strings.EqualFold(artifactURL.Scheme, "http") && !strings.EqualFold(artifactURL.Scheme, "https") {
+		return nil, errors.New("artifact URL scheme must be HTTP or HTTPS")
+	}
+
+	return artifactURL, nil
+}
+
+func isInternalHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".internal") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate()
+	}
+
+	return host != "" && !strings.Contains(host, ".")
+}
+
+func safeURL(value *url.URL) string {
+	if value == nil {
+		return ""
+	}
+
+	return safeOrigin(value) + value.EscapedPath()
+}
+
+func safeOrigin(value *url.URL) string {
+	if value == nil {
+		return ""
+	}
+
+	return strings.ToLower(value.Scheme) + "://" + value.Host
+}
+
+func redactTransportURL(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Err
+	}
+
+	return err
+}
+
 func (s *Service) getMediaResizerURL(req Request) string {
-	switch req.TypeMedia {
+	return s.mediaResizerURL(req.TypeMedia)
+}
+
+func (s *Service) mediaResizerURL(mediaType string) string {
+	switch mediaType {
 	case "video":
 		return s.mediaVideoResizerURL
 	default:

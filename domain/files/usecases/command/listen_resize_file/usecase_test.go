@@ -200,7 +200,7 @@ func createEvent(
 		ID:           task.ID,
 		FileName:     task.FileName,
 		OriginalName: task.OriginalFileName,
-		URL:          task.GetPublicURL(),
+		URL:          "",
 		Size:         task.Size,
 		MimeType:     task.MimeType,
 		Width:        task.GetWidth(),

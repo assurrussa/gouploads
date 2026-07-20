@@ -1,4 +1,4 @@
-package ceph_test
+package s3store_test
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	ceph2 "github.com/assurrussa/gouploads/infrastructure/storage/files/ceph"
-	cephmocks "github.com/assurrussa/gouploads/infrastructure/storage/files/ceph/mocks"
+	s3store "github.com/assurrussa/gouploads/infrastructure/storage/files/s3store"
+	s3storemocks "github.com/assurrussa/gouploads/infrastructure/storage/files/s3store/mocks"
 )
 
 func TestS3Storage_Upload(t *testing.T) {
@@ -22,13 +22,13 @@ func TestS3Storage_Upload(t *testing.T) {
 		name    string
 		bucket  string
 		err     error
-		prepare func(ctx context.Context, client *cephmocks.MockS3Client, file io.Reader, err error)
+		prepare func(ctx context.Context, client *s3storemocks.MockS3Client, file io.Reader, err error)
 	}{
 		{
 			name:   "base",
 			bucket: "test_bucket",
 			err:    nil,
-			prepare: func(ctx context.Context, client *cephmocks.MockS3Client, file io.Reader, err error) {
+			prepare: func(ctx context.Context, client *s3storemocks.MockS3Client, file io.Reader, err error) {
 				client.EXPECT().Upload(ctx, gomock.Any(), file).Return(err)
 			},
 		},
@@ -36,7 +36,7 @@ func TestS3Storage_Upload(t *testing.T) {
 			name:   "base",
 			bucket: "test_bucket",
 			err:    errors.New("error test"),
-			prepare: func(ctx context.Context, client *cephmocks.MockS3Client, file io.Reader, err error) {
+			prepare: func(ctx context.Context, client *s3storemocks.MockS3Client, file io.Reader, err error) {
 				client.EXPECT().Upload(ctx, gomock.Any(), file).Return(err)
 			},
 		},
@@ -48,14 +48,14 @@ func TestS3Storage_Upload(t *testing.T) {
 			ctx := context.Background()
 			mockCtl := gomock.NewController(t)
 			defer mockCtl.Finish()
-			mockClient := cephmocks.NewMockS3Client(mockCtl)
+			mockClient := s3storemocks.NewMockS3Client(mockCtl)
 			file, err := os.Open("test_data/GeoIP2-City-Test.mmdb")
 			tt.prepare(ctx, mockClient, file, tt.err)
 			defer func() { _ = file.Close() }()
 			require.NoError(t, err)
 			bucketKey := "keyname.mmdb"
-			domain := ceph2.NewDomainHost("https://test.app/", tt.bucket, "public-read", true, false, false)
-			storage := ceph2.NewS3Storage(mockClient, domain)
+			domain := s3store.NewDomainHost("https://test.app/", tt.bucket, "staging-bucket", "staging/v1/tus")
+			storage := s3store.NewS3Storage(mockClient, domain)
 			bucketkey, err := storage.UploadFile(ctx, file, bucketKey, "text/octet-stream")
 			if tt.err != nil {
 				require.Empty(t, bucketkey)
@@ -63,7 +63,7 @@ func TestS3Storage_Upload(t *testing.T) {
 				assert.ErrorIs(t, err, tt.err)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, "https://test.app/"+tt.bucket+"/"+bucketKey, bucketkey)
+				assert.Empty(t, bucketkey)
 			}
 		})
 	}
@@ -94,13 +94,13 @@ func TestS3Storage_CheckBucketExists(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
-			m := cephmocks.NewMockClient(ctrl)
+			m := s3storemocks.NewMockClient(ctrl)
 			m.EXPECT().
 				HeadBucket(gomock.Any(), &s3sdk.HeadBucketInput{Bucket: aws.String(tt.bucket)}).
 				Return(&s3sdk.HeadBucketOutput{}, tt.err)
 
-			domain := ceph2.NewDomainHost(tt.host, tt.bucket, "public-read", false, false, false)
-			client := ceph2.NewS3Storage(ceph2.News3Client(m), domain)
+			domain := s3store.NewDomainHost(tt.host, tt.bucket, "staging-bucket", "staging/v1/tus")
+			client := s3store.NewS3Storage(s3store.News3Client(m), domain)
 			err := client.CheckBucketExists(context.Background())
 			if tt.err != nil {
 				require.Error(t, err)

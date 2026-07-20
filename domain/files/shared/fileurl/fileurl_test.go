@@ -29,24 +29,24 @@ func TestBaseURLLocalRelative(t *testing.T) {
 	require.Equal(t, "https://app.local/uploads/public", fileurl.BaseURL(cfg))
 }
 
-func TestBaseURLS3Host(t *testing.T) {
+func TestBaseURLS3PublicBase(t *testing.T) {
 	cfg := config.StorageConfig{
 		AppDomainURL: "https://app.local",
 		Driver:       config.StorageDriverS3,
-		S3:           config.StorageS3Config{Host: "https://ceph.example"},
+		Public:       config.StoragePublicConfig{BaseURL: "https://media.example"},
 	}
 
-	require.Equal(t, "https://ceph.example", fileurl.BaseURL(cfg))
+	require.Equal(t, "https://media.example", fileurl.BaseURL(cfg))
 }
 
-func TestBaseURLS3Endpoint(t *testing.T) {
+func TestBaseURLS3DoesNotExposeEndpoint(t *testing.T) {
 	cfg := config.StorageConfig{
 		AppDomainURL: "https://app.local",
 		Driver:       config.StorageDriverS3,
-		S3:           config.StorageS3Config{Endpoint: "ceph.internal"},
+		S3:           config.StorageS3Config{Endpoint: "s3store.internal"},
 	}
 
-	require.Equal(t, "https://ceph.internal", fileurl.BaseURL(cfg))
+	require.Equal(t, "https://app.local", fileurl.BaseURL(cfg))
 }
 
 func TestBaseURLFallback(t *testing.T) {
@@ -63,7 +63,7 @@ func TestBucketS3(t *testing.T) {
 		S3:     config.StorageS3Config{Bucket: "/uploads/"},
 	}
 
-	require.Equal(t, "uploads", fileurl.Bucket(cfg))
+	require.Empty(t, fileurl.Bucket(cfg))
 }
 
 func TestBucketNonS3(t *testing.T) {
@@ -143,7 +143,7 @@ func TestCompose(t *testing.T) {
 			base:   "https://files.example/static/",
 			bucket: "assets",
 			raw:    "",
-			want:   "https://files.example/static",
+			want:   "",
 		},
 		{
 			name: "base-without-scheme",

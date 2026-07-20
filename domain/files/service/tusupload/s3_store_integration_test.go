@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	testshelpers "github.com/assurrussa/gouploads/domain/files/tests"
-	"github.com/assurrussa/gouploads/infrastructure/storage/files/ceph"
+	"github.com/assurrussa/gouploads/infrastructure/storage/files/s3store"
 )
 
 func TestIntegration_S3Store_IntegrationFlow(t *testing.T) {
@@ -47,9 +47,8 @@ func TestIntegration_S3Store_IntegrationFlow(t *testing.T) {
 
 	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if _, err := client.ListBuckets(pingCtx, &s3.ListBucketsInput{}); err != nil {
-		t.Skipf("s3 is not available: %v", err)
-	}
+	_, err := client.ListBuckets(pingCtx, &s3.ListBucketsInput{})
+	require.NoError(t, err, "mandatory S3 integration dependency is unavailable")
 
 	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
 		var owned *s3types.BucketAlreadyOwnedByYou
@@ -64,16 +63,15 @@ func TestIntegration_S3Store_IntegrationFlow(t *testing.T) {
 	repo, err := newPostgresSessionRepository(database)
 	require.NoError(t, err)
 
-	disableSSL := strings.HasPrefix(endpoint, "http://")
-	domain := ceph.NewDomainHost(endpoint, bucket, "public-read", true, disableSSL, true)
+	domain := s3store.NewDomainHost(endpoint, bucket, "", "staging/v1/tus")
 	storeA, err := NewS3Store(client, domain, repo, S3StoreConfig{
 		Prefix:   defaultS3StorePrefix,
-		PartSize: ceph.MinPartSize,
+		PartSize: s3store.MinPartSize,
 	})
 	require.NoError(t, err)
 	storeB, err := NewS3Store(client, domain, repo, S3StoreConfig{
 		Prefix:   defaultS3StorePrefix,
-		PartSize: ceph.MinPartSize,
+		PartSize: s3store.MinPartSize,
 	})
 	require.NoError(t, err)
 

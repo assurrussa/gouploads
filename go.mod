@@ -9,8 +9,8 @@ require (
 	github.com/assurrussa/godi v0.9.3
 	github.com/assurrussa/goredis v0.4.5
 	github.com/assurrussa/goshared v1.0.3
-	github.com/assurrussa/outbox v0.9.8
-	github.com/assurrussa/outbox/backends/pgsql v0.0.0-20260604173053-6e73a5543d74
+	github.com/assurrussa/outbox v0.10.0
+	github.com/assurrussa/outbox/backends/pgsql v0.10.0
 	github.com/aws/aws-sdk-go-v2 v1.41.11
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.21
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.103.1

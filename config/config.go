@@ -11,11 +11,17 @@ const (
 type StorageConfig struct {
 	AppDomainURL string              `toml:"app_domain_url" long:"app-domain-url" env:"APP_DOMAIN_URL" value-default:"https://localhost"`
 	Driver       string              `toml:"driver" long:"storage-driver" env:"STORAGE_DRIVER" value-default:"local" validate:"required,oneof=local s3"`
+	Public       StoragePublicConfig `toml:"public"`
 	Local        StorageLocalConfig  `toml:"local"`
 	S3           StorageS3Config     `toml:"s3"`
 	Image        ImagePipelineConfig `toml:"image_pipeline"`
 	Video        VideoPipelineConfig `toml:"video_pipeline"`
 	Tus          StorageTusConfig    `toml:"tus"`
+}
+
+type StoragePublicConfig struct {
+	BaseURL string `toml:"base_url" long:"storage-public-base-url" env:"STORAGE_PUBLIC_BASE_URL" validate:"omitempty,url"`
+	Prefix  string `toml:"prefix" long:"storage-public-prefix" env:"STORAGE_PUBLIC_PREFIX" value-default:"media/v1" validate:"required"`
 }
 
 type StorageLocalConfig struct {
@@ -24,30 +30,26 @@ type StorageLocalConfig struct {
 }
 
 type StorageS3Config struct {
-	Endpoint       string        `toml:"endpoint" long:"storage-s3-endpoint" env:"STORAGE_S3_ENDPOINT"`
-	Host           string        `toml:"host" long:"storage-s3-host" env:"STORAGE_S3_HOST"`
-	SourceHost     string        `toml:"source_host" long:"storage-s3-source-host" env:"STORAGE_S3_SOURCE_HOST" validate:"omitempty,url"`
-	SourceURLTTL   time.Duration `toml:"source_url_ttl" long:"storage-s3-source-url-ttl" env:"STORAGE_S3_SOURCE_URL_TTL" value-default:"6h" validate:"min=1m,max=168h"`
-	ACL            string        `toml:"acl" long:"storage-s3-acl" env:"STORAGE_S3_ACL" value-default:"public-read"`
+	Endpoint       string        `toml:"endpoint" long:"storage-s3-endpoint" env:"STORAGE_S3_ENDPOINT" validate:"omitempty,url"`
+	SourceURLTTL   time.Duration `toml:"source_url_ttl" long:"storage-s3-source-url-ttl" env:"STORAGE_S3_SOURCE_URL_TTL" value-default:"15m" validate:"min=1m,max=168h"`
 	Region         string        `toml:"region" long:"storage-s3-region" env:"STORAGE_S3_REGION"`
 	Bucket         string        `toml:"bucket" long:"storage-s3-bucket" env:"STORAGE_S3_BUCKET"`
+	StagingBucket  string        `toml:"staging_bucket" long:"storage-s3-staging-bucket" env:"STORAGE_S3_STAGING_BUCKET"`
 	AccessKey      string        `toml:"access_key" long:"storage-s3-access-key" env:"STORAGE_S3_ACCESS_KEY"`
 	SecretKey      string        `toml:"secret_key" long:"storage-s3-secret-key" env:"STORAGE_S3_SECRET_KEY"`
 	SessionToken   string        `toml:"session_token" long:"storage-s3-session-token" env:"STORAGE_S3_SESSION_TOKEN"`
 	ForcePathStyle bool          `toml:"force_path_style" long:"storage-s3-force-path-style" env:"STORAGE_S3_FORCE_PATH_STYLE" value-default:"false"`
-	TransformHost  bool          `toml:"transform_host" long:"storage-s3-transform-host" env:"STORAGE_S3_TRANSFORM_HOST" value-default:"true"`
-	DisableSSL     bool          `toml:"disable_ssl" long:"storage-s3-disable-ssl" env:"STORAGE_S3_DISABLE_SSL" value-default:"false"`
-	Timeout        time.Duration `toml:"timeout" long:"storage-s3-timeout" env:"STORAGE_S3_TIMEOUT" value-default:"20s" validate:"min=1s,max=5m"`
+	Timeout        time.Duration `toml:"timeout" long:"storage-s3-timeout" env:"STORAGE_S3_TIMEOUT" value-default:"30s" validate:"min=1s,max=5m"`
 	MaxRetries     int           `toml:"max_retries" long:"storage-s3-max-retries" env:"STORAGE_S3_MAX_RETRIES" value-default:"10" validate:"min=1,max=50"`
 }
 
 type StorageTusConfig struct {
-	PartSize         ParseSize     `toml:"part_size" long:"storage-tus-part-size" env:"STORAGE_TUS_PART_SIZE" value-default:"5MB"`
-	SessionTTL       time.Duration `toml:"session_ttl" long:"storage-tus-session-ttl" env:"STORAGE_TUS_SESSION_TTL" value-default:"24h" validate:"min=1m"`
-	LeaseTTL         time.Duration `toml:"lease_ttl" long:"storage-tus-lease-ttl" env:"STORAGE_TUS_LEASE_TTL" value-default:"30s" validate:"min=1s,max=5m"`
-	QuarantinePrefix string        `toml:"quarantine_prefix" long:"storage-tus-quarantine-prefix" env:"STORAGE_TUS_QUARANTINE_PREFIX" value-default:"quarantine/uploads" validate:"required"`
-	CleanupInterval  time.Duration `toml:"cleanup_interval" long:"storage-tus-cleanup-interval" env:"STORAGE_TUS_CLEANUP_INTERVAL" value-default:"1h" validate:"min=1m"`
-	CleanupSpec      string        `toml:"cleanup_spec" long:"storage-tus-cleanup-spec" env:"STORAGE_TUS_CLEANUP_SPEC"`
+	PartSize        ParseSize     `toml:"part_size" long:"storage-tus-part-size" env:"STORAGE_TUS_PART_SIZE" value-default:"5MB"`
+	SessionTTL      time.Duration `toml:"session_ttl" long:"storage-tus-session-ttl" env:"STORAGE_TUS_SESSION_TTL" value-default:"24h" validate:"min=1m"`
+	LeaseTTL        time.Duration `toml:"lease_ttl" long:"storage-tus-lease-ttl" env:"STORAGE_TUS_LEASE_TTL" value-default:"30s" validate:"min=1s,max=5m"`
+	StagingPrefix   string        `toml:"staging_prefix" long:"storage-tus-staging-prefix" env:"STORAGE_TUS_STAGING_PREFIX" value-default:"staging/v1/tus" validate:"required"`
+	CleanupInterval time.Duration `toml:"cleanup_interval" long:"storage-tus-cleanup-interval" env:"STORAGE_TUS_CLEANUP_INTERVAL" value-default:"1h" validate:"min=1m"`
+	CleanupSpec     string        `toml:"cleanup_spec" long:"storage-tus-cleanup-spec" env:"STORAGE_TUS_CLEANUP_SPEC"`
 }
 
 type VideoPipelineConfig struct {

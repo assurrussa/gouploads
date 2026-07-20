@@ -18,7 +18,7 @@ import (
 	awss3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/require"
 
-	"github.com/assurrussa/gouploads/infrastructure/storage/files/ceph"
+	"github.com/assurrussa/gouploads/infrastructure/storage/files/s3store"
 )
 
 func TestS3Store_DurableCrossReplicaResumeAndIdempotentFinalize(t *testing.T) {
@@ -30,7 +30,7 @@ func TestS3Store_DurableCrossReplicaResumeAndIdempotentFinalize(t *testing.T) {
 	storeA := newTestS3Store(t, client, repo)
 	storeB := newTestS3Store(t, client, repo)
 
-	firstChunk := make([]byte, ceph.MinPartSize)
+	firstChunk := make([]byte, s3store.MinPartSize)
 	lastChunk := []byte("tail")
 	session, err := storeA.Create(ctx, CreateRequest{
 		UploadLength: int64(len(firstChunk) + len(lastChunk)),
@@ -60,8 +60,8 @@ func TestS3Store_DurableCrossReplicaResumeAndIdempotentFinalize(t *testing.T) {
 	require.Equal(t, session.UploadLength, result.Size)
 	require.Equal(t, session.FinalizationKey, result.FinalizationKey)
 	require.True(t, result.Quarantined)
-	require.Contains(t, result.RelativePath, "quarantine/uploads/exercise/12/")
-	require.NotEmpty(t, result.URL)
+	require.Equal(t, "staging/v1/tus/"+session.ID+"/source.png", result.RelativePath)
+	require.Empty(t, result.URL)
 
 	repeated, err := storeA.Complete(ctx, session.ID)
 	require.NoError(t, err)
@@ -69,7 +69,9 @@ func TestS3Store_DurableCrossReplicaResumeAndIdempotentFinalize(t *testing.T) {
 
 	client.mu.Lock()
 	require.Len(t, client.createInputs, 1)
-	require.Equal(t, awss3types.ObjectCannedACLPrivate, client.createInputs[0].ACL)
+	require.Empty(t, client.createInputs[0].ACL)
+	require.Equal(t, "staging-bucket", aws.ToString(client.createInputs[0].Bucket))
+	require.Equal(t, "private,no-store", aws.ToString(client.createInputs[0].CacheControl))
 	require.Equal(t, awss3types.ChecksumAlgorithmSha256, client.createInputs[0].ChecksumAlgorithm)
 	require.Len(t, client.uploadInputs, 2)
 	require.Len(t, client.completeInputs, 1)
@@ -103,6 +105,68 @@ func TestS3Store_FinalizesWhenListPartsOmitsChecksum(t *testing.T) {
 	client.mu.Lock()
 	require.Len(t, client.completeInputs, 1)
 	require.Nil(t, client.completeInputs[0].MultipartUpload.Parts[0].ChecksumSHA256)
+	client.mu.Unlock()
+}
+
+func TestS3Store_DeleteReadyKeepsCompletedStagingObjectForHandoff(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := newMemorySessionRepository()
+	client := newFakeS3Client()
+	store := newTestS3Store(t, client, repo)
+	payload := []byte("complete payload")
+
+	session, err := store.Create(ctx, CreateRequest{
+		UploadLength: int64(len(payload)),
+		OriginalName: "source.txt",
+		FileName:     "source.txt",
+	})
+	require.NoError(t, err)
+	_, err = store.Append(ctx, session.ID, 0, payload, "text/plain")
+	require.NoError(t, err)
+	_, err = store.Complete(ctx, session.ID)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Delete(ctx, session.ID))
+	_, err = repo.Get(ctx, session.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	client.mu.Lock()
+	require.Empty(t, client.deleteInputs)
+	client.mu.Unlock()
+}
+
+func TestS3Store_CleanupRemovesExpiredReadyStagingObject(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := newMemorySessionRepository()
+	client := newFakeS3Client()
+	store := newTestS3Store(t, client, repo)
+	payload := []byte("complete payload")
+
+	session, err := store.Create(ctx, CreateRequest{
+		UploadLength: int64(len(payload)),
+		OriginalName: "source.txt",
+		FileName:     "source.txt",
+	})
+	require.NoError(t, err)
+	_, err = store.Append(ctx, session.ID, 0, payload, "text/plain")
+	require.NoError(t, err)
+	_, err = store.Complete(ctx, session.ID)
+	require.NoError(t, err)
+
+	removed, err := store.Cleanup(ctx, session.CreatedAt.Add(2*defaultSessionTTL))
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	_, err = repo.Get(ctx, session.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	client.mu.Lock()
+	require.Len(t, client.deleteInputs, 1)
+	require.Equal(t, "staging-bucket", aws.ToString(client.deleteInputs[0].Bucket))
+	require.Equal(t, "staging/v1/tus/"+session.ID+"/source.txt", aws.ToString(client.deleteInputs[0].Key))
 	client.mu.Unlock()
 }
 
@@ -305,7 +369,7 @@ func TestS3Store_RejectsSmallIntermediateChunk(t *testing.T) {
 	ctx := context.Background()
 	store := newTestS3Store(t, newFakeS3Client(), newMemorySessionRepository())
 	session, err := store.Create(ctx, CreateRequest{
-		UploadLength: int64(ceph.MinPartSize) + 1,
+		UploadLength: int64(s3store.MinPartSize) + 1,
 		OriginalName: "test.png",
 		FileName:     "test.png",
 	})
@@ -317,10 +381,10 @@ func TestS3Store_RejectsSmallIntermediateChunk(t *testing.T) {
 
 func newTestS3Store(t *testing.T, client s3Client, repo sessionRepository) *S3Store {
 	t.Helper()
-	domain := ceph.NewDomainHost("https://storage.example.com", "bucket", "public-read", true, false, true)
+	domain := s3store.NewDomainHost("https://storage.example.com", "bucket", "staging-bucket", "staging/v1/tus")
 	store, err := NewS3Store(client, domain, repo, S3StoreConfig{
 		Prefix:   defaultS3StorePrefix,
-		PartSize: ceph.MinPartSize,
+		PartSize: s3store.MinPartSize,
 		TTL:      defaultSessionTTL,
 		LeaseTTL: defaultLeaseTTL,
 	})
@@ -533,7 +597,7 @@ func (r *memorySessionRepository) ListExpired(
 	ids := make([]string, 0, limit)
 	for id, session := range r.sessions {
 		lease := r.leases[id]
-		if session.Status != StatusReady && session.ExpiresAt.Before(before) && !lease.until.After(r.clock) {
+		if session.ExpiresAt.Before(before) && !lease.until.After(r.clock) {
 			ids = append(ids, id)
 		}
 	}
@@ -583,6 +647,7 @@ type fakeS3Client struct {
 	uploadInputs          []s3.UploadPartInput
 	completeInputs        []s3.CompleteMultipartUploadInput
 	abortInputs           []s3.AbortMultipartUploadInput
+	deleteInputs          []s3.DeleteObjectInput
 	uploads               map[string]*fakeMultipartUpload
 	uploadStarted         chan struct{}
 	releaseUpload         chan struct{}
@@ -785,6 +850,22 @@ func (f *fakeS3Client) HeadObject(
 		}
 	}
 	return nil, errors.New("object not found")
+}
+
+func (f *fakeS3Client) DeleteObject(
+	_ context.Context,
+	input *s3.DeleteObjectInput,
+	_ ...func(*s3.Options),
+) (*s3.DeleteObjectOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleteInputs = append(f.deleteInputs, *input)
+	for uploadID, upload := range f.uploads {
+		if upload.key == aws.ToString(input.Key) && upload.completed {
+			delete(f.uploads, uploadID)
+		}
+	}
+	return &s3.DeleteObjectOutput{}, nil
 }
 
 var (

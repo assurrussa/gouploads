@@ -22,12 +22,14 @@
 - **TUS Fence**: Monotonic PostgreSQL session revision bound to a short lease.
   Only its current owner may advance the durable offset or finalize multipart
   state.
-- **Quarantine Object**: Private S3 multipart object that is not public merely
-  because TUS protocol finalization succeeded. Promotion follows host/CMS media
-  validation.
+- **Staging Object**: Private S3 multipart object under `staging/v1/tus` that
+  is never a public delivery location and is removed after successful media
+  finalization.
+- **Delivery Base**: Canonical full URL prefix used only to compose completed
+  response/event URLs from durable relative keys.
 - **Source URL Resolver**: Narrow dispatch-time policy that converts a durable
-  local/S3 source reference into the HTTP URL given to media-resizer without
-  expanding the storage CRUD interface.
+  local/S3 source reference into a direct, time-limited URL given to
+  media-resizer without expanding the storage CRUD interface.
 
 ## Rules
 

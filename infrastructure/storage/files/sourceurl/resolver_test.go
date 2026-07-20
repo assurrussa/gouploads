@@ -12,58 +12,44 @@ import (
 	uploadconfig "github.com/assurrussa/gouploads/config"
 )
 
-func TestS3ResolverPresignsAndRewritesOnlySchemeAndHost(t *testing.T) {
+func TestS3ResolverPresignsDirectStagingOrigin(t *testing.T) {
 	resolver, err := New(uploadconfig.StorageConfig{
 		Driver: uploadconfig.StorageDriverS3,
+		Public: uploadconfig.StoragePublicConfig{BaseURL: "https://media.example.test"},
 		S3: uploadconfig.StorageS3Config{
 			Endpoint:       "https://storage.example.test",
-			SourceHost:     "https://source-proxy.example.test:8443",
-			SourceURLTTL:   6 * time.Hour,
+			SourceURLTTL:   15 * time.Minute,
 			Region:         "test-region-1",
-			Bucket:         "private-media",
+			Bucket:         "public-media",
+			StagingBucket:  "private-media",
 			AccessKey:      "test-access-key",
 			SecretKey:      "test-secret-key",
 			ForcePathStyle: true,
 		},
+		Tus: uploadconfig.StorageTusConfig{StagingPrefix: "staging/v1/tus"},
 	})
 	require.NoError(t, err)
 
 	got, err := resolver.Resolve(
 		context.Background(),
-		"https://storage.example.test/private-media/quarantine/uploads/image.jpg",
+		"staging/v1/tus/session-1/source.jpg",
 	)
 	require.NoError(t, err)
 
 	parsed, err := url.Parse(got)
 	require.NoError(t, err)
 	require.Equal(t, "https", parsed.Scheme)
-	require.Equal(t, "source-proxy.example.test:8443", parsed.Host)
-	require.Equal(t, "/private-media/quarantine/uploads/image.jpg", parsed.Path)
-	require.Equal(t, "21600", parsed.Query().Get("X-Amz-Expires"))
+	require.Equal(t, "storage.example.test", parsed.Host)
+	require.Equal(t, "/private-media/staging/v1/tus/session-1/source.jpg", parsed.Path)
+	require.Equal(t, "900", parsed.Query().Get("X-Amz-Expires"))
 	require.NotEmpty(t, parsed.Query().Get("X-Amz-Signature"))
 	require.Equal(t, "host", parsed.Query().Get("X-Amz-SignedHeaders"))
 }
 
-func TestRewriteURLHostPreservesSignedPathAndQuery(t *testing.T) {
-	raw := "https://storage.example.test/private-media/a%2Fb.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc%2Fdef"
-	original, err := url.Parse(raw)
-	require.NoError(t, err)
-
-	got, err := rewriteURLHost(raw, "http://proxy.example.test:8080")
-	require.NoError(t, err)
-	rewritten, err := url.Parse(got)
-	require.NoError(t, err)
-
-	require.Equal(t, "http", rewritten.Scheme)
-	require.Equal(t, "proxy.example.test:8080", rewritten.Host)
-	require.Equal(t, original.Path, rewritten.Path)
-	require.Equal(t, original.RawPath, rewritten.RawPath)
-	require.Equal(t, original.RawQuery, rewritten.RawQuery)
-}
-
-func TestS3ResolverFallsBackToPresignedOriginURL(t *testing.T) {
+func TestS3ResolverUsesPublicBucketWhenStagingBucketIsEmpty(t *testing.T) {
 	resolver, err := New(uploadconfig.StorageConfig{
 		Driver: uploadconfig.StorageDriverS3,
+		Public: uploadconfig.StoragePublicConfig{BaseURL: "https://media.example.test"},
 		S3: uploadconfig.StorageS3Config{
 			Endpoint:       "https://storage.example.test",
 			SourceURLTTL:   time.Hour,
@@ -76,7 +62,7 @@ func TestS3ResolverFallsBackToPresignedOriginURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	got, err := resolver.Resolve(context.Background(), "private-media/quarantine/uploads/image.jpg")
+	got, err := resolver.Resolve(context.Background(), "private-media/staging/v1/tus/session/image.jpg")
 	require.NoError(t, err)
 	parsed, err := url.Parse(got)
 	require.NoError(t, err)
@@ -94,9 +80,10 @@ func TestLocalResolverKeepsExistingURL(t *testing.T) {
 	require.Equal(t, source, got)
 }
 
-func TestS3ResolverValidatesTTLAndSourceHost(t *testing.T) {
+func TestS3ResolverValidatesTTLAndAppliesDefault(t *testing.T) {
 	base := uploadconfig.StorageConfig{
 		Driver: uploadconfig.StorageDriverS3,
+		Public: uploadconfig.StoragePublicConfig{BaseURL: "https://media.example.test"},
 		S3: uploadconfig.StorageS3Config{
 			Endpoint:       "https://storage.example.test",
 			SourceURLTTL:   DefaultS3URLTTL,
@@ -106,6 +93,7 @@ func TestS3ResolverValidatesTTLAndSourceHost(t *testing.T) {
 			SecretKey:      "test-secret-key",
 			ForcePathStyle: true,
 		},
+		Tus: uploadconfig.StorageTusConfig{StagingPrefix: "staging/v1/tus"},
 	}
 
 	invalidTTL := base
@@ -113,14 +101,31 @@ func TestS3ResolverValidatesTTLAndSourceHost(t *testing.T) {
 	_, err := New(invalidTTL)
 	require.ErrorContains(t, err, "TTL")
 
-	invalidHost := base
-	invalidHost.S3.SourceHost = "https://proxy.example.test/prefix?token=secret"
-	_, err = New(invalidHost)
-	require.ErrorContains(t, err, "must not contain")
-
 	defaultTTL := base
 	defaultTTL.S3.SourceURLTTL = 0
 	resolver, err := New(defaultTTL)
 	require.NoError(t, err)
 	require.NotNil(t, resolver)
+}
+
+func TestS3ResolverRejectsSourceOutsideStagingPrefix(t *testing.T) {
+	t.Parallel()
+
+	resolver, err := New(uploadconfig.StorageConfig{
+		Driver: uploadconfig.StorageDriverS3,
+		Public: uploadconfig.StoragePublicConfig{BaseURL: "https://media.example.test"},
+		S3: uploadconfig.StorageS3Config{
+			Endpoint:     "https://storage.example.test",
+			Region:       "test-region-1",
+			Bucket:       "media",
+			AccessKey:    "test-access-key",
+			SecretKey:    "test-secret-key",
+			SourceURLTTL: time.Hour,
+		},
+		Tus: uploadconfig.StorageTusConfig{StagingPrefix: "staging/v1/tus"},
+	})
+	require.NoError(t, err)
+
+	_, err = resolver.Resolve(context.Background(), "media/v1/post/1/main.webp")
+	require.ErrorContains(t, err, "outside the configured staging prefix")
 }

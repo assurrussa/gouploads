@@ -1,12 +1,12 @@
 # Project Map
 
-Verified against the local repository on 2026-07-10.
+Verified against the local repository on 2026-07-20.
 
 ## Purpose
 
 `gouploads` is a reusable Go module for upload/storage orchestration. It gives
 host applications a stable embedding facade for file uploads, TUS resumable
-uploads, local and S3/Ceph storage, media-processing callbacks, cleanup tasks,
+  uploads, local and generic S3 storage, media-processing callbacks, cleanup tasks,
 and upload-related outbox jobs.
 
 The module path is `github.com/assurrussa/gouploads`; `go.mod` currently uses
@@ -41,7 +41,7 @@ external consumer manifest and release docs explicitly promote them.
 - `domain/files`: internal upload domain. It contains models, repositories,
   services, HTTP transport, use cases, outbox jobs, shared events, TUS store
   contracts, and internal test helpers.
-- `infrastructure/storage/files`: internal local and Ceph/S3 storage adapters.
+- `infrastructure/storage/files`: internal local and S3 storage adapters.
 - `config`: internal storage, TUS, image pipeline, and video pipeline config
   structs re-exported narrowly through `host`.
 - `di`: internal dependency module bootstrap re-exported through
@@ -100,21 +100,19 @@ Storage driver and URL:
 - `STORAGE_LOCAL_ROOT`
 - `STORAGE_LOCAL_BASE_URL`
 
-S3/Ceph:
+Public delivery and S3:
 
+- `STORAGE_PUBLIC_BASE_URL`
+- `STORAGE_PUBLIC_PREFIX` (default `media/v1`)
 - `STORAGE_S3_ENDPOINT`
-- `STORAGE_S3_HOST`
-- `STORAGE_S3_SOURCE_HOST`
-- `STORAGE_S3_SOURCE_URL_TTL` (default `6h`, maximum `168h`)
-- `STORAGE_S3_ACL`
+- `STORAGE_S3_SOURCE_URL_TTL` (default `15m`, maximum `168h`)
 - `STORAGE_S3_REGION`
 - `STORAGE_S3_BUCKET`
+- `STORAGE_S3_STAGING_BUCKET` (optional; empty means public bucket)
 - `STORAGE_S3_ACCESS_KEY`
 - `STORAGE_S3_SECRET_KEY`
 - `STORAGE_S3_SESSION_TOKEN`
 - `STORAGE_S3_FORCE_PATH_STYLE`
-- `STORAGE_S3_TRANSFORM_HOST`
-- `STORAGE_S3_DISABLE_SSL`
 - `STORAGE_S3_TIMEOUT`
 - `STORAGE_S3_MAX_RETRIES`
 
@@ -123,7 +121,7 @@ TUS:
 - `STORAGE_TUS_PART_SIZE`
 - `STORAGE_TUS_SESSION_TTL`
 - `STORAGE_TUS_LEASE_TTL`
-- `STORAGE_TUS_QUARANTINE_PREFIX`
+- `STORAGE_TUS_STAGING_PREFIX` (default `staging/v1/tus`)
 - `STORAGE_TUS_CLEANUP_INTERVAL`
 - `STORAGE_TUS_CLEANUP_SPEC`
 

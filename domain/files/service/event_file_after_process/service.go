@@ -12,6 +12,7 @@ import (
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	"github.com/assurrussa/gouploads/domain/files/shared/fileurl"
 )
 
 //go:generate toolsmocks
@@ -37,6 +38,7 @@ type Options struct {
 	eventStream        eventstream.EventStream `option:"mandatory" validate:"required"`
 	logger             logger.Logger           `option:"mandatory" validate:"required"`
 	fnCallAfterProcess FnCallAfterProcess
+	deliveryBaseURL    string `validate:"omitempty,url"`
 }
 
 type Service struct {
@@ -103,7 +105,7 @@ func (j *Service) handle(ctx context.Context, payload string, fnCall FnCallAfter
 		}
 
 		taskLogger.ErrorContext(ctx, "failed deleted file", logger.Error(errReturn))
-		j.publish(ctx, data.UserID, buildFailedEvent(file, errReturn, data.EventType))
+		j.publish(ctx, data.UserID, j.buildFailedEvent(file, errReturn, data.EventType))
 	}()
 
 	err = j.transactor.RunInTx(ctx, func(ctx context.Context) error {
@@ -117,7 +119,7 @@ func (j *Service) handle(ctx context.Context, payload string, fnCall FnCallAfter
 		return fmt.Errorf("trx: %w", err)
 	}
 
-	j.publish(ctx, data.UserID, buildCompletedEvent(file, data.EventType))
+	j.publish(ctx, data.UserID, j.buildCompletedEvent(file, data.EventType))
 
 	return nil
 }
@@ -138,12 +140,16 @@ func (j *Service) publish(ctx context.Context, userID sharedtypes.UserID, event 
 	}
 }
 
-func buildCompletedEvent(file model.File, eventTrigger string) shared.EventAfterProcess {
-	return shared.NewEventAfterProcess(file.ID, file.GetPublicURL(), shared.StatusCompleted, eventTrigger)
+func (j *Service) buildCompletedEvent(file model.File, eventTrigger string) shared.EventAfterProcess {
+	return shared.NewEventAfterProcess(file.ID, j.publicURL(file), shared.StatusCompleted, eventTrigger)
 }
 
-func buildFailedEvent(file model.File, err error, eventTrigger string) shared.EventAfterProcess {
-	event := shared.NewEventAfterProcess(file.ID, file.GetPublicURL(), shared.StatusFailed, eventTrigger)
+func (j *Service) buildFailedEvent(file model.File, err error, eventTrigger string) shared.EventAfterProcess {
+	event := shared.NewEventAfterProcess(file.ID, j.publicURL(file), shared.StatusFailed, eventTrigger)
 	event.Error = err.Error()
 	return event
+}
+
+func (j *Service) publicURL(file model.File) string {
+	return fileurl.Compose(j.deliveryBaseURL, "", file.GetPublicURL())
 }

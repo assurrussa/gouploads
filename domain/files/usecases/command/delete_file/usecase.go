@@ -18,6 +18,7 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/model"
 	eventfileafterprocess "github.com/assurrussa/gouploads/domain/files/service/event_file_after_process"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	"github.com/assurrussa/gouploads/domain/files/shared/fileurl"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 )
 
@@ -43,12 +44,13 @@ type outboxPutter interface {
 
 //go:generate options-gen -out-filename=usecase_options.gen.go -from-struct=Options
 type Options struct {
-	transactor  transactor              `option:"mandatory" validate:"required"`
-	files       fileRepository          `option:"mandatory" validate:"required"`
-	eventStream eventstream.EventStream `option:"mandatory" validate:"required"`
-	logger      logger.Logger           `option:"mandatory" validate:"required"`
-	storage     fileStorage             `option:"mandatory" validate:"required"`
-	outbox      outboxPutter            `option:"mandatory" validate:"required"`
+	transactor      transactor              `option:"mandatory" validate:"required"`
+	files           fileRepository          `option:"mandatory" validate:"required"`
+	eventStream     eventstream.EventStream `option:"mandatory" validate:"required"`
+	logger          logger.Logger           `option:"mandatory" validate:"required"`
+	storage         fileStorage             `option:"mandatory" validate:"required"`
+	outbox          outboxPutter            `option:"mandatory" validate:"required"`
+	deliveryBaseURL string                  `validate:"omitempty,url"`
 }
 
 type UseCase struct {
@@ -87,9 +89,17 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 		}
 	}
 
-	file, err := u.files.GetByID(ctx, req.FileID)
-	if err != nil {
-		return Response{}, fmt.Errorf("get task %d: %w", req.FileID, err)
+	var file model.File
+	if req.FileID > 0 {
+		file, err = u.files.GetByID(ctx, req.FileID)
+		if err != nil {
+			return Response{}, fmt.Errorf("get task %d: %w", req.FileID, err)
+		}
+	} else if filePath != "" {
+		file = model.File{
+			FolderPath: path.Dir(filePath),
+			FileName:   path.Base(filePath),
+		}
 	}
 	if file.ID > 0 {
 		//nolint:ineffassign,staticcheck,wastedassign,nolintlint // Если есть файл, то и путь надо брать от него, а не от реквеста.
@@ -102,17 +112,17 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 	)
 
 	defer func() {
-		if errReturn == nil {
+		if errReturn == nil || req.FileID == 0 {
 			return
 		}
 
 		taskLogger.ErrorContext(ctx, "failed deleted file", logger.Error(errReturn))
-		u.publish(ctx, req.UserID, buildFailedEvent(file, errReturn))
+		u.publish(ctx, req.UserID, u.buildFailedEvent(file, errReturn))
 	}()
 
 	switch file.ID {
 	case 0:
-		// Если файл в итоге будет не найден в БД - можно будет попробовать просто удалить файл из CEPH
+		// Если файл в итоге будет не найден в БД - можно будет попробовать просто удалить файл из S3
 		if err := u.removeFile(ctx, file, filePath); err != nil {
 			return Response{}, fmt.Errorf("remove file: %w", err)
 		}
@@ -133,7 +143,9 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 		}
 	}
 
-	u.publish(ctx, req.UserID, buildCompletedEvent(file))
+	if req.FileID > 0 {
+		u.publish(ctx, req.UserID, u.buildCompletedEvent(file))
+	}
 
 	return Response{}, nil
 }
@@ -280,12 +292,16 @@ func collectPaths(file model.File, fallback string) []string {
 	return paths
 }
 
-func buildCompletedEvent(file model.File) shared.FileDeletedEvent {
-	return shared.NewFileDeletedEvent(file.ID, file.GetPublicURL(), shared.FileDeleteStatusCompleted)
+func (u *UseCase) buildCompletedEvent(file model.File) shared.FileDeletedEvent {
+	return shared.NewFileDeletedEvent(file.ID, u.publicURL(file), shared.FileDeleteStatusCompleted)
 }
 
-func buildFailedEvent(file model.File, err error) shared.FileDeletedEvent {
-	event := shared.NewFileDeletedEvent(file.ID, file.GetPublicURL(), shared.FileDeleteStatusFailed)
+func (u *UseCase) buildFailedEvent(file model.File, err error) shared.FileDeletedEvent {
+	event := shared.NewFileDeletedEvent(file.ID, u.publicURL(file), shared.FileDeleteStatusFailed)
 	event.Error = err.Error()
 	return event
+}
+
+func (u *UseCase) publicURL(file model.File) string {
+	return fileurl.Compose(u.deliveryBaseURL, "", file.GetPublicURL())
 }

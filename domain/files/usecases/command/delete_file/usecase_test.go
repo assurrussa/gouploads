@@ -365,15 +365,7 @@ func TestHandle_FileIDIsEmpty_Success(t *testing.T) {
 		AfterEvents: eventsAfter,
 	}
 
-	ts.fileMock.EXPECT().GetByID(ctx, fileID).Return(file, nil).Times(1)
 	ts.storageMock.EXPECT().Delete(ctx, file.GetFullPath()).Return(nil).Times(1)
-	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusCompleted)
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, userID, testsmatcher.NewEventPublishDeletedMatcher(
-			"file publish success matcher empty id", eventFileUpload,
-		)).
-		Return(nil).Times(1)
-
 	// Action.
 	resp, err := ts.useCase.Handle(ctx, req)
 
@@ -401,16 +393,7 @@ func TestHandle_FileIDIsEmpty_Error(t *testing.T) {
 		AfterEvents: eventsAfter,
 	}
 
-	ts.fileMock.EXPECT().GetByID(ctx, fileID).Return(file, nil).Times(1)
 	ts.storageMock.EXPECT().Delete(ctx, file.GetFullPath()).Return(ts.errExpect).Times(1)
-	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusFailed)
-	eventFileUpload.Error = ts.errExpect.Error()
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, userID, testsmatcher.NewEventPublishDeletedMatcher(
-			"file publish success matcher empty id", eventFileUpload,
-		)).
-		Return(nil).Times(1)
-
 	// Action.
 	resp, err := ts.useCase.Handle(ctx, req)
 
@@ -424,7 +407,7 @@ func TestHandle_GetFileID_Error(t *testing.T) {
 
 	// Arrange.
 	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
-	fileID := int64(0)
+	fileID := int64(123)
 	file := model.File{
 		ID:         fileID,
 		FileName:   "testname.png",

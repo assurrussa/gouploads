@@ -1,4 +1,4 @@
-package ceph
+package s3store
 
 import (
 	"context"
@@ -19,7 +19,7 @@ func News3Client(client Client) S3Client {
 	}
 }
 
-// Upload загрузка файла в ceph.
+// Upload загрузка файла в s3store.
 func (s *s3Client) Upload(
 	ctx context.Context,
 	input s3sdk.CreateMultipartUploadInput,

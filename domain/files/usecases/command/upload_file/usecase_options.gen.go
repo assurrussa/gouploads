@@ -27,7 +27,7 @@ func NewOptions(
 
 	// Setting defaults from field tag (if present)
 
-	o.baseFolder = "uploads"
+	o.baseFolder = "media/v1"
 
 	o.transactor = transactor
 	o.fileRepository = fileRepository
@@ -47,6 +47,10 @@ func WithBaseFolder(opt string) OptOptionsSetter {
 	return func(o *Options) { o.baseFolder = opt }
 }
 
+func WithDeliveryBaseURL(opt string) OptOptionsSetter {
+	return func(o *Options) { o.deliveryBaseURL = opt }
+}
+
 func (o *Options) Validate() error {
 	errs := new(errors461e464ebed9.ValidationErrors)
 	errs.Add(errors461e464ebed9.NewValidationError("transactor", _validate_Options_transactor(o)))
@@ -56,6 +60,7 @@ func (o *Options) Validate() error {
 	errs.Add(errors461e464ebed9.NewValidationError("logger", _validate_Options_logger(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("storage", _validate_Options_storage(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("outbox", _validate_Options_outbox(o)))
+	errs.Add(errors461e464ebed9.NewValidationError("deliveryBaseURL", _validate_Options_deliveryBaseURL(o)))
 	return errs.AsError()
 }
 
@@ -104,6 +109,13 @@ func _validate_Options_storage(o *Options) error {
 func _validate_Options_outbox(o *Options) error {
 	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.outbox, "required"); err != nil {
 		return fmt461e464ebed9.Errorf("field `outbox` did not pass the test: %w", err)
+	}
+	return nil
+}
+
+func _validate_Options_deliveryBaseURL(o *Options) error {
+	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.deliveryBaseURL, "omitempty,url"); err != nil {
+		return fmt461e464ebed9.Errorf("field `deliveryBaseURL` did not pass the test: %w", err)
 	}
 	return nil
 }

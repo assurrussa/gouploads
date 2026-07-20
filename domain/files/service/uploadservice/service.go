@@ -18,7 +18,6 @@ import (
 	deletedfilejob "github.com/assurrussa/gouploads/domain/files/outbox/deleted_file"
 	sendresizefilejob "github.com/assurrussa/gouploads/domain/files/outbox/send_resize_file"
 	"github.com/assurrussa/gouploads/domain/files/shared"
-	"github.com/assurrussa/gouploads/domain/files/shared/fileurl"
 )
 
 //go:generate options-gen -out-filename=service_options.gen.go -from-struct=Options -defaults-from=func
@@ -28,13 +27,9 @@ type Options struct {
 	fileRepo      fileRepository `option:"mandatory" validate:"required"`
 	logger        logger.Logger  `option:"mandatory" validate:"required"`
 	storage       fileStorage    `option:"mandatory" validate:"required"`
-	publicBaseURL string         `option:"mandatory" validate:"url"`
 	dirPrefix     shared.FolderPrefixPath
 	dirTempPrefix shared.FolderPrefixPath
 	validators    []UploadValidator
-	publicBucket  string `validate:"omitempty"`
-	sourceBaseURL string `validate:"omitempty,url"`
-	sourceBucket  string `validate:"omitempty"`
 }
 
 func getDefaultOptions() Options {
@@ -59,18 +54,6 @@ func Must(opts Options) *Service {
 }
 
 func New(opts Options) (*Service, error) {
-	// Предварительная проверка опции, для чисто подмены дев контейнера.
-	// В текущей ситуации, когда внутри docker-сети доступен только внутренний «http://…» endpoint Ceph’а,
-	// мы даём возможность явно указать его через STORAGE_S3_ENDPOINT. Это опциональная настройка: если её не трогать,
-	// код продолжит использовать ровно тот же публичный HTTPS‑URL, так что прод не ломается.
-	// Для прода — просто не задавайте STORAGE_S3_INTERNAL_HOST, и всё.
-	if opts.sourceBaseURL == "" {
-		opts.sourceBaseURL = opts.publicBaseURL
-	}
-	if opts.sourceBucket == "" {
-		opts.sourceBucket = opts.publicBucket
-	}
-
 	if err := opts.Validate(); err != nil {
 		return nil, fmt.Errorf("validate options: %w", err)
 	}
@@ -484,19 +467,11 @@ func (s *Service) buildUploader(req SingleRequest) (shared.FileUploader, error) 
 }
 
 func (s *Service) composeSourceURL(uploadedFile UploadedFile) string {
-	if strings.TrimSpace(uploadedFile.Path) == "" {
-		return uploadedFile.URL
+	if path := strings.TrimSpace(uploadedFile.Path); path != "" {
+		return path
 	}
 
-	if s.sourceBaseURL == s.publicBaseURL && s.sourceBucket == s.publicBucket {
-		return uploadedFile.URL
-	}
-
-	if strings.TrimSpace(s.sourceBaseURL) == "" {
-		return uploadedFile.URL
-	}
-
-	return fileurl.Compose(s.sourceBaseURL, s.sourceBucket, uploadedFile.Path)
+	return uploadedFile.URL
 }
 
 func cloneMimeMap(src map[string][]string) map[string][]string {

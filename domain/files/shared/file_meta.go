@@ -38,14 +38,15 @@ type FileMetaPreset struct {
 	Presets    map[PresetName]FilePreset `json:"presets"`
 }
 type FilePreset struct {
-	PresetName   string `json:"presetName"`
-	Size         int64  `json:"size"`
-	MimeType     string `json:"mimeType,omitempty"`
-	URL          string `json:"url,omitempty"`
-	Width        int    `json:"width"`
-	Height       int    `json:"height"`
-	RelativePath string `json:"relativePath,omitempty"`
-	MediaType    string `json:"mediaType,omitempty"`
-	IsPreview    bool   `json:"isPreview,omitempty"`
-	IsThumbnail  bool   `json:"isThumbnail,omitempty"`
+	PresetName     string `json:"presetName"`
+	Size           int64  `json:"size"`
+	MimeType       string `json:"mimeType,omitempty"`
+	URL            string `json:"url,omitempty"`
+	Width          int    `json:"width"`
+	Height         int    `json:"height"`
+	RelativePath   string `json:"relativePath,omitempty"`
+	ChecksumSHA256 string `json:"checksumSha256,omitempty"`
+	MediaType      string `json:"mediaType,omitempty"`
+	IsPreview      bool   `json:"isPreview,omitempty"`
+	IsThumbnail    bool   `json:"isThumbnail,omitempty"`
 }

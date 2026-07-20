@@ -1187,15 +1187,28 @@ func (h *Handler) mapFiles(files []model.File) []fileResponse {
 }
 
 func (h *Handler) mapFile(model model.File) *fileResponse {
-	url := h.urlComposer(model.URL)
-	publicURL := h.urlComposer(model.GetPublicURL())
-	thumbnailURL := model.PreferredPreviewPath()
-	if thumbnailURL != "" {
-		thumbnailURL = h.urlComposer(thumbnailURL)
-	}
 	status := model.GetData().Uploader.Status.String()
 	if status == "" {
 		status = fileshared.FileUploadTaskStatusCompleted.String()
+	}
+
+	url := ""
+	publicURL := ""
+	thumbnailURL := ""
+	fullPath := ""
+	folderPath := ""
+	if status == fileshared.FileUploadTaskStatusCompleted.String() {
+		publicURL = h.urlComposer(model.GetPublicURL())
+		url = publicURL
+		if model.URL != "" {
+			url = h.urlComposer(model.URL)
+		}
+		thumbnailURL = model.PreferredPreviewPath()
+		if thumbnailURL != "" {
+			thumbnailURL = h.urlComposer(thumbnailURL)
+		}
+		fullPath = model.GetFullPath()
+		folderPath = model.FolderPath
 	}
 
 	return &fileResponse{
@@ -1209,8 +1222,8 @@ func (h *Handler) mapFile(model model.File) *fileResponse {
 		URL:          url,
 		PublicURL:    publicURL,
 		ThumbnailURL: thumbnailURL,
-		FullPath:     model.GetFullPath(),
-		FolderPath:   model.FolderPath,
+		FullPath:     fullPath,
+		FolderPath:   folderPath,
 		SortOrder:    model.Position,
 		Status:       status,
 		IsPrimary:    model.IsPrimary,

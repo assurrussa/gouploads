@@ -1,18 +1,17 @@
 package uploadfile
 
 import (
-	"bytes"
+	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
 	"io"
 	"log/slog"
 	"mime"
 	"net/http"
-	"net/url"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -28,15 +27,20 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
+	deletedfilejob "github.com/assurrussa/gouploads/domain/files/outbox/deleted_file"
 	clientresizer "github.com/assurrussa/gouploads/domain/files/service/client_resizer"
 	eventfileafterprocess "github.com/assurrussa/gouploads/domain/files/service/event_file_after_process"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	"github.com/assurrussa/gouploads/domain/files/shared/fileurl"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 )
 
 const (
 	contentTypeImageWebP = "image/webp"
 	extensionWebP        = ".webp"
+	maxArtifactSize      = int64(10 << 30)
+	artifactSniffSize    = 512
+	failedCleanupTimeout = 30 * time.Second
 )
 
 //go:generate toolsmocks
@@ -72,18 +76,20 @@ type fileStorageDTO struct {
 	MimeType     string
 	Width        int
 	Height       int
+	Checksum     string
 }
 
 //go:generate options-gen -out-filename=usecase_options.gen.go -from-struct=Options
 type Options struct {
-	transactor     transactor              `option:"mandatory" validate:"required"`
-	fileRepository fileRepository          `option:"mandatory" validate:"required"`
-	resizeClient   resizeClient            `option:"mandatory" validate:"required"`
-	eventStream    eventstream.EventStream `option:"mandatory" validate:"required"`
-	logger         logger.Logger           `option:"mandatory" validate:"required"`
-	storage        fileStorage             `option:"mandatory" validate:"required"`
-	outbox         outboxPutter            `option:"mandatory" validate:"required"`
-	baseFolder     string                  `default:"uploads"`
+	transactor      transactor              `option:"mandatory" validate:"required"`
+	fileRepository  fileRepository          `option:"mandatory" validate:"required"`
+	resizeClient    resizeClient            `option:"mandatory" validate:"required"`
+	eventStream     eventstream.EventStream `option:"mandatory" validate:"required"`
+	logger          logger.Logger           `option:"mandatory" validate:"required"`
+	storage         fileStorage             `option:"mandatory" validate:"required"`
+	outbox          outboxPutter            `option:"mandatory" validate:"required"`
+	baseFolder      string                  `default:"media/v1"`
+	deliveryBaseURL string                  `validate:"omitempty,url"`
 }
 
 type UseCase struct {
@@ -126,40 +132,46 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (Response, error) {
 		slog.String("status", fileUploader.Status.String()),
 	)
 
-	if fileUploader.Status == shared.FileUploadTaskStatusCompleted {
+	if isCompletedFile(fileModel, fileUploader) {
 		taskLogger.DebugContext(ctx, "task already completed")
 		return Response{}, nil
 	}
 
 	sourcePath := fileModel.GetFullPath()
 
-	fileModel, err = u.processFileModel(ctx, req, fileModel)
+	fileModel, finalPaths, err := u.processFileModel(ctx, req, fileModel)
 	if err != nil {
+		if req.CleanupOnFailure {
+			u.scheduleFailedFinalCleanup(ctx, fileUploader.UserUUID, finalPaths)
+		}
 		return Response{}, fmt.Errorf("process file model: %w", err)
 	}
 
-	if sourcePath != "" {
-		if err := u.removeFile(ctx, sourcePath, "cleanup temp file"); err != nil {
-			return Response{}, fmt.Errorf("remove temp file: %w", err)
-		}
-	}
-
 	err = u.transactor.RunInTx(ctx, func(ctx context.Context) error {
+		if err := u.fileRepository.Update(ctx, fileModel.ID, fileModel); err != nil {
+			return fmt.Errorf("save file: %w", err)
+		}
 		if err := u.enqueueAfterJobs(ctx, fileUploader, fileModel); err != nil {
 			return fmt.Errorf("schedule after jobs: %w", err)
 		}
-
-		if err := u.fileRepository.Update(ctx, fileModel.ID, fileModel); err != nil {
-			return fmt.Errorf("save file: %w", err)
+		if sourcePath != "" {
+			if err := u.enqueueCleanup(ctx, fileUploader.UserUUID, sourcePath); err != nil {
+				return fmt.Errorf("schedule staging cleanup: %w", err)
+			}
 		}
 
 		return nil
 	})
 	if err != nil {
+		if req.CleanupOnFailure {
+			u.scheduleFailedFinalCleanup(ctx, fileUploader.UserUUID, finalPaths)
+		}
 		return Response{}, fmt.Errorf("RunInTx: %w", err)
 	}
 
-	u.publish(ctx, fileUploader.UserUUID, createEvent(fileUploader, fileModel, shared.FileUploadTaskStatusCompleted))
+	eventModel := fileModel
+	eventModel.URL = u.publicURL(fileModel.GetFullPath())
+	u.publish(ctx, fileUploader.UserUUID, createEvent(fileUploader, eventModel, shared.FileUploadTaskStatusCompleted))
 
 	return Response{}, nil
 }
@@ -188,6 +200,44 @@ func (u *UseCase) enqueueAfterJobs(
 	return nil
 }
 
+func (u *UseCase) enqueueCleanup(ctx context.Context, userID sharedtypes.UserID, objectPath string) error {
+	payload, err := deletedfilejob.MarshalPayload(deletedfilejob.NewPayload(0, userID, objectPath))
+	if err != nil {
+		return fmt.Errorf("marshal cleanup payload: %w", err)
+	}
+	if _, err := u.outbox.Put(ctx, deletedfilejob.JobName, payload, time.Now()); err != nil {
+		return fmt.Errorf("put cleanup job: %w", err)
+	}
+
+	return nil
+}
+
+func (u *UseCase) scheduleFailedFinalCleanup(
+	ctx context.Context,
+	userID sharedtypes.UserID,
+	paths []string,
+) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failedCleanupTimeout)
+	defer cancel()
+
+	for _, objectPath := range paths {
+		if err := u.enqueueCleanup(cleanupCtx, userID, objectPath); err == nil {
+			continue
+		}
+		if err := u.removeFile(cleanupCtx, objectPath, "cleanup partial final object"); err != nil {
+			u.logger.ErrorContext(cleanupCtx, "failed to clean partial final object", slog.String("path", objectPath), logger.Error(err))
+		}
+	}
+}
+
+func isCompletedFile(fileModel model.File, uploader shared.FileUploader) bool {
+	if uploader.Status == shared.FileUploadTaskStatusCompleted {
+		return true
+	}
+
+	return uploader.Status == "" && len(fileModel.GetData().Presets) > 0
+}
+
 func (u *UseCase) createPayload(
 	fileModel model.File,
 	afterJob shared.FileEventAfterJob,
@@ -199,7 +249,7 @@ func (u *UseCase) createPayload(
 
 	meta := map[string]any{
 		"fileId":           fileModel.ID,
-		"fileUrl":          fileModel.URL,
+		"fileUrl":          u.publicURL(fileModel.GetFullPath()),
 		"fileName":         fileModel.FileName,
 		"originalFileName": fileModel.OriginalFileName,
 		"objectType":       fileModel.ObjectType.String(),
@@ -227,48 +277,61 @@ func (u *UseCase) publish(ctx context.Context, userID sharedtypes.UserID, event 
 	}
 }
 
-func (u *UseCase) processFileModel(ctx context.Context, req Request, fileModel model.File) (model.File, error) {
+func (u *UseCase) processFileModel(
+	ctx context.Context,
+	req Request,
+	fileModel model.File,
+) (model.File, []string, error) {
 	fileData := fileModel.GetData()
 	presets := make(map[shared.PresetName]shared.FilePreset, len(req.Artifacts))
+	finalPaths := make([]string, 0, len(req.Artifacts))
+	hasMainArtifact := false
 
 	for _, artifact := range req.Artifacts {
 		if artifact.ExpireAt.Before(time.Now()) {
-			// нет смысла запрашивать просроченные файлы по времени.
-			continue
+			return fileModel, finalPaths, fmt.Errorf("artifact %q is expired", artifact.Preset)
 		}
 		isMain := isMainArtifact(artifact)
 
-		storageFile, err := u.saveFileStorage(ctx, artifact, fileModel, isMain)
+		storageFile, err := u.saveFileStorage(ctx, artifact, fileModel)
+		if storageFile.RelativePath != "" {
+			finalPaths = append(finalPaths, storageFile.RelativePath)
+		}
 		if err != nil {
-			return fileModel, fmt.Errorf("prepare storage: %w", err)
+			return fileModel, finalPaths, fmt.Errorf("prepare storage: %w", err)
 		}
 
 		if isMain {
+			hasMainArtifact = true
 			if err := u.updateMainArtifact(&fileModel, fileData, storageFile, artifact.Metadata); err != nil {
-				return fileModel, err
+				return fileModel, finalPaths, err
 			}
 		}
 
 		lowerPreset := strings.ToLower(artifact.Preset)
 		presets[shared.PresetName(artifact.Preset)] = shared.FilePreset{
-			PresetName:   artifact.Preset,
-			Size:         storageFile.Size,
-			MimeType:     storageFile.MimeType,
-			URL:          storageFile.URL,
-			Width:        storageFile.Width,
-			Height:       storageFile.Height,
-			RelativePath: storageFile.RelativePath,
-			MediaType:    artifact.MediaType,
-			IsPreview:    metadataBool(artifact.Metadata, "preview") || strings.Contains(lowerPreset, "preview"),
-			IsThumbnail:  metadataBool(artifact.Metadata, "thumbnail") || strings.Contains(lowerPreset, "thumbnail"),
+			PresetName:     artifact.Preset,
+			Size:           storageFile.Size,
+			MimeType:       storageFile.MimeType,
+			URL:            "",
+			Width:          storageFile.Width,
+			Height:         storageFile.Height,
+			RelativePath:   storageFile.RelativePath,
+			ChecksumSHA256: storageFile.Checksum,
+			MediaType:      artifact.MediaType,
+			IsPreview:      metadataBool(artifact.Metadata, "preview") || strings.Contains(lowerPreset, "preview"),
+			IsThumbnail:    metadataBool(artifact.Metadata, "thumbnail") || strings.Contains(lowerPreset, "thumbnail"),
 		}
+	}
+	if !hasMainArtifact {
+		return fileModel, finalPaths, errors.New("finalization has no main artifact")
 	}
 
 	fileData.Presets = presets
 	fileData.Uploader = shared.FileUploader{}
 	fileModel.SetData(fileData)
 
-	return fileModel, nil
+	return fileModel, finalPaths, nil
 }
 
 func (u *UseCase) updateMainArtifact(
@@ -282,7 +345,7 @@ func (u *UseCase) updateMainArtifact(
 	fileModel.FileName = storageFile.FileName
 	fileModel.Size = storageFile.Size
 	fileModel.MimeType = storageFile.MimeType
-	fileModel.URL = storageFile.URL
+	fileModel.URL = ""
 
 	width := storageFile.Width
 	if width <= 0 {
@@ -313,7 +376,6 @@ func (u *UseCase) saveFileStorage(
 	ctx context.Context,
 	artifact Artifact,
 	fileModel model.File,
-	isMain bool,
 ) (fileStorageDTO, error) {
 	respDownload, err := u.resizeClient.DownloadFile(ctx, clientresizer.RequestDownload{
 		Preset:    artifact.Preset,
@@ -323,60 +385,103 @@ func (u *UseCase) saveFileStorage(
 	if err != nil {
 		return fileStorageDTO{}, fmt.Errorf("download file resize preset: %w", err)
 	}
+	defer func() { _ = respDownload.Body.Close() }()
 
-	folderPathWithPreset := fileModel.FolderPath
-	if !isMain {
-		folderPathWithPreset = path.Join(folderPathWithPreset, artifact.Preset)
+	if artifact.Size > maxArtifactSize || respDownload.ContentLength > maxArtifactSize {
+		return fileStorageDTO{}, fmt.Errorf("artifact exceeds maximum size %d", maxArtifactSize)
 	}
-	fileMimeType := http.DetectContentType(respDownload.Body)
-	if fileMimeType == "" || fileMimeType == "application/octet-stream" {
-		if ct := strings.TrimSpace(artifact.ContentType); ct != "" {
-			fileMimeType = ct
-		}
+	if artifact.Size > 0 && respDownload.ContentLength > 0 && artifact.Size != respDownload.ContentLength {
+		return fileStorageDTO{}, fmt.Errorf(
+			"artifact declared size mismatch: webhook=%d response=%d",
+			artifact.Size, respDownload.ContentLength,
+		)
 	}
 
-	fileName := artifactFileName(artifact, fileModel.FileName, fileMimeType)
-	fileReader := bytes.NewReader(respDownload.Body)
-	width, height := u.imageDimensions(fileReader, fileMimeType)
+	reader := bufio.NewReaderSize(respDownload.Body, artifactSniffSize)
+	header, peekErr := reader.Peek(artifactSniffSize)
+	if peekErr != nil && !errors.Is(peekErr, io.EOF) && !errors.Is(peekErr, bufio.ErrBufferFull) {
+		return fileStorageDTO{}, fmt.Errorf("inspect artifact body: %w", peekErr)
+	}
+	if len(header) == 0 {
+		return fileStorageDTO{}, errors.New("artifact body is empty")
+	}
+
+	fileMimeType, err := validateArtifactContentType(
+		artifact.ContentType,
+		respDownload.ContentType,
+		http.DetectContentType(header),
+	)
+	if err != nil {
+		return fileStorageDTO{}, err
+	}
+	finalDir, err := u.finalArtifactDir(fileModel)
+	if err != nil {
+		return fileStorageDTO{}, err
+	}
+	fileName, err := artifactPresetFileName(artifact, fileMimeType)
+	if err != nil {
+		return fileStorageDTO{}, err
+	}
+
+	hasher := sha256.New()
+	counter := &artifactReader{
+		Reader: io.TeeReader(io.LimitReader(reader, maxArtifactSize+1), hasher),
+	}
 
 	stored, err := u.storage.SavePersist(ctx, filestorage.SaveFileInput{
-		Dir:      folderPathWithPreset,
+		Dir:      finalDir,
 		FileName: fileName,
-		Size:     fileReader.Size(),
+		Size:     artifact.Size,
 		MimeType: fileMimeType,
-		Reader:   bytes.NewReader(respDownload.Body),
+		Reader:   counter,
 	})
 	if err != nil {
 		return fileStorageDTO{}, fmt.Errorf("commit file: %w", err)
 	}
 
-	return fileStorageDTO{
+	result := fileStorageDTO{
 		RelativePath: stored.RelativePath,
 		FolderPath:   filesanitize.EnsureRelativeDir(stored.RelativePath),
 		FileName:     filepath.Base(stored.RelativePath),
-		URL:          stored.URL,
-		Size:         stored.Size,
+		URL:          "",
+		Size:         counter.Size(),
 		MimeType:     stored.MimeType,
-		Width:        width,
-		Height:       height,
-	}, nil
-}
-
-func (u *UseCase) imageDimensions(fileRemote io.Reader, mime string) (width, height int) {
-	if mime == "" || !isImage(mime) {
-		return 0, 0
+		Width:        metadataInt(artifact.Metadata, "target_width"),
+		Height:       metadataInt(artifact.Metadata, "target_height"),
+		Checksum:     hex.EncodeToString(hasher.Sum(nil)),
+	}
+	if result.Size > maxArtifactSize {
+		return result, fmt.Errorf("artifact exceeds maximum size %d", maxArtifactSize)
+	}
+	if artifact.Size > 0 && result.Size != artifact.Size {
+		return result, fmt.Errorf("artifact size mismatch: expected=%d actual=%d", artifact.Size, result.Size)
+	}
+	if respDownload.ContentLength > 0 && result.Size != respDownload.ContentLength {
+		return result, fmt.Errorf(
+			"artifact response size mismatch: expected=%d actual=%d",
+			respDownload.ContentLength, result.Size,
+		)
+	}
+	if stored.Size > 0 && stored.Size != result.Size {
+		return result, fmt.Errorf("stored artifact size mismatch: expected=%d actual=%d", result.Size, stored.Size)
 	}
 
-	cfg, _, err := image.DecodeConfig(fileRemote)
-	if err != nil {
-		return 0, 0
-	}
-
-	return cfg.Width, cfg.Height
+	return result, nil
 }
 
-func isImage(mime string) bool {
-	return len(mime) >= 6 && mime[:6] == "image/"
+type artifactReader struct {
+	io.Reader
+	n int64
+}
+
+func (r *artifactReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.n += int64(n)
+	return n, err
+}
+
+func (r *artifactReader) Size() int64 {
+	return r.n
 }
 
 func isMainArtifact(artifact Artifact) bool {
@@ -509,104 +614,99 @@ func (u *UseCase) removeFile(ctx context.Context, relPath, reason string) error 
 	return nil
 }
 
-func artifactFileName(artifact Artifact, fallback, detectedMime string) string {
-	ext := selectExtension(detectedMime, artifact, fallback)
-
-	// Prefer existing UUID-based names.
-	if name := uuidBaseCandidate(metadataString(artifact.Metadata, "file_name")); name != "" {
-		return appendExtension(name, ext)
+func (u *UseCase) finalArtifactDir(fileModel model.File) (string, error) {
+	if err := fileModel.ObjectType.Validate(); err != nil {
+		return "", fmt.Errorf("validate final object type: %w", err)
 	}
-	if name := uuidBaseCandidate(artifactURLFileName(artifact.URL)); name != "" {
-		return appendExtension(name, ext)
+	if fileModel.ObjectID == nil || fileModel.ObjectID.Int64() <= 0 {
+		return "", errors.New("final object id is required")
 	}
-	if name := uuidBaseCandidate(fallback); name != "" {
-		return appendExtension(name, ext)
+	if _, err := uuid.Parse(fileModel.Slug); err != nil {
+		return "", fmt.Errorf("validate final file slug: %w", err)
 	}
 
-	generated := uuid.New().String()
-	if ext != "" {
-		return generated + ext
+	segments := strings.Split(strings.Trim(u.baseFolder, "/"), "/")
+	segments = append(
+		segments,
+		fileModel.ObjectType.String(),
+		fileModel.ObjectID.String(),
+		fileModel.Slug,
+	)
+	finalDir, err := filesanitize.BuildSafePath(segments...)
+	if err != nil {
+		return "", fmt.Errorf("build final artifact directory: %w", err)
 	}
 
-	return generated
+	return finalDir, nil
 }
 
-func artifactURLFileName(rawURL string) string {
-	if rawURL == "" {
-		return ""
+func (u *UseCase) publicURL(relativePath string) string {
+	return fileurl.Compose(u.deliveryBaseURL, "", relativePath)
+}
+
+func artifactPresetFileName(artifact Artifact, contentType string) (string, error) {
+	preset, err := filesanitize.SanitizeSegment(artifact.Preset)
+	if err != nil {
+		return "", fmt.Errorf("sanitize artifact preset: %w", err)
+	}
+	extension := extensionFromContentType(contentType)
+	if extension == "" {
+		return "", fmt.Errorf("artifact content type %s has no supported extension", contentType)
+	}
+	name, err := filesanitize.SanitizeFileName(preset + extension)
+	if err != nil {
+		return "", fmt.Errorf("sanitize artifact file name: %w", err)
 	}
 
-	u, err := url.Parse(rawURL)
+	return name, nil
+}
+
+func validateArtifactContentType(webhookType, responseType, detectedType string) (string, error) {
+	types := []string{
+		normalizeContentType(webhookType),
+		normalizeContentType(responseType),
+		normalizeContentType(detectedType),
+	}
+	selected := ""
+	for _, contentType := range types {
+		if contentType == "" || contentType == "application/octet-stream" {
+			continue
+		}
+		if selected == "" {
+			selected = contentType
+			continue
+		}
+		if selected != contentType {
+			return "", fmt.Errorf("artifact content type mismatch: %s != %s", selected, contentType)
+		}
+	}
+	if selected == "" {
+		return "", errors.New("artifact content type is unknown")
+	}
+	if !allowedArtifactContentType(selected) {
+		return "", fmt.Errorf("artifact content type %s is not allowed", selected)
+	}
+
+	return selected, nil
+}
+
+func allowedArtifactContentType(contentType string) bool {
+	switch contentType {
+	case "image/jpeg", "image/png", "image/gif", "image/webp",
+		"video/mp4", "video/webm", "application/pdf":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeContentType(raw string) string {
+	contentType, _, err := mime.ParseMediaType(strings.TrimSpace(raw))
 	if err != nil {
 		return ""
 	}
 
-	name := path.Base(u.Path)
-	if name == "" || name == "." || name == "/" {
-		return ""
-	}
-
-	return name
-}
-
-func selectExtension(detectedMime string, artifact Artifact, fallback string) string {
-	if ext := extensionFromContentType(detectedMime); ext != "" {
-		return ext
-	}
-	if ext := extensionFromContentType(artifact.ContentType); ext != "" {
-		return ext
-	}
-	if ext := extensionFromFileName(metadataString(artifact.Metadata, "file_name")); ext != "" {
-		return ext
-	}
-	if ext := extensionFromFileName(artifactURLFileName(artifact.URL)); ext != "" {
-		return ext
-	}
-
-	return extensionFromFileName(fallback)
-}
-
-func extensionFromFileName(name string) string {
-	if name == "" {
-		return ""
-	}
-
-	ext := strings.ToLower(path.Ext(strings.TrimSpace(name)))
-	if ext == "" || ext == "." {
-		return ""
-	}
-
-	return ext
-}
-
-func uuidBaseCandidate(candidate string) string {
-	name := path.Base(strings.TrimSpace(candidate))
-	if name == "" {
-		return ""
-	}
-
-	base := strings.TrimSuffix(name, path.Ext(name))
-	if base == "" {
-		return ""
-	}
-
-	if _, err := uuid.Parse(base); err == nil {
-		return base
-	}
-
-	return ""
-}
-
-func appendExtension(base, ext string) string {
-	if base == "" {
-		return ""
-	}
-
-	if ext == "" {
-		return base
-	}
-
-	return base + ext
+	return strings.ToLower(contentType)
 }
 
 func extensionFromContentType(contentType string) string {

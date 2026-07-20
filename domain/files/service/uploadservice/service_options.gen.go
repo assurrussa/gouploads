@@ -20,7 +20,6 @@ func NewOptions(
 	fileRepo fileRepository,
 	logger logger.Logger,
 	storage fileStorage,
-	publicBaseURL string,
 	options ...OptOptionsSetter,
 ) Options {
 	var o Options
@@ -32,20 +31,15 @@ func NewOptions(
 	o.fileRepo = defaultOpts.fileRepo
 	o.logger = defaultOpts.logger
 	o.storage = defaultOpts.storage
-	o.publicBaseURL = defaultOpts.publicBaseURL
 	o.dirPrefix = defaultOpts.dirPrefix
 	o.dirTempPrefix = defaultOpts.dirTempPrefix
 	o.validators = defaultOpts.validators
-	o.publicBucket = defaultOpts.publicBucket
-	o.sourceBaseURL = defaultOpts.sourceBaseURL
-	o.sourceBucket = defaultOpts.sourceBucket
 
 	o.txManager = txManager
 	o.outbox = outbox
 	o.fileRepo = fileRepo
 	o.logger = logger
 	o.storage = storage
-	o.publicBaseURL = publicBaseURL
 
 	for _, opt := range options {
 		opt(&o)
@@ -65,18 +59,6 @@ func WithValidators(opt []UploadValidator) OptOptionsSetter {
 	return func(o *Options) { o.validators = opt }
 }
 
-func WithPublicBucket(opt string) OptOptionsSetter {
-	return func(o *Options) { o.publicBucket = opt }
-}
-
-func WithSourceBaseURL(opt string) OptOptionsSetter {
-	return func(o *Options) { o.sourceBaseURL = opt }
-}
-
-func WithSourceBucket(opt string) OptOptionsSetter {
-	return func(o *Options) { o.sourceBucket = opt }
-}
-
 func (o *Options) Validate() error {
 	errs := new(errors461e464ebed9.ValidationErrors)
 	errs.Add(errors461e464ebed9.NewValidationError("txManager", _validate_Options_txManager(o)))
@@ -84,10 +66,6 @@ func (o *Options) Validate() error {
 	errs.Add(errors461e464ebed9.NewValidationError("fileRepo", _validate_Options_fileRepo(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("logger", _validate_Options_logger(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("storage", _validate_Options_storage(o)))
-	errs.Add(errors461e464ebed9.NewValidationError("publicBaseURL", _validate_Options_publicBaseURL(o)))
-	errs.Add(errors461e464ebed9.NewValidationError("publicBucket", _validate_Options_publicBucket(o)))
-	errs.Add(errors461e464ebed9.NewValidationError("sourceBaseURL", _validate_Options_sourceBaseURL(o)))
-	errs.Add(errors461e464ebed9.NewValidationError("sourceBucket", _validate_Options_sourceBucket(o)))
 	return errs.AsError()
 }
 
@@ -122,34 +100,6 @@ func _validate_Options_logger(o *Options) error {
 func _validate_Options_storage(o *Options) error {
 	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.storage, "required"); err != nil {
 		return fmt461e464ebed9.Errorf("field `storage` did not pass the test: %w", err)
-	}
-	return nil
-}
-
-func _validate_Options_publicBaseURL(o *Options) error {
-	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.publicBaseURL, "url"); err != nil {
-		return fmt461e464ebed9.Errorf("field `publicBaseURL` did not pass the test: %w", err)
-	}
-	return nil
-}
-
-func _validate_Options_publicBucket(o *Options) error {
-	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.publicBucket, "omitempty"); err != nil {
-		return fmt461e464ebed9.Errorf("field `publicBucket` did not pass the test: %w", err)
-	}
-	return nil
-}
-
-func _validate_Options_sourceBaseURL(o *Options) error {
-	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.sourceBaseURL, "omitempty,url"); err != nil {
-		return fmt461e464ebed9.Errorf("field `sourceBaseURL` did not pass the test: %w", err)
-	}
-	return nil
-}
-
-func _validate_Options_sourceBucket(o *Options) error {
-	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.sourceBucket, "omitempty"); err != nil {
-		return fmt461e464ebed9.Errorf("field `sourceBucket` did not pass the test: %w", err)
 	}
 	return nil
 }

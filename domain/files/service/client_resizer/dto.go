@@ -1,6 +1,8 @@
 package clientresizer
 
 import (
+	"io"
+
 	"github.com/assurrussa/goshared/pkg/validator"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 )
@@ -30,5 +32,7 @@ func (r RequestDownload) Validate() error {
 }
 
 type ResponseDownload struct {
-	Body []byte `json:"body"`
+	Body          io.ReadCloser
+	ContentType   string
+	ContentLength int64
 }

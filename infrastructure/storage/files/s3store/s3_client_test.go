@@ -1,4 +1,4 @@
-package ceph_test
+package s3store_test
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	ceph2 "github.com/assurrussa/gouploads/infrastructure/storage/files/ceph"
-	cephmocks "github.com/assurrussa/gouploads/infrastructure/storage/files/ceph/mocks"
+	s3store "github.com/assurrussa/gouploads/infrastructure/storage/files/s3store"
+	s3storemocks "github.com/assurrussa/gouploads/infrastructure/storage/files/s3store/mocks"
 )
 
 func Test_s3Client_CheckBucketExists(t *testing.T) {
@@ -22,10 +22,10 @@ func Test_s3Client_CheckBucketExists(t *testing.T) {
 	mockCtl := gomock.NewController(t)
 	defer mockCtl.Finish()
 
-	s3Client := cephmocks.NewMockClient(mockCtl)
+	s3Client := s3storemocks.NewMockClient(mockCtl)
 
 	type fields struct {
-		Client ceph2.Client
+		Client s3store.Client
 	}
 	type args struct {
 		bucket string
@@ -68,7 +68,7 @@ func Test_s3Client_CheckBucketExists(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			tt.prepare()
-			s := ceph2.News3Client(tt.fields.Client)
+			s := s3store.News3Client(tt.fields.Client)
 			if err := s.CheckBucketExists(ctx, tt.args.bucket); (err != nil) != tt.wantErr {
 				t.Errorf("CheckBucketExists() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -81,12 +81,12 @@ func Test_s3Client_Upload(t *testing.T) {
 	mockCtl := gomock.NewController(t)
 	defer mockCtl.Finish()
 
-	s3Client := cephmocks.NewMockClient(mockCtl)
+	s3Client := s3storemocks.NewMockClient(mockCtl)
 	file, err := os.Open("test_data/GeoIP2-City-Test.mmdb")
 	require.NoError(t, err)
 
 	type fields struct {
-		Client ceph2.Client
+		Client s3store.Client
 	}
 	type args struct {
 		input  s3sdk.CreateMultipartUploadInput
@@ -113,11 +113,18 @@ func Test_s3Client_Upload(t *testing.T) {
 			prepare: func() {
 				s3Client.EXPECT().
 					CreateMultipartUpload(gomock.Any(), gomock.Any(), gomock.Any()).
-					Return(&s3sdk.CreateMultipartUploadOutput{
-						Bucket:   aws.String("testBucket"),
-						Key:      aws.String("testKey"),
-						UploadId: aws.String("testUploadId"),
-					}, nil)
+					DoAndReturn(func(
+						_ context.Context,
+						input *s3sdk.CreateMultipartUploadInput,
+						_ ...func(*s3sdk.Options),
+					) (*s3sdk.CreateMultipartUploadOutput, error) {
+						require.Empty(t, input.ACL)
+						return &s3sdk.CreateMultipartUploadOutput{
+							Bucket:   aws.String("testBucket"),
+							Key:      aws.String("testKey"),
+							UploadId: aws.String("testUploadId"),
+						}, nil
+					})
 				s3Client.EXPECT().UploadPart(gomock.Any(), gomock.Any(), gomock.Any()).
 					Return(&s3sdk.UploadPartOutput{}, nil)
 				s3Client.EXPECT().CompleteMultipartUpload(gomock.Any(), gomock.Any(), gomock.Any()).
@@ -139,7 +146,14 @@ func Test_s3Client_Upload(t *testing.T) {
 			prepare: func() {
 				s3Client.EXPECT().
 					CreateMultipartUpload(gomock.Any(), gomock.Any(), gomock.Any()).
-					Return(nil, errors.New("error 1"))
+					DoAndReturn(func(
+						_ context.Context,
+						input *s3sdk.CreateMultipartUploadInput,
+						_ ...func(*s3sdk.Options),
+					) (*s3sdk.CreateMultipartUploadOutput, error) {
+						require.Empty(t, input.ACL)
+						return nil, errors.New("error 1")
+					})
 			},
 			wantErr: true,
 		},
@@ -148,7 +162,7 @@ func Test_s3Client_Upload(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			tt.prepare()
-			s := ceph2.News3Client(tt.fields.Client)
+			s := s3store.News3Client(tt.fields.Client)
 			if err := s.Upload(ctx, tt.args.input, tt.args.reader, nil); (err != nil) != tt.wantErr {
 				t.Errorf("Upload() error = %v, wantErr %v", err, tt.wantErr)
 			}

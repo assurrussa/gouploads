@@ -59,7 +59,6 @@ func NewTestRepoSuite(t *testing.T) (context.Context, context.CancelFunc, *TestS
 			mockFileRepository,
 			logger.Discard(),
 			mockFileStorage,
-			"https://ceph.localhost",
 		))
 
 		return &TestSuite{
@@ -81,7 +80,6 @@ func Test_Init(t *testing.T) {
 			nil,
 			nil,
 			nil,
-			"",
 		))
 	})
 }
@@ -111,7 +109,7 @@ func TestService_UploadBatch_Success(t *testing.T) {
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewCephMatcher("ceph uplaod batch 1", input)).
+	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload batch 1", input)).
 		Return(filestorage.StoredFile{
 			RelativePath: "uploads/admin/12/example.png",
 			URL:          fileModel.URL,
@@ -125,7 +123,7 @@ func TestService_UploadBatch_Success(t *testing.T) {
 
 	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
 		fileID,
-		fileModel.URL,
+		"uploads/admin/12/example.png",
 		false,
 	))
 	ts.Require().NoError(err)
@@ -161,19 +159,9 @@ func TestService_UploadBatch_Success(t *testing.T) {
 	ts.Contains(files[0].URL, "/uploads/admin/12")
 }
 
-func TestService_UploadBatch_InternalSourceHost(t *testing.T) {
+func TestService_UploadBatch_RelativeSourceKey(t *testing.T) {
 	ctx, cancel, ts := NewTestRepoSuite(t)
 	defer cancel()
-
-	ts.svc = uploadservice.Must(uploadservice.NewOptions(
-		ts.mockTransactor,
-		ts.mockOutboxPutter,
-		ts.mockFileRepository,
-		logger.Discard(),
-		ts.mockFileStorage,
-		"https://ceph.localhost",
-		uploadservice.WithSourceBaseURL("https://ceph.localhost"),
-	))
 
 	fileHeader := testshelpers.MakeFileHeaderImage(t, "photo", fileName, "image/png")
 	fileModel := testshelpers.CreateFile(t)
@@ -196,7 +184,7 @@ func TestService_UploadBatch_InternalSourceHost(t *testing.T) {
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewCephMatcher("ceph upload batch internal host", input)).
+	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload batch internal host", input)).
 		Return(filestorage.StoredFile{
 			RelativePath: "uploads/admin/12/example.png",
 			URL:          fileModel.URL,
@@ -210,7 +198,7 @@ func TestService_UploadBatch_InternalSourceHost(t *testing.T) {
 
 	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
 		fileID,
-		fileModel.URL,
+		"uploads/admin/12/example.png",
 		false,
 	))
 	ts.Require().NoError(err)
@@ -262,7 +250,7 @@ func TestService_UploadBatch_DefaultConfigApplied(t *testing.T) {
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewCephMatcher("ceph uplaod batch 2", input)).
+	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload batch 2", input)).
 		Return(filestorage.StoredFile{
 			RelativePath: "uploads/admin/12/cover.png",
 			URL:          fileModel.URL,
@@ -276,7 +264,7 @@ func TestService_UploadBatch_DefaultConfigApplied(t *testing.T) {
 
 	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
 		fileID,
-		fileModel.URL,
+		"uploads/admin/12/cover.png",
 		false,
 	))
 	ts.Require().NoError(err)
@@ -415,7 +403,7 @@ func TestService_UploadSingle_Success(t *testing.T) {
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewCephMatcher("ceph uplaod single", input)).
+	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload single", input)).
 		Return(filestorage.StoredFile{
 			RelativePath: "uploads/admin/12/example.png",
 			URL:          fileModel.URL,
@@ -429,7 +417,7 @@ func TestService_UploadSingle_Success(t *testing.T) {
 
 	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
 		fileID,
-		fileModel.URL,
+		"uploads/admin/12/example.png",
 		false,
 	))
 	ts.Require().NoError(err)
@@ -490,7 +478,7 @@ func TestService_UploadSingle_SkipResizer(t *testing.T) {
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewCephMatcher("ceph upload skip resizer", input)).
+	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload skip resizer", input)).
 		Return(filestorage.StoredFile{
 			RelativePath: "uploads/admin/12/example.png",
 			URL:          fileModel.URL,
@@ -504,7 +492,7 @@ func TestService_UploadSingle_SkipResizer(t *testing.T) {
 
 	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
 		fileID,
-		fileModel.URL,
+		"uploads/admin/12/example.png",
 		true,
 	))
 	ts.Require().NoError(err)
@@ -589,7 +577,7 @@ func TestService_UploadSingle_EnqueueError(t *testing.T) {
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewCephMatcher("ceph uplaod single enqueue error", input)).
+	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload single enqueue error", input)).
 		Return(filestorage.StoredFile{
 			RelativePath: "uploads/admin/12/example.png",
 			URL:          fileModel.URL,
@@ -651,7 +639,7 @@ func TestService_UploadSingle_OutboxError(t *testing.T) {
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewCephMatcher("ceph uplaod single outbox error", input)).
+	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload single outbox error", input)).
 		Return(filestorage.StoredFile{
 			RelativePath: "uploads/admin/12/example.png",
 			URL:          fileModel.URL,
@@ -665,7 +653,7 @@ func TestService_UploadSingle_OutboxError(t *testing.T) {
 
 	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
 		fileID,
-		fileModel.URL,
+		"uploads/admin/12/example.png",
 		false,
 	))
 	ts.Require().NoError(err)

@@ -15,6 +15,7 @@ type (
 	PresetPreviewConfig  = uploadconfig.PresetPreviewConfig
 	StorageConfig        = uploadconfig.StorageConfig
 	StorageLocalConfig   = uploadconfig.StorageLocalConfig
+	StoragePublicConfig  = uploadconfig.StoragePublicConfig
 	StorageS3Config      = uploadconfig.StorageS3Config
 	StorageTusConfig     = uploadconfig.StorageTusConfig
 	VideoPipelineConfig  = uploadconfig.VideoPipelineConfig

@@ -8,9 +8,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -25,7 +22,7 @@ import (
 	uploadconfig "github.com/assurrussa/gouploads/config"
 )
 
-func TestIntegrationPrivateS3SourceThroughProxy(t *testing.T) {
+func TestIntegrationPrivateS3SourceDirectPresignedGET(t *testing.T) {
 	ctx := context.Background()
 	endpoint := sourceTestEnv("TEST_S3_ENDPOINT", "http://localhost:9090")
 	accessKey := sourceTestEnv("TEST_S3_ACCESS_KEY", "minioadmin")
@@ -33,14 +30,11 @@ func TestIntegrationPrivateS3SourceThroughProxy(t *testing.T) {
 	region := sourceTestEnv("TEST_S3_REGION", "us-east-1")
 	bucket := sourceTestEnv("TEST_S3_BUCKET", "source-url-integration-tests")
 
-	origin, err := url.Parse(endpoint)
-	require.NoError(t, err)
 	client := sourceTestS3Client(endpoint, region, accessKey, secretKey)
 	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if _, err := client.ListBuckets(pingCtx, &s3.ListBucketsInput{}); err != nil {
-		t.Skipf("s3 is not available: %v", err)
-	}
+	_, err := client.ListBuckets(pingCtx, &s3.ListBucketsInput{})
+	require.NoError(t, err, "mandatory S3 integration dependency is unavailable")
 
 	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
 		var owned *types.BucketAlreadyOwnedByYou
@@ -50,13 +44,12 @@ func TestIntegrationPrivateS3SourceThroughProxy(t *testing.T) {
 		}
 	}
 
-	const key = "quarantine/uploads/private-source.txt"
+	const key = "staging/v1/tus/source-url-integration/source.txt"
 	const body = "private source"
 	_, err = client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 		Body:   bytes.NewReader([]byte(body)),
-		ACL:    types.ObjectCannedACLPrivate,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -72,32 +65,23 @@ func TestIntegrationPrivateS3SourceThroughProxy(t *testing.T) {
 	_ = unsignedResponse.Body.Close()
 	require.Equal(t, http.StatusForbidden, unsignedResponse.StatusCode)
 
-	proxy := httputil.NewSingleHostReverseProxy(origin)
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Host = origin.Host
-	}
-	proxyServer := httptest.NewServer(proxy)
-	t.Cleanup(proxyServer.Close)
-
 	resolver, err := New(uploadconfig.StorageConfig{
 		Driver: uploadconfig.StorageDriverS3,
+		Public: uploadconfig.StoragePublicConfig{BaseURL: endpoint + "/" + bucket},
 		S3: uploadconfig.StorageS3Config{
 			Endpoint:       endpoint,
-			SourceHost:     proxyServer.URL,
 			SourceURLTTL:   time.Hour,
 			Region:         region,
 			Bucket:         bucket,
 			AccessKey:      accessKey,
 			SecretKey:      secretKey,
 			ForcePathStyle: true,
-			DisableSSL:     origin.Scheme == "http",
 		},
+		Tus: uploadconfig.StorageTusConfig{StagingPrefix: "staging/v1/tus"},
 	})
 	require.NoError(t, err)
 
-	signedURL, err := resolver.Resolve(ctx, unsignedURL)
+	signedURL, err := resolver.Resolve(ctx, key)
 	require.NoError(t, err)
 	signedResponse, err := http.Get(signedURL) //nolint:noctx // integration probe
 	require.NoError(t, err)

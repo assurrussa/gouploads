@@ -12,6 +12,7 @@ import (
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/outbox"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
@@ -31,8 +32,8 @@ import (
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
 	uploadrawfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_raw_file"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
-	"github.com/assurrussa/gouploads/infrastructure/storage/files/ceph"
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/local"
+	"github.com/assurrussa/gouploads/infrastructure/storage/files/s3store"
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/sourceurl"
 )
 
@@ -53,9 +54,14 @@ func provideTusStore(cfg uploadconfig.StorageConfig, database pgsql.Client) (tus
 }
 
 func provideFileStorage(cfg uploadconfig.StorageConfig) (filestorage.Storage, error) {
-	storageCfg := cfg.S3
 	switch cfg.Driver {
 	case uploadconfig.StorageDriverS3:
+		var err error
+		cfg, err = uploadconfig.NormalizeStorageConfig(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("validate s3 storage config: %w", err)
+		}
+		storageCfg := cfg.S3
 		httpClient := &http.Client{}
 		if storageCfg.Timeout > 0 {
 			httpClient.Timeout = storageCfg.Timeout
@@ -67,6 +73,11 @@ func provideFileStorage(cfg uploadconfig.StorageConfig) (filestorage.Storage, er
 				storageCfg.AccessKey, storageCfg.SecretKey, storageCfg.SessionToken,
 			),
 			HTTPClient: httpClient,
+			Retryer: func() aws.Retryer {
+				return retry.NewStandard(func(options *retry.StandardOptions) {
+					options.MaxAttempts = storageCfg.MaxRetries + 1
+				})
+			},
 		}
 
 		s3Client := awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {
@@ -74,24 +85,16 @@ func provideFileStorage(cfg uploadconfig.StorageConfig) (filestorage.Storage, er
 			if storageCfg.Endpoint != "" {
 				o.BaseEndpoint = aws.String(storageCfg.Endpoint)
 			}
-			o.EndpointOptions.DisableHTTPS = storageCfg.DisableSSL
 		})
 
-		host := storageCfg.Host
-		if host == "" {
-			host = storageCfg.Endpoint
-		}
-
-		domain := ceph.NewDomainHost(
-			host,
+		domain := s3store.NewDomainHost(
+			cfg.Public.BaseURL,
 			storageCfg.Bucket,
-			storageCfg.ACL,
-			storageCfg.TransformHost,
-			storageCfg.DisableSSL,
-			storageCfg.ForcePathStyle,
+			storageCfg.StagingBucket,
+			cfg.Tus.StagingPrefix,
 		)
 
-		storage, err := ceph.NewStorageAdapter(s3Client, domain)
+		storage, err := s3store.NewStorageAdapter(s3Client, domain)
 		if err != nil {
 			return nil, fmt.Errorf("create s3 storage: %w", err)
 		}
@@ -110,27 +113,18 @@ func provideSourceURLResolver(cfg uploadconfig.StorageConfig) (sourceurl.Resolve
 }
 
 func provideUploadService(
-	cfg uploadconfig.StorageConfig,
 	tx pgsql.TxManager,
 	outboxSvc *outbox.Service,
 	repo *filerepo.Repo,
 	lg logger.Logger,
 	storage filestorage.Storage,
 ) (*uploadservice.Service, error) {
-	opts := []uploadservice.OptOptionsSetter{
-		uploadservice.WithPublicBucket(fileurl.Bucket(cfg)),
-	}
-	if cfg.Driver == uploadconfig.StorageDriverS3 {
-		opts = append(opts, uploadservice.WithSourceBaseURL(cfg.S3.Endpoint))
-	}
 	return uploadservice.New(uploadservice.NewOptions(
 		tx,
 		outboxSvc,
 		repo,
 		lg.WithNamed("task_uploader"),
 		storage,
-		fileurl.BaseURL(cfg),
-		opts...,
 	))
 }
 
@@ -139,6 +133,7 @@ func provideTaskUploader(svc *uploadservice.Service) uploadhttp.TaskUploader {
 }
 
 func provideEventFileAfterProcess(
+	cfg uploadconfig.StorageConfig,
 	tx pgsql.TxManager,
 	repo *filerepo.Repo,
 	eventStream *inmemeventstream.Service,
@@ -149,6 +144,7 @@ func provideEventFileAfterProcess(
 		repo,
 		eventStream,
 		lg,
+		eventfileafterprocess.WithDeliveryBaseURL(fileurl.BaseURL(cfg)),
 	))
 }
 
@@ -188,6 +184,7 @@ func provideClientResizer(
 }
 
 func provideUseCaseDeleteFile(
+	cfg uploadconfig.StorageConfig,
 	tx pgsql.TxManager,
 	repo *filerepo.Repo,
 	eventStream *inmemeventstream.Service,
@@ -202,6 +199,7 @@ func provideUseCaseDeleteFile(
 		lg,
 		storage,
 		outboxSvc,
+		deletefile.WithDeliveryBaseURL(fileurl.BaseURL(cfg)),
 	))
 }
 
@@ -239,6 +237,7 @@ func provideUseCaseListenResizeFile(
 }
 
 func provideUseCaseUploadFile(
+	cfg uploadconfig.StorageConfig,
 	tx pgsql.TxManager,
 	repo *filerepo.Repo,
 	resizer *clientresizer.Service,
@@ -247,6 +246,17 @@ func provideUseCaseUploadFile(
 	storage filestorage.Storage,
 	outboxSvc *outbox.Service,
 ) (*uploadfile.UseCase, error) {
+	normalizedCfg, err := uploadconfig.NormalizeStorageConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("normalize upload file storage config: %w", err)
+	}
+	options := []uploadfile.OptOptionsSetter{
+		uploadfile.WithDeliveryBaseURL(fileurl.BaseURL(normalizedCfg)),
+	}
+	if prefix := strings.TrimSpace(normalizedCfg.Public.Prefix); prefix != "" {
+		options = append(options, uploadfile.WithBaseFolder(prefix))
+	}
+
 	return uploadfile.New(uploadfile.NewOptions(
 		tx,
 		repo,
@@ -255,6 +265,7 @@ func provideUseCaseUploadFile(
 		lg,
 		storage,
 		outboxSvc,
+		options...,
 	))
 }
 

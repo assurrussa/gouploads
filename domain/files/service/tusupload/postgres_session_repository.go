@@ -330,8 +330,7 @@ func (r *postgresSessionRepository) ListExpired(
 	const query = `
 select id::text
 from upload_sessions
-where status <> 'ready'
-  and expires_at < $1
+where expires_at < $1
   and (lease_until is null or lease_until <= clock_timestamp())
 order by expires_at, id
 limit $2`

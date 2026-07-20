@@ -1,31 +1,33 @@
 package uploadfile
 
 import (
-	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
-func TestArtifactFileName_ReusesFallbackUUID(t *testing.T) {
-	base := uuid.NewString()
-	name := artifactFileName(Artifact{
-		ContentType: "image/webp",
-	}, base+".png", "")
+func TestArtifactPresetFileNameUsesOnlyPresetAndMIME(t *testing.T) {
+	name, err := artifactPresetFileName(Artifact{
+		Preset: "card",
+		URL:    "https://resizer.example.com/temp/original-name.png?signature=secret",
+	}, "image/webp")
 
-	require.Equal(t, base+".webp", name)
+	require.NoError(t, err)
+	require.Equal(t, "card.webp", name)
 }
 
-func TestArtifactFileName_GeneratesUUIDWhenMissing(t *testing.T) {
-	name := artifactFileName(Artifact{
-		URL:         "https://resizer.example.com/temp/1.png",
-		ContentType: "image/webp",
-	}, "example.mp4", "")
+func TestArtifactPresetFileNameRejectsUnknownExtension(t *testing.T) {
+	name, err := artifactPresetFileName(Artifact{Preset: "main"}, "invalid/no-extension")
 
-	require.True(t, strings.HasSuffix(name, ".webp"))
-	require.NotEqual(t, "example.mp4", name)
-	base := strings.TrimSuffix(name, ".webp")
-	_, err := uuid.Parse(base)
+	require.Empty(t, name)
+	require.ErrorContains(t, err, "no supported extension")
+}
+
+func TestValidateArtifactContentTypeUsesNarrowAllowlist(t *testing.T) {
+	selected, err := validateArtifactContentType("application/pdf", "application/pdf", "application/pdf")
 	require.NoError(t, err)
+	require.Equal(t, "application/pdf", selected)
+
+	_, err = validateArtifactContentType("image/svg+xml", "image/svg+xml", "image/svg+xml")
+	require.ErrorContains(t, err, "not allowed")
 }

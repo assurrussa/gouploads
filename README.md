@@ -13,7 +13,8 @@ Key Features:
 - **Resumable Uploads**: TUS over S3 multipart with PostgreSQL-backed protocol
   state, cross-replica resume, offset fencing, crash reconciliation, and
   idempotent finalization.
-- **Storage Agnostic**: Built-in support for both Local file system and S3/Ceph storage via `aws-sdk-go-v2`.
+- **Storage Agnostic**: Built-in support for local filesystems and generic
+  S3-compatible storage via `aws-sdk-go-v2`.
 - **Media Processing Pipelines**: Integrated structures for video and image resizing/compression callbacks.
 - **Transaction Outbox Integration**: Works seamlessly with `outbox` patterns to guarantee the execution of post-upload background jobs (like resizing, webhook firing, or database cleanup).
 - **Flexible Context**: Highly adaptable file upload context building, enabling integrations with any authentication or multi-tenant system.
@@ -84,11 +85,13 @@ curl -X POST http://localhost:3000/api/v1/uploads \
 
 Some of the main configurations include:
 - `STORAGE_DRIVER`: `local` or `s3`
-- `STORAGE_S3_ENDPOINT`, `STORAGE_S3_BUCKET`, `STORAGE_S3_REGION`
-- `STORAGE_S3_SOURCE_HOST` and `STORAGE_S3_SOURCE_URL_TTL` for time-limited
-  media-resizer source GET URLs
+- `STORAGE_PUBLIC_BASE_URL` and `STORAGE_PUBLIC_PREFIX` for canonical delivery
+- `STORAGE_S3_ENDPOINT`, `STORAGE_S3_REGION`, `STORAGE_S3_BUCKET`, and optional
+  `STORAGE_S3_STAGING_BUCKET`
+- `STORAGE_S3_SOURCE_URL_TTL`, `STORAGE_S3_TIMEOUT`, and
+  `STORAGE_S3_MAX_RETRIES`
 - `STORAGE_TUS_PART_SIZE`, `STORAGE_TUS_SESSION_TTL`,
-  `STORAGE_TUS_LEASE_TTL`, and `STORAGE_TUS_QUARANTINE_PREFIX`
+  `STORAGE_TUS_LEASE_TTL`, and `STORAGE_TUS_STAGING_PREFIX`
 - Sub-pipelines logic per media type (`STORAGE_IMAGE_DEFAULT_FORMAT`, `STORAGE_VIDEO_RESIZER_HOST`, etc).
 
 ## Stable Host Surface
@@ -105,10 +108,11 @@ extraction, route mounting, object-type policy, and deployment topology.
 
 `host.NewStorage(cfg)` is the supported constructor for the object store used
 by embedded features. It selects local filesystem or S3-compatible storage;
-the S3 contract supports AWS endpoints and path-style MinIO with static
-credentials. The returned `host.Storage` includes idempotent `DeleteBatch`, so
-a CMS worker can delete an approved original/variant object set without
-importing storage internals.
+MinIO, Yandex Object Storage, and Selectel use the same explicit endpoint,
+region, bucket, credentials, and path-style fields. There is no provider enum
+or hidden provider preset. The returned `host.Storage` includes idempotent
+`DeleteBatch`, so a CMS worker can delete an approved original/variant object
+set without importing storage internals.
 
 `FiberUploadHandler.RegisterCMSTusRoutes` mounts only
 `OPTIONS/POST/HEAD/PATCH` under the CMS prefix. It deliberately omits generic
@@ -124,18 +128,30 @@ the source of truth and Redis is not required for TUS session durability. Hosts
 still need to run the storage migrations owned by their selected outbox
 backend.
 
-S3 TUS objects are always created with private ACL under the configured
-quarantine prefix. `TusCompleteResult.Quarantined` remains true after protocol
-finalization: a host or CMS media adapter must validate and promote the object
-before exposing it through a public URL.
+S3 TUS objects are created in the staging bucket under
+`staging/v1/tus/<session-id>/source.<ext>` with
+`Cache-Control: private,no-store`. The adapter never sends object ACLs;
+staging privacy and public `media/v1/*` delivery are bucket-policy concerns.
+`TusCompleteResult.Quarantined` remains available for compatibility, but its
+durable location is a private staging key.
 
 `host.NewSourceURLResolver(cfg)` is the stable narrow source-read facade. In S3
 mode it creates an AWS SigV4 presigned `GetObject` URL immediately before media
-dispatch. When `STORAGE_S3_SOURCE_HOST` is set, only scheme/host are replaced;
-the signed path and query remain unchanged for a credential-free reverse proxy
-that restores the S3 origin `Host`. An empty source host returns the presigned
-origin URL. Local storage keeps the existing URL unchanged. The TTL defaults to
-`6h` and cannot exceed the SigV4 seven-day maximum.
+dispatch against the configured S3 endpoint and staging bucket. Host rewriting
+and source proxies are not part of the contract. Local storage keeps the
+existing URL unchanged. The TTL defaults to `15m` and cannot exceed the SigV4
+seven-day maximum.
+
+Final media keys are deterministic and immutable:
+`media/v1/<object-type>/<object-id>/<file-slug>/<preset>.<ext>`. Managed DB
+records store relative keys and SHA-256 values, not provider URLs. Completed
+HTTP/WebSocket responses compose canonical URLs from
+`StorageConfig.Public.BaseURL`; earlier states expose no location fields.
+
+`host.NewStorageContractChecker(cfg)` exposes an explicit, non-startup live
+probe for host CLIs. It verifies private staging, presigned reads, public
+HEAD/GET/Range semantics, TLS/cache/content metadata, deletion, and cleanup
+without requiring `ListBucket`.
 
 The supported external test-support package is:
 

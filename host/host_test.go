@@ -89,17 +89,20 @@ func TestFilesBaseURLAndBucket(t *testing.T) {
 	cfg := host.StorageConfig{
 		Driver:       host.StorageDriverS3,
 		AppDomainURL: "https://app.example.test",
+		Public: host.StoragePublicConfig{
+			BaseURL: "https://media.example.test",
+			Prefix:  "media/v1",
+		},
 		S3: host.StorageS3Config{
-			Host:   "cdn.example.test/",
 			Bucket: "/media/",
 		},
 	}
 
-	require.Equal(t, "https://cdn.example.test", host.FilesBaseURL(cfg))
-	require.Equal(t, "media", host.FilesBucket(cfg))
+	require.Equal(t, "https://media.example.test", host.FilesBaseURL(cfg))
+	require.Empty(t, host.FilesBucket(cfg))
 	require.Equal(
 		t,
-		"https://cdn.example.test/media/image.jpg",
+		"https://media.example.test/image.jpg",
 		host.ComposeFileURL(host.FilesBaseURL(cfg), host.FilesBucket(cfg), "image.jpg"),
 	)
 }
@@ -113,11 +116,19 @@ func TestNewCleanTusRequest(t *testing.T) {
 func TestNewTusStoreRequiresDatabaseForS3(t *testing.T) {
 	store, err := host.NewTusStore(host.StorageConfig{
 		Driver: host.StorageDriverS3,
+		Public: host.StoragePublicConfig{BaseURL: "https://media.example.test"},
+		S3: host.StorageS3Config{
+			Endpoint:  "https://s3.example.test",
+			Region:    "region-1",
+			Bucket:    "media",
+			AccessKey: "access",
+			SecretKey: "secret",
+		},
 		Tus: host.StorageTusConfig{
-			PartSize:         host.ParseSize("5MB"),
-			LeaseTTL:         30 * time.Second,
-			SessionTTL:       time.Hour,
-			QuarantinePrefix: "quarantine/uploads",
+			PartSize:      host.ParseSize("5MB"),
+			LeaseTTL:      30 * time.Second,
+			SessionTTL:    time.Hour,
+			StagingPrefix: "staging/v1/tus",
 		},
 	}, nil)
 

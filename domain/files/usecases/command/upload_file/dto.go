@@ -7,8 +7,9 @@ import (
 )
 
 type Request struct {
-	FileID    int64      `validate:"required"`
-	Artifacts []Artifact `validate:"required"`
+	FileID           int64      `validate:"required"`
+	Artifacts        []Artifact `validate:"required"`
+	CleanupOnFailure bool
 }
 
 type Artifact struct {

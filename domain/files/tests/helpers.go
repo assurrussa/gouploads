@@ -99,7 +99,7 @@ func CreateFile(t *testing.T) model.File {
 	uploadPath := []string{"uploads", objectType.String(), objectID.String()}
 	folderPath := path.Join(uploadPath...)
 	fileName := "example.png"
-	fileURL := "https://ceph.localhost/" + path.Join(folderPath, fileName)
+	fileURL := "https://s3store.localhost/" + path.Join(folderPath, fileName)
 	tmNow := time.Now()
 	userID := sharedtypes.MustParse[sharedtypes.UserID]("ddfe05b2-847d-4e35-8249-1cf778b90bd5")
 

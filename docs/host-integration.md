@@ -51,11 +51,9 @@ The media-resizer process is an external service. `gouploads` only needs its
 reach.
 
 For private S3 objects, `host.NewSourceURLResolver` signs `GetObject` at
-dispatch time. `STORAGE_S3_SOURCE_HOST` is intentionally independent of the
-public `STORAGE_S3_HOST`. A source proxy must preserve the complete path/query,
-restore the origin `Host` before forwarding to S3, avoid logging query strings,
-and permit only GET/HEAD. It does not need S3 credentials. Empty source host is
-a backward-compatible direct-presigned-origin fallback; local storage remains
+dispatch time against the configured S3 endpoint and staging bucket. The URL
+is passed directly to media-resizer; host rewriting and a source proxy are not
+supported. Signed query strings must not be logged. Local storage remains
 pass-through.
 
 ## Minimal Runtime Wiring
@@ -65,20 +63,27 @@ pass-through.
    ```go
    cfg := host.StorageConfig{
        Driver: host.StorageDriverS3,
+       Public: host.StoragePublicConfig{
+           BaseURL: "https://media.example.test",
+           Prefix: "media/v1",
+       },
        S3: host.StorageS3Config{
            Endpoint: endpoint,
-           SourceHost: sourceProxyURL,
-           SourceURLTTL: 6 * time.Hour,
+           SourceURLTTL: 15 * time.Minute,
            Region: region,
            Bucket: bucket,
+           StagingBucket: stagingBucket, // optional; empty means Bucket
            AccessKey: accessKey,
            SecretKey: secretKey,
+           ForcePathStyle: forcePathStyle,
+           Timeout: 30 * time.Second,
+           MaxRetries: 10,
        },
        Tus: host.StorageTusConfig{
            PartSize: host.ParseSize("8MB"),
            SessionTTL: 24 * time.Hour,
            LeaseTTL: 30 * time.Second,
-           QuarantinePrefix: "quarantine/uploads",
+           StagingPrefix: "staging/v1/tus",
        },
        Image: host.ImagePipelineConfig{
            ResizerHost: resizerJobsURL,
@@ -92,6 +97,20 @@ pass-through.
        },
    }
    ```
+
+   Provider profiles are ordinary values of that same struct, not presets:
+
+   - local MinIO: `Endpoint=http://s3server:9000`, `Region=us-east-1`,
+     `ForcePathStyle=true`, and a delivery base such as
+     `http://minio.localhost/media`;
+   - Yandex Object Storage: `Endpoint=https://storage.yandexcloud.net`,
+     `Region=ru-central1`, `ForcePathStyle=true`, with a separately configured
+     custom delivery origin;
+   - Selectel path-style: `Endpoint=https://s3.<pool>.storage.selcloud.ru`,
+     `Region=<pool>`, `ForcePathStyle=true`, with its own delivery origin.
+
+   Credentials, bucket names, and delivery origins remain host-owned. Do not
+   derive behavior from a provider name.
 
 2. Run all `host.MigrationFiles()` and build the TUS store. S3 mode requires
    the same PostgreSQL client used by the host composition root:
@@ -189,15 +208,36 @@ by the host, but it is not the source of truth for TUS sessions.
 - Finalization is fenced and repeatable. A completed object is recovered with
   `HeadObject` if the process died after S3 completion but before the database
   commit. `FinalizationKey` is stable across retries for downstream idempotency.
-- Incomplete objects use private ACL and the configured quarantine prefix.
-  Protocol completion does not make an object public; validation/promotion is
-  owned by the host media layer.
+- Incomplete objects use `Cache-Control: private,no-store` in the staging
+  bucket/prefix. No object ACL is sent. Protocol completion does not make an
+  object public; media finalization writes immutable artifacts under the
+  configured public prefix.
 - Cleanup also lists old multipart uploads under that prefix and aborts entries
   that have no matching durable session. The cleanup threshold protects an
   in-flight CreateMultipartUpload-to-database-insert window.
 - `STORAGE_TUS_PART_SIZE` is the exact size of every non-final PATCH. The final
   PATCH may be smaller. The transport rejects concurrent offsets and invalid
   intermediate chunk sizes.
+
+## Delivery and live storage check
+
+`StoragePublicConfig.BaseURL` is the complete delivery prefix; it may be an
+origin such as `https://media.example.test` or a local path-style prefix such
+as `http://minio.localhost/media`. `FilesBucket` is intentionally empty for the
+portable contract. Final object keys and DB rows therefore survive a provider
+or DNS change without rewriting content.
+
+Hosts should expose an explicit operator command around:
+
+```go
+checker, err := host.NewStorageContractChecker(cfg)
+report, err := checker.Check(ctx)
+```
+
+Do not run it at application startup. The checker creates unique staging and
+final probe keys, never calls `ListBucket`, validates anonymous/private and
+presigned/public reads including Range and immutable cache metadata, then
+attempts authenticated cleanup even after failure.
 
 ## Test Support
 
