@@ -69,13 +69,22 @@ func TestJobHandle_Success(t *testing.T) {
 	}
 
 	eventsAfter := shared.NewFileEventAfterJobs("model_deleted_bind", userID, map[string]any{"foo": "bar"})
-	payload, err := deletedfilejob.MarshalPayload(deletedfilejob.NewPayload(fileID, userID, file.GetFullPath(), eventsAfter...))
+	payload, err := deletedfilejob.MarshalPayload(deletedfilejob.NewOwnedPayload(
+		fileID,
+		userID,
+		shared.ObjectTypeAdmin,
+		shared.FileObjectID(42),
+		file.GetFullPath(),
+		eventsAfter...,
+	))
 	ts.Require().NoError(err)
 
 	ts.useCaseMock.EXPECT().Handle(ctx, usecase.Request{
 		UserID:      userID,
 		FileID:      fileID,
 		FilePath:    file.GetFullPath(),
+		ObjectType:  shared.ObjectTypeAdmin,
+		ObjectID:    shared.FileObjectID(42),
 		AfterEvents: eventsAfter,
 	}).Return(usecase.Response{}, nil).Times(1)
 

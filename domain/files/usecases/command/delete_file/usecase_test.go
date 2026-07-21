@@ -145,21 +145,28 @@ func TestHandle_RemoveStorageFileWithPresets(t *testing.T) {
 	fileID := int64(123)
 	file := model.File{
 		ID:               fileID,
-		FileName:         "testname.png",
+		FileName:         "main.png",
 		OriginalFileName: "testname-original.png",
-		FolderPath:       "path/foo",
+		FolderPath:       "media/v1/admin/123/file-slug",
 		ObjectID:         pointer.To(shared.FileObjectID(fileID)),
 		ObjectType:       shared.ObjectTypeAdmin,
 		Data: &model.FileData{
 			Presets: map[shared.PresetName]shared.FilePreset{
-				shared.FilePresetMainName: {PresetName: shared.FilePresetMainName.String()},
+				shared.FilePresetMainName: {
+					PresetName:   shared.FilePresetMainName.String(),
+					RelativePath: "media/v1/admin/123/file-slug/main.png",
+				},
 				"thumb": {
 					PresetName:   "thumb",
-					RelativePath: path.Join("path/foo", "thumb", "testname.png"),
+					RelativePath: "media/v1/admin/123/file-slug/thumb.png",
+				},
+				"original": {
+					PresetName:   "original",
+					RelativePath: "media/v1/admin/123/file-slug/original.png",
 				},
 			},
 		},
-		URL: "https://example.com/path/foo/testname.png",
+		URL: "https://example.com/media/v1/admin/123/file-slug/main.png",
 	}
 	eventsAfter := shared.NewFileEventAfterJobs("model_deleted_bind", userID, map[string]any{"foo": "bar"})
 	req := deletedfile.Request{
@@ -180,6 +187,9 @@ func TestHandle_RemoveStorageFileWithPresets(t *testing.T) {
 			ts.ElementsMatch([]string{
 				file.GetFullPath(),
 				path.Join(file.FolderPath, "thumb", file.FileName),
+				"media/v1/admin/123/file-slug/thumb.png",
+				path.Join(file.FolderPath, "original", file.FileName),
+				"media/v1/admin/123/file-slug/original.png",
 			}, paths)
 			return nil
 		}).Times(1)
@@ -190,7 +200,7 @@ func TestHandle_RemoveStorageFileWithPresets(t *testing.T) {
 		)).
 		Return(nil).Times(1)
 
-	payloadBytes := `{"userId":"368c1d49-713e-4b7f-9e8c-bd2b73b1d274","userType":"admin","fileId":123,"eventType":"model_deleted_bind","meta":{"fileName":"testname.png","fileUrl":"https://example.com/path/foo/testname.png","foo":"bar","objectId":123,"objectType":"admin","originalFileName":"testname-original.png"}}` //nolint:lll // tests
+	payloadBytes := `{"userId":"368c1d49-713e-4b7f-9e8c-bd2b73b1d274","userType":"admin","fileId":123,"eventType":"model_deleted_bind","meta":{"fileName":"main.png","fileUrl":"https://example.com/media/v1/admin/123/file-slug/main.png","foo":"bar","objectId":123,"objectType":"admin","originalFileName":"testname-original.png"}}` //nolint:lll // tests
 	ts.outboxMock.EXPECT().Put(gomock.Any(), "model_deleted_bind", payloadBytes, gomock.Any()).
 		DoAndReturn(func(_ context.Context, name, payload string, availableAt time.Time) (int64, error) {
 			var dataPayload map[string]any
@@ -204,6 +214,27 @@ func TestHandle_RemoveStorageFileWithPresets(t *testing.T) {
 
 	ts.Require().NoError(err)
 	ts.Empty(resp)
+}
+
+func TestHandle_RejectsFileOwnedByDifferentObject(t *testing.T) {
+	ctx, _, ts := NewTestSuite(t)
+
+	const fileID = int64(123)
+	file := model.File{
+		ID:         fileID,
+		FileName:   "main.png",
+		FolderPath: "media/v1/admin/9/file-slug",
+		ObjectType: shared.ObjectTypeAdmin,
+		ObjectID:   pointer.To(shared.FileObjectID(9)),
+	}
+	ts.fileMock.EXPECT().GetByID(ctx, fileID).Return(file, nil).Times(1)
+
+	_, err := ts.useCase.Handle(ctx, deletedfile.Request{
+		FileID:     fileID,
+		ObjectType: shared.ObjectTypeAdmin,
+		ObjectID:   shared.FileObjectID(3),
+	})
+	ts.Require().ErrorIs(err, deletedfile.ErrFileOwnershipMismatch)
 }
 
 func TestHandle_RemoveStorageFile(t *testing.T) {

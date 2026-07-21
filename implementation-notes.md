@@ -412,3 +412,38 @@
   `make publish-readiness VERSION=v0.10.0-alpha.4`. The aggregate target then
   stopped only at its intentional final `git diff --exit-code` because this
   implementation was still uncommitted.
+
+## 2026-07-21: Complete media deletion graph
+
+- Confirmed the production TUS leak came from mixing the logical client name
+  with the physical S3 name. Remote completion now normalizes
+  `CompleteResult.RelativePath` and derives `Path`, `FolderPath`, and
+  `FileName` from that key; only `OriginalName` keeps the client value.
+- Kept staging and replacement cleanup as independent `deleted_file` jobs.
+  Staging uses the exact key and `FileID=0`. Replacement carries the expected
+  `(ObjectType, ObjectID)` in its backward-compatible internal payload and is
+  checked both before creating the new upload task and immediately before
+  deleting the old record/files.
+- Preserved numeric equality between `ObjectID` and `DeletedID`; they identify
+  different entity kinds. A replacement is rejected only when the fetched file
+  is absent or belongs to another object.
+- Expanded old-media collection to include `GetFullPath`, every stored preset
+  `RelativePath` (including `original`), and every non-main legacy preset path.
+  Keys are deduplicated and sorted before the existing `DeleteBatch` groups
+  them by staging/public bucket.
+- Added structured cleanup logs with `file_id`, `deleted_id`, `staging_key`,
+  and the full `public_keys` list. No signed URL or credential is logged.
+- Fixed the double TTL without changing the public cleanup request: the S3
+  store converts the host activity threshold to the `expires_at` threshold
+  once; orphan multipart cleanup continues using the activity age.
+- Reworked the portable MinIO/PostgreSQL test to traverse real Fiber TUS
+  POST/PATCH/complete mapping. It proves differing client/physical names,
+  independent staging/replacement jobs, ownership rejection, a failed new
+  preset preserving the old media, full main/original/preset plus legacy
+  cleanup, availability of all new variants, and repeated-job idempotency.
+- Pre-tag verification passed on 2026-07-21: the full `make check` gate
+  completed generation, formatting, vet, 72 linters, unit tests, repeated race
+  tests, and coverage; stable-surface, `hosttest`, PostgreSQL TUS, direct S3
+  source, portable-media HTTP/TUS E2E, local clean-consumer, and cross-repo
+  import-policy checks also passed. The published-consumer gate remains a
+  post-tag check for `v0.10.0-alpha.6`.

@@ -14,11 +14,31 @@ type Payload struct {
 	UserID      sharedtypes.UserID         `json:"userId"`
 	FileID      int64                      `json:"fileId"`
 	FilePath    string                     `json:"filepath"`
+	ObjectType  shared.FileObjectType      `json:"objectType,omitempty"`
+	ObjectID    shared.FileObjectID        `json:"objectId,omitempty"`
 	AfterEvents []shared.FileEventAfterJob `json:"afterEvents"`
 }
 
 func NewPayload(fileID int64, userID sharedtypes.UserID, filePath string, afterEvents ...shared.FileEventAfterJob) Payload {
 	return Payload{UserID: userID, FileID: fileID, FilePath: filePath, AfterEvents: afterEvents}
+}
+
+func NewOwnedPayload(
+	fileID int64,
+	userID sharedtypes.UserID,
+	objectType shared.FileObjectType,
+	objectID shared.FileObjectID,
+	filePath string,
+	afterEvents ...shared.FileEventAfterJob,
+) Payload {
+	return Payload{
+		UserID:      userID,
+		FileID:      fileID,
+		FilePath:    filePath,
+		ObjectType:  objectType,
+		ObjectID:    objectID,
+		AfterEvents: afterEvents,
+	}
 }
 
 func MarshalPayload(p Payload) (string, error) {

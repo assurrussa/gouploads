@@ -392,9 +392,14 @@ func (s *S3Store) Cleanup(ctx context.Context, before time.Time) (int, error) {
 	}
 
 	const batchSize = 100
+	// Durable sessions already carry expires_at = last_activity + TTL. The
+	// host cleanup contract passes an activity threshold (now - TTL), so move
+	// that threshold forward once before comparing it with expires_at. Without
+	// this conversion a ready/abandoned session waits for two full TTL periods.
+	sessionExpiryBefore := before.Add(s.cfg.TTL)
 	removed := 0
 	for {
-		ids, err := s.repo.ListExpired(ctx, before, batchSize)
+		ids, err := s.repo.ListExpired(ctx, sessionExpiryBefore, batchSize)
 		if err != nil {
 			return removed, err
 		}

@@ -65,6 +65,8 @@ func (j *Job) Handle(ctx context.Context, payload string) (errReturn error) {
 		UserID:      data.UserID,
 		FileID:      data.FileID,
 		FilePath:    data.FilePath,
+		ObjectType:  data.ObjectType,
+		ObjectID:    data.ObjectID,
 		AfterEvents: data.AfterEvents,
 	})
 	if err != nil {

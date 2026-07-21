@@ -137,7 +137,6 @@ func TestService_UploadBatch_Success(t *testing.T) {
 		UserID:       *fileModel.UserID,
 		ObjectType:   fileModel.ObjectType,
 		ObjectID:     *fileModel.ObjectID,
-		DeletedID:    shared.FileObjectID(12343),
 		AfterJobs: shared.NewFileEventAfterJobs(
 			"model_avatar_bind", uuid, map[string]any{"adminId": uuid},
 		),
@@ -277,7 +276,6 @@ func TestService_UploadBatch_DefaultConfigApplied(t *testing.T) {
 		ManagerID:    *fileModel.ManagerID,
 		UserID:       *fileModel.UserID,
 		ObjectType:   fileModel.ObjectType,
-		DeletedID:    shared.FileObjectID(12343),
 		AfterJobs: shared.NewFileEventAfterJobs(
 			"model_avatar_bind", uuid, map[string]any{"adminId": uuid},
 		),
@@ -305,7 +303,6 @@ func TestService_UploadBatch_ValidationError(t *testing.T) {
 		ManagerID:    1,
 		UserID:       3,
 		ObjectType:   shared.ObjectTypeExercise,
-		DeletedID:    shared.FileObjectID(12343),
 		AfterJobs:    shared.NewFileEventAfterJobs("model_avatar_bind", testID, map[string]any{"testId": 1}),
 		Config: &uploadservice.FileUploadConfig{
 			AllowedExtensions: []string{".png"},
@@ -366,7 +363,6 @@ func TestService_UploadBatch_RunInTxError(t *testing.T) {
 		UserID:       3,
 		ObjectType:   shared.ObjectTypeExercise,
 		ObjectID:     shared.FileObjectID(12344),
-		DeletedID:    shared.FileObjectID(12343),
 		Config: &uploadservice.FileUploadConfig{
 			AllowedExtensions: []string{".txt"},
 			AllowedMimeTypes: map[string][]string{
@@ -388,6 +384,11 @@ func TestService_UploadSingle_Success(t *testing.T) {
 	fileID := fileModel.ID
 	fileModel.ID = 0
 	fileModel.Size = 80
+	replacedFile := testshelpers.CreateFile(t)
+	replacedFile.ID = 12343
+	replacedFile.ObjectType = fileModel.ObjectType
+	replacedFile.ObjectID = pointer.To(*fileModel.ObjectID)
+	ts.mockFileRepository.EXPECT().GetByID(ctx, replacedFile.ID).Return(replacedFile, nil).Times(1)
 
 	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
@@ -413,7 +414,16 @@ func TestService_UploadSingle_Success(t *testing.T) {
 
 	ts.mockFileRepository.EXPECT().
 		Create(gomock.Any(), testsmatcher.NewFileShortMatcher("upload single success", fileModel)).
-		Return(fileID, nil).Times(1)
+		DoAndReturn(func(_ context.Context, created model.File) (int64, error) {
+			afterJobs := created.GetData().Uploader.AfterJobs
+			ts.Require().Len(afterJobs, 2)
+			payload, payloadErr := deletedfile.UnmarshalPayload(afterJobs[1].Payload)
+			ts.Require().NoError(payloadErr)
+			ts.Equal(replacedFile.ID, payload.FileID)
+			ts.Equal(fileModel.ObjectType, payload.ObjectType)
+			ts.Equal(*fileModel.ObjectID, payload.ObjectID)
+			return fileID, nil
+		}).Times(1)
 
 	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
 		fileID,
@@ -539,7 +549,6 @@ func TestService_UploadSingle_ClientError(t *testing.T) {
 		UserID:       3,
 		ObjectType:   shared.ObjectTypeExercise,
 		ObjectID:     shared.FileObjectID(12344),
-		DeletedID:    shared.FileObjectID(12343),
 		Config: &uploadservice.FileUploadConfig{
 			AllowedExtensions: []string{".png"},
 			AllowedMimeTypes: map[string][]string{
@@ -551,6 +560,36 @@ func TestService_UploadSingle_ClientError(t *testing.T) {
 	ts.Require().Error(err)
 	var clientErr uploadservice.ClientError
 	ts.Require().ErrorAs(err, &clientErr)
+}
+
+func TestService_UploadStoredRejectsReplacementFromDifferentObject(t *testing.T) {
+	ctx, cancel, ts := NewTestRepoSuite(t)
+	defer cancel()
+
+	const deletedID = int64(17)
+	replaced := testshelpers.CreateFile(t)
+	replaced.ID = deletedID
+	replaced.ObjectType = shared.ObjectTypeAdmin
+	replaced.ObjectID = pointer.To(shared.FileObjectID(99))
+	ts.mockFileRepository.EXPECT().GetByID(ctx, deletedID).Return(replaced, nil).Times(1)
+
+	_, err := ts.svc.UploadStored(ctx, uploadservice.ReaderRequest{
+		UploaderUUID: sharedtypes.NewUserID(),
+		ManagerID:    3,
+		ObjectType:   shared.ObjectTypeAdmin,
+		ObjectID:     shared.FileObjectID(3),
+		DeletedID:    shared.FileObjectID(deletedID),
+	}, uploadservice.UploadedFile{
+		OriginalName: "client.webp",
+		FileName:     "source.webp",
+		Path:         "staging/v1/tus/session/source.webp",
+		FolderPath:   "staging/v1/tus/session",
+		MimeType:     "image/webp",
+	})
+	ts.Require().Error(err)
+	var clientErr uploadservice.ClientError
+	ts.Require().ErrorAs(err, &clientErr)
+	ts.Equal("replacement file does not belong to the upload object", clientErr.Message)
 }
 
 func TestService_UploadSingle_EnqueueError(t *testing.T) {
@@ -597,7 +636,6 @@ func TestService_UploadSingle_EnqueueError(t *testing.T) {
 		UserID:       *fileModel.UserID,
 		ObjectType:   fileModel.ObjectType,
 		ObjectID:     *fileModel.ObjectID,
-		DeletedID:    shared.FileObjectID(12343),
 		AfterJobs: shared.NewFileEventAfterJobs(
 			"model_avatar_bind", uuid, map[string]any{"adminId": uuid},
 		),
@@ -668,7 +706,6 @@ func TestService_UploadSingle_OutboxError(t *testing.T) {
 		UserID:       *fileModel.UserID,
 		ObjectType:   fileModel.ObjectType,
 		ObjectID:     *fileModel.ObjectID,
-		DeletedID:    shared.FileObjectID(12343),
 		AfterJobs: shared.NewFileEventAfterJobs(
 			"model_avatar_bind", uuid, map[string]any{"adminId": uuid},
 		),

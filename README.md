@@ -135,6 +135,13 @@ staging privacy and public `media/v1/*` delivery are bucket-policy concerns.
 `TusCompleteResult.Quarantined` remains available for compatibility, but its
 durable location is a private staging key.
 
+After every successful media finalization, cleanup remains split into two
+independent idempotent jobs. One deletes the exact physical staging key with
+`FileID=0`; an optional replacement job deletes the prior file record only
+when its `ObjectType` and `ObjectID` still match the new upload. Replacement
+deletion includes the stored main/original/preset keys and legacy preset paths,
+and is not scheduled until every new artifact and the database update succeed.
+
 `host.NewSourceURLResolver(cfg)` is the stable narrow source-read facade. In S3
 mode it creates an AWS SigV4 presigned `GetObject` URL immediately before media
 dispatch against the configured S3 endpoint and staging bucket. Host rewriting

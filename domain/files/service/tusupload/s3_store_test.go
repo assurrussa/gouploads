@@ -157,7 +157,11 @@ func TestS3Store_CleanupRemovesExpiredReadyStagingObject(t *testing.T) {
 	_, err = store.Complete(ctx, session.ID)
 	require.NoError(t, err)
 
-	removed, err := store.Cleanup(ctx, session.CreatedAt.Add(2*defaultSessionTTL))
+	removed, err := store.Cleanup(ctx, session.CreatedAt.Add(-time.Nanosecond))
+	require.NoError(t, err)
+	require.Zero(t, removed, "cleanup must not remove a session before its single TTL has elapsed")
+
+	removed, err = store.Cleanup(ctx, session.CreatedAt.Add(time.Nanosecond))
 	require.NoError(t, err)
 	require.Equal(t, 1, removed)
 	_, err = repo.Get(ctx, session.ID)

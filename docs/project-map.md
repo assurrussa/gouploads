@@ -1,6 +1,6 @@
 # Project Map
 
-Verified against the local repository on 2026-07-20.
+Verified against the local repository on 2026-07-21.
 
 ## Purpose
 
@@ -66,12 +66,20 @@ external consumer manifest and release docs explicitly promote them.
 6. Upload use cases persist file metadata, write storage objects, and enqueue
    upload, resize, listen-resize, or delete jobs through the host outbox
    service.
+   TUS completion derives the physical filename from the normalized storage
+   key, while preserving the client filename only as `OriginalName`.
 7. The external `media-resizer` service receives image/video jobs and calls the
    host callback route.
 8. The host callback parses the request into `host.BuildListenResizeRequest(...)`
    and calls the configured listen-resize handler.
 9. Scheduled cleanup can use `host.NewCleanFilesUseCase` and
    `host.NewCleanTusUseCase`.
+
+Replacement cleanup is ownership-bound to the same `(ObjectType, ObjectID)` and
+runs only after every new artifact and the atomic file/outbox update succeed.
+The delete use case removes stored main/original/preset keys plus deduplicated
+legacy preset paths; the S3 adapter groups the resulting keys by public versus
+staging bucket before `DeleteObjects`.
 
 ## Host Responsibilities
 

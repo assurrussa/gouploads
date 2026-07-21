@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -436,28 +437,7 @@ func (h *Handler) TusComplete(c fiber.Ctx) error {
 	}
 	req.AfterJobs = append(req.AfterJobs, resolution.afterJobs...)
 
-	var fileModel model.File
-	if completeResult.Reader != nil {
-		defer completeResult.Reader.Close()
-		fileModel, err = h.taskUploader.UploadReader(c, req, uploadservice.ReaderUploadInput{
-			OriginalName: completeResult.OriginalName,
-			Size:         completeResult.Size,
-			Reader:       completeResult.Reader,
-		})
-	} else {
-		uploaded := uploadservice.UploadedFile{
-			OriginalName: completeResult.OriginalName,
-			FileName:     completeResult.FileName,
-			Size:         completeResult.Size,
-			Path:         completeResult.RelativePath,
-			FolderPath:   filesanitize.EnsureRelativeDir(completeResult.RelativePath),
-			URL:          completeResult.URL,
-			MimeType:     completeResult.MimeType,
-			Width:        completeResult.Width,
-			Height:       completeResult.Height,
-		}
-		fileModel, err = h.taskUploader.UploadStored(c, req, uploaded)
-	}
+	fileModel, err := h.uploadCompletedTus(c, req, completeResult)
 	if err != nil {
 		var clientErr uploadservice.ClientError
 		if errors.As(err, &clientErr) {
@@ -482,6 +462,50 @@ func (h *Handler) TusComplete(c fiber.Ctx) error {
 	}
 
 	return c.Status(http.StatusAccepted).JSON(response)
+}
+
+func (h *Handler) uploadCompletedTus(
+	c fiber.Ctx,
+	req uploadservice.ReaderRequest,
+	complete tusupload.CompleteResult,
+) (model.File, error) {
+	if complete.Reader != nil {
+		defer complete.Reader.Close()
+
+		return h.taskUploader.UploadReader(c, req, uploadservice.ReaderUploadInput{
+			OriginalName: complete.OriginalName,
+			Size:         complete.Size,
+			Reader:       complete.Reader,
+		})
+	}
+
+	uploaded, err := uploadedFileFromCompleteResult(complete)
+	if err != nil {
+		h.logger.ErrorContext(c, "failed to map completed tus upload", logger.Error(err))
+
+		return model.File{}, err
+	}
+
+	return h.taskUploader.UploadStored(c, req, uploaded)
+}
+
+func uploadedFileFromCompleteResult(complete tusupload.CompleteResult) (uploadservice.UploadedFile, error) {
+	storagePath, err := filesanitize.EnsureRelativePath(complete.RelativePath)
+	if err != nil {
+		return uploadservice.UploadedFile{}, fmt.Errorf("normalize completed tus path: %w", err)
+	}
+
+	return uploadservice.UploadedFile{
+		OriginalName: complete.OriginalName,
+		FileName:     path.Base(storagePath),
+		Size:         complete.Size,
+		Path:         storagePath,
+		FolderPath:   filesanitize.EnsureRelativeDir(storagePath),
+		URL:          complete.URL,
+		MimeType:     complete.MimeType,
+		Width:        complete.Width,
+		Height:       complete.Height,
+	}, nil
 }
 
 func (h *Handler) Upload(c fiber.Ctx) error {

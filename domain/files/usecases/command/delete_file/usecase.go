@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -57,6 +58,8 @@ type UseCase struct {
 	Options
 }
 
+var ErrFileOwnershipMismatch = errors.New("file does not belong to the expected object")
+
 func Must(opts Options) *UseCase {
 	useCase, err := New(opts)
 	if err != nil {
@@ -105,11 +108,23 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 		//nolint:ineffassign,staticcheck,wastedassign,nolintlint // Если есть файл, то и путь надо брать от него, а не от реквеста.
 		filePath = file.GetFullPath()
 	}
+	if err := validateOwnership(file, req); err != nil {
+		return Response{}, err
+	}
+
+	deletePaths := collectPaths(file, filePath)
 
 	taskLogger := u.logger.WithAttrs(
 		slog.Int64("file_id", req.FileID),
+		slog.Int64("deleted_id", req.FileID),
 		slog.String("file_path", filePath),
 	)
+	if req.FileID == 0 {
+		taskLogger = taskLogger.WithAttrs(slog.String("staging_key", filePath))
+	} else {
+		taskLogger = taskLogger.WithAttrs(slog.Any("public_keys", deletePaths))
+	}
+	taskLogger.InfoContext(ctx, "deleting media objects")
 
 	defer func() {
 		if errReturn == nil || req.FileID == 0 {
@@ -273,10 +288,7 @@ func collectPaths(file model.File, fallback string) []string {
 	}
 
 	for presetName, preset := range data.Presets {
-		if preset.RelativePath != "" {
-			add(preset.RelativePath)
-			continue
-		}
+		add(preset.RelativePath)
 
 		name := strings.TrimSpace(preset.PresetName)
 		if name == "" {
@@ -289,7 +301,28 @@ func collectPaths(file model.File, fallback string) []string {
 		add(path.Join(file.FolderPath, name, file.FileName))
 	}
 
+	slices.Sort(paths)
 	return paths
+}
+
+func validateOwnership(file model.File, req Request) error {
+	if req.ObjectType == "" && req.ObjectID == 0 {
+		return nil
+	}
+	if file.ID == 0 {
+		return nil
+	}
+	if file.ObjectID == nil || file.ObjectType != req.ObjectType || *file.ObjectID != req.ObjectID {
+		return fmt.Errorf(
+			"%w: file_id=%d expected_object_type=%s expected_object_id=%d",
+			ErrFileOwnershipMismatch,
+			req.FileID,
+			req.ObjectType,
+			req.ObjectID,
+		)
+	}
+
+	return nil
 }
 
 func (u *UseCase) buildCompletedEvent(file model.File) shared.FileDeletedEvent {

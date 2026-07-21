@@ -215,6 +215,10 @@ by the host, but it is not the source of truth for TUS sessions.
 - Cleanup also lists old multipart uploads under that prefix and aborts entries
   that have no matching durable session. The cleanup threshold protects an
   in-flight CreateMultipartUpload-to-database-insert window.
+- PostgreSQL sessions already store `expires_at = last_activity + SessionTTL`.
+  The S3 cleanup adapter converts the host activity threshold before comparing
+  it with `expires_at`, so an abandoned session waits one TTL plus the nearest
+  scheduler interval, not two TTL periods.
 - `STORAGE_TUS_PART_SIZE` is the exact size of every non-final PATCH. The final
   PATCH may be smaller. The transport rejects concurrent offsets and invalid
   intermediate chunk sizes.

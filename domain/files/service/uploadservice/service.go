@@ -113,6 +113,9 @@ func (s *Service) UploadSingle(ctx context.Context, req SingleRequest) (model.Fi
 	if err := req.Validate(); err != nil {
 		return model.File{}, fmt.Errorf("validate request: %w", err)
 	}
+	if err := s.validateReplacement(ctx, req.ObjectType, req.ObjectID, req.DeletedID); err != nil {
+		return model.File{}, err
+	}
 
 	uploadConfig, err := s.prepareConfig(req)
 	if err != nil {
@@ -152,6 +155,9 @@ func (s *Service) UploadSingle(ctx context.Context, req SingleRequest) (model.Fi
 func (s *Service) UploadReader(ctx context.Context, req ReaderRequest, input ReaderUploadInput) (model.File, error) {
 	if err := req.Validate(); err != nil {
 		return model.File{}, fmt.Errorf("validate request: %w", err)
+	}
+	if err := s.validateReplacement(ctx, req.ObjectType, req.ObjectID, req.DeletedID); err != nil {
+		return model.File{}, err
 	}
 
 	uploadConfig, err := s.prepareConfig(SingleRequest{
@@ -208,6 +214,9 @@ func (s *Service) UploadReader(ctx context.Context, req ReaderRequest, input Rea
 func (s *Service) UploadStored(ctx context.Context, req ReaderRequest, uploaded UploadedFile) (model.File, error) {
 	if err := req.Validate(); err != nil {
 		return model.File{}, fmt.Errorf("validate request: %w", err)
+	}
+	if err := s.validateReplacement(ctx, req.ObjectType, req.ObjectID, req.DeletedID); err != nil {
+		return model.File{}, err
 	}
 
 	if strings.TrimSpace(uploaded.FileName) == "" || strings.TrimSpace(uploaded.OriginalName) == "" {
@@ -448,7 +457,13 @@ func (s *Service) buildUploader(req SingleRequest) (shared.FileUploader, error) 
 		userTypeUploader = shared.UserTypeAdmin
 	}
 	if req.DeletedID > 0 {
-		deletedPayload := deletedfilejob.NewPayload(req.DeletedID.Int64(), userUUIDUploader, "")
+		deletedPayload := deletedfilejob.NewOwnedPayload(
+			req.DeletedID.Int64(),
+			userUUIDUploader,
+			req.ObjectType,
+			req.ObjectID,
+			"",
+		)
 		deletedPayloadBytes, err := deletedfilejob.MarshalPayload(deletedPayload)
 		if err != nil {
 			return shared.FileUploader{}, fmt.Errorf("marshal payload: %w", err)
@@ -464,6 +479,28 @@ func (s *Service) buildUploader(req SingleRequest) (shared.FileUploader, error) 
 		Status:    shared.FileUploadTaskStatusQueued,
 		AfterJobs: req.AfterJobs,
 	}, nil
+}
+
+func (s *Service) validateReplacement(
+	ctx context.Context,
+	objectType shared.FileObjectType,
+	objectID shared.FileObjectID,
+	deletedID shared.FileObjectID,
+) error {
+	if deletedID <= 0 {
+		return nil
+	}
+
+	replaced, err := s.fileRepo.GetByID(ctx, deletedID.Int64())
+	if err != nil {
+		return fmt.Errorf("get replacement file %d: %w", deletedID, err)
+	}
+	if replaced.ID == 0 || replaced.ObjectID == nil ||
+		replaced.ObjectType != objectType || *replaced.ObjectID != objectID {
+		return ClientError{Message: "replacement file does not belong to the upload object"}
+	}
+
+	return nil
 }
 
 func (s *Service) composeSourceURL(uploadedFile UploadedFile) string {

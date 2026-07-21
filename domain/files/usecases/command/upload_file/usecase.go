@@ -168,12 +168,32 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (Response, error) {
 		}
 		return Response{}, fmt.Errorf("RunInTx: %w", err)
 	}
+	taskLogger.InfoContext(
+		ctx,
+		"scheduled media cleanup",
+		slog.Int64("deleted_id", replacementDeletedID(fileUploader.AfterJobs)),
+		slog.String("staging_key", sourcePath),
+	)
 
 	eventModel := fileModel
 	eventModel.URL = u.publicURL(fileModel.GetFullPath())
 	u.publish(ctx, fileUploader.UserUUID, createEvent(fileUploader, eventModel, shared.FileUploadTaskStatusCompleted))
 
 	return Response{}, nil
+}
+
+func replacementDeletedID(afterJobs []shared.FileEventAfterJob) int64 {
+	for _, afterJob := range afterJobs {
+		if strings.TrimSpace(afterJob.JobName) != deletedfilejob.JobName || strings.TrimSpace(afterJob.Payload) == "" {
+			continue
+		}
+		payload, err := deletedfilejob.UnmarshalPayload(afterJob.Payload)
+		if err == nil && payload.FileID > 0 {
+			return payload.FileID
+		}
+	}
+
+	return 0
 }
 
 func (u *UseCase) enqueueAfterJobs(

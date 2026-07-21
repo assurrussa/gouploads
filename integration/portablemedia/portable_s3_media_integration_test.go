@@ -3,8 +3,10 @@
 package portablemedia_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -27,13 +30,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	deletedfilejob "github.com/assurrussa/gouploads/domain/files/outbox/deleted_file"
+	sendresizefilejob "github.com/assurrussa/gouploads/domain/files/outbox/send_resize_file"
 	uploadfilejob "github.com/assurrussa/gouploads/domain/files/outbox/upload_file"
 	clientresizer "github.com/assurrussa/gouploads/domain/files/service/client_resizer"
+	"github.com/assurrussa/gouploads/domain/files/service/uploadservice"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	testshelpers "github.com/assurrussa/gouploads/domain/files/tests"
 	deletefile "github.com/assurrussa/gouploads/domain/files/usecases/command/delete_file"
@@ -90,6 +96,14 @@ func TestIntegrationPortableS3Media(t *testing.T) {
 			partialFailure:  true,
 			testReplacement: true,
 			artifacts: []artifactSpec{
+				{
+					preset:      "original",
+					path:        "/image/original",
+					mediaType:   "image",
+					contentType: "image/png",
+					body:        imageBody,
+					metadata:    map[string]any{"target_width": 2, "target_height": 2},
+				},
 				{
 					preset:      "main",
 					path:        "/image/main",
@@ -227,8 +241,9 @@ func runScenario(t *testing.T, tt scenario) {
 	require.NoError(t, err)
 	sourceResolver, err := host.NewSourceURLResolver(cfg)
 	require.NoError(t, err)
+	userID := host.NewUserID()
 
-	artifactServer := newArtifactServer(t, tt.artifacts, failurePath(tt))
+	artifactServer := newArtifactServer(t, tt.artifacts, "")
 	defer artifactServer.Close()
 	outbox := &outboxCollector{}
 	events := inmemeventstream.New()
@@ -262,6 +277,30 @@ func runScenario(t *testing.T, tt scenario) {
 		outbox,
 		deletefile.WithDeliveryBaseURL(publicBaseURL),
 	))
+	uploadService := uploadservice.Must(uploadservice.NewOptions(
+		tx,
+		outbox,
+		repo,
+		logger.Discard(),
+		storage,
+	))
+	handler := host.NewUploadHandler(
+		uploadService,
+		repo,
+		tusStore,
+		logger.Discard(),
+		func(_ context.Context, metadata map[string]string) (host.UploadContext, error) {
+			return host.UploadContext{
+				UserID:    101,
+				UserUUID:  userID,
+				SessionID: "portable-media-e2e",
+				Metadata:  metadata,
+			}, nil
+		},
+		func(key string) string { return publicObjectURL(publicBaseURL, key) },
+	)
+	httpApp := fiber.New()
+	host.NewFiberUploadHandler(handler).RegisterGroupRoutes("/files/", httpApp)
 	uploadJob := uploadfilejob.Must(uploadfilejob.NewOptions(uploadUseCase, logger.Discard()))
 	deleteJob := deletedfilejob.Must(deletedfilejob.NewOptions(deleteUseCase, logger.Discard()))
 	runtime := uploadRuntime{
@@ -278,9 +317,11 @@ func runScenario(t *testing.T, tt scenario) {
 		deleteJob:      deleteJob,
 		outbox:         outbox,
 		artifactServer: artifactServer,
+		httpApp:        httpApp,
+		userID:         userID,
 	}
 
-	first := processUpload(t, ctx, runtime, tt, tt.partialFailure)
+	first := processUpload(t, ctx, runtime, tt, 0, false, nil)
 	verifyFinalObjects(t, ctx, client, publicBucket, publicBaseURL, first.file, tt.artifacts)
 	artifactServer.RequireNoSecretHeaders(t)
 
@@ -288,19 +329,19 @@ func runScenario(t *testing.T, tt scenario) {
 		return
 	}
 
-	second := processUpload(t, ctx, runtime, tt, false)
+	verifyForeignReplacementRejected(t, ctx, runtime, tt, first)
+	legacyKeys := seedLegacyPresetObjects(t, ctx, runtime, first.file)
+	artifactServer.FailOnce(failurePath(tt))
+	second := processUpload(t, ctx, runtime, tt, first.file.ID, tt.partialFailure, &first)
 	oldURL := publicObjectURL(publicBaseURL, first.file.GetFullPath())
 	newURL := publicObjectURL(publicBaseURL, second.file.GetFullPath())
 	require.NotEqual(t, first.file.Slug, second.file.Slug)
 	require.NotEqual(t, oldURL, newURL)
-	requireHTTPStatus(t, ctx, http.MethodGet, oldURL, "", http.StatusOK)
 	requireHTTPStatus(t, ctx, http.MethodGet, newURL, "", http.StatusOK)
-
-	payload, err := deletedfilejob.MarshalPayload(deletedfilejob.NewPayload(first.file.ID, first.userID, ""))
-	require.NoError(t, err)
-	require.NoError(t, deleteJob.Handle(ctx, payload))
-	requireHTTPNotSuccessful(t, ctx, oldURL)
-	requireHTTPStatus(t, ctx, http.MethodGet, newURL, "", http.StatusOK)
+	verifyFileObjectsAbsent(t, ctx, runtime, first.file)
+	for _, key := range legacyKeys {
+		requireObjectMissing(t, ctx, runtime.s3, runtime.publicBucket, key)
+	}
 }
 
 type uploadRuntime struct {
@@ -317,6 +358,8 @@ type uploadRuntime struct {
 	deleteJob      *deletedfilejob.Job
 	outbox         *outboxCollector
 	artifactServer *artifactHTTPServer
+	httpApp        *fiber.App
+	userID         host.UserID
 }
 
 func processUpload(
@@ -324,52 +367,38 @@ func processUpload(
 	ctx context.Context,
 	runtime uploadRuntime,
 	tt scenario,
+	deletedID int64,
 	expectPartialFailure bool,
+	replaced *processedUpload,
 ) processedUpload {
 	t.Helper()
-	userID := host.NewUserID()
-	session, err := runtime.tusStore.Create(ctx, host.TusCreateRequest{
-		UploadLength: int64(len(tt.sourceBody)),
-		OriginalName: tt.originalName,
-		FileName:     tt.originalName,
-		OwnerID:      101,
-		OwnerUUID:    userID,
-	})
-	require.NoError(t, err)
-	offset, err := runtime.tusStore.Append(ctx, session.ID, 0, tt.sourceBody, tt.artifacts[0].contentType)
-	require.NoError(t, err)
-	require.Equal(t, int64(len(tt.sourceBody)), offset)
-	complete, err := runtime.tusStore.Complete(ctx, session.ID)
-	require.NoError(t, err)
+	upload := completeTusUpload(t, ctx, runtime, tt, 42, deletedID, http.StatusAccepted)
+	wantStagingPath := upload.stagingPath
+	require.Equal(t, "source"+path.Ext(tt.originalName), path.Base(wantStagingPath))
+	require.NotEqual(t, path.Base(wantStagingPath), tt.originalName)
 
-	wantStagingPath := path.Join(
-		"staging/v1/tus",
-		session.ID,
-		"source"+path.Ext(tt.originalName),
-	)
-	require.Equal(t, wantStagingPath, complete.RelativePath)
+	file, err := runtime.repo.GetByID(ctx, upload.fileID)
+	require.NoError(t, err)
+	require.Equal(t, path.Base(wantStagingPath), file.FileName)
+	require.Equal(t, tt.originalName, file.OriginalFileName)
+	runtime.outbox.Take(t, sendresizefilejob.JobName)
+
 	head, err := runtime.s3.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(runtime.stagingBucket),
-		Key:    aws.String(complete.RelativePath),
+		Key:    aws.String(wantStagingPath),
 	})
 	require.NoError(t, err)
 	require.Equal(t, "private,no-store", aws.ToString(head.CacheControl))
-	require.NoError(t, runtime.tusStore.Delete(ctx, session.ID))
-	_, err = runtime.s3.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(runtime.stagingBucket),
-		Key:    aws.String(complete.RelativePath),
-	})
-	require.NoError(t, err, "TUS session handoff must retain the staging source for media processing")
 	requireHTTPStatus(
 		t,
 		ctx,
 		http.MethodGet,
-		objectURL(runtime.cfg.S3.Endpoint, runtime.stagingBucket, complete.RelativePath),
+		objectURL(runtime.cfg.S3.Endpoint, runtime.stagingBucket, wantStagingPath),
 		"",
 		http.StatusForbidden,
 	)
 
-	signedSourceURL, err := runtime.sourceResolver.Resolve(ctx, complete.RelativePath)
+	signedSourceURL, err := runtime.sourceResolver.Resolve(ctx, wantStagingPath)
 	require.NoError(t, err)
 	require.Equal(t, mustURLHost(t, runtime.cfg.S3.Endpoint), mustURLHost(t, signedSourceURL))
 	require.NotEmpty(t, mustURLQuery(t, signedSourceURL))
@@ -380,29 +409,6 @@ func processUpload(
 	require.NoError(t, readErr)
 	require.Equal(t, http.StatusOK, signedResponse.StatusCode)
 	require.Equal(t, sha256Hex(tt.sourceBody), sha256Hex(signedBody))
-
-	now := time.Now().UTC()
-	file := model.File{
-		ObjectType:       host.ObjectTypeAdmin,
-		ObjectID:         host.ObjectIDPtr(42),
-		OriginalFileName: complete.OriginalName,
-		FileName:         path.Base(complete.RelativePath),
-		FolderPath:       path.Dir(complete.RelativePath),
-		Size:             complete.Size,
-		MimeType:         complete.MimeType,
-		URL:              "",
-		Slug:             uuid.NewString(),
-		Data: &model.FileData{Uploader: shared.FileUploader{
-			UserID:   101,
-			UserUUID: userID,
-			Type:     shared.UserTypeAdmin,
-			Status:   shared.FileUploadTaskStatusQueued,
-		}},
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	file.ID, err = runtime.repo.Create(ctx, file)
-	require.NoError(t, err)
 
 	artifacts := make([]host.ResizeArtifactInput, 0, len(tt.artifacts))
 	for _, artifact := range tt.artifacts {
@@ -431,14 +437,25 @@ func processUpload(
 		require.Error(t, err)
 		cleanupPayloads := runtime.outbox.TakeAll(deletedfilejob.JobName)
 		require.Empty(t, cleanupPayloads, "a retryable attempt must not schedule cleanup for deterministic final keys")
+		if replaced != nil {
+			verifyFinalObjects(t, ctx, runtime.s3, runtime.publicBucket, runtime.publicBaseURL, replaced.file, tt.artifacts)
+		}
 	}
 
 	require.NoError(t, runtime.uploadJob.Handle(ctx, uploadPayload))
 	cleanupPayloads := runtime.outbox.TakeAll(deletedfilejob.JobName)
-	require.Len(t, cleanupPayloads, 1, "successful finalization must schedule exactly one staging cleanup")
-	for _, cleanupPayload := range cleanupPayloads {
-		require.NoError(t, runtime.deleteJob.Handle(ctx, cleanupPayload))
+	wantCleanupJobs := 1
+	if deletedID > 0 {
+		wantCleanupJobs++
 	}
+	require.Len(t, cleanupPayloads, wantCleanupJobs, "successful finalization must schedule independent cleanup jobs")
+	finalized, err := runtime.repo.GetByID(ctx, file.ID)
+	require.NoError(t, err)
+	verifyFinalObjects(t, ctx, runtime.s3, runtime.publicBucket, runtime.publicBaseURL, finalized, tt.artifacts)
+	if replaced != nil {
+		verifyFinalObjects(t, ctx, runtime.s3, runtime.publicBucket, runtime.publicBaseURL, replaced.file, tt.artifacts)
+	}
+	executeCleanupJobs(t, ctx, runtime, cleanupPayloads, wantStagingPath, deletedID)
 
 	// A duplicate webhook/outbox delivery after completion must be a no-op. In
 	// particular, it must never schedule deletion of a deterministic final key.
@@ -447,7 +464,7 @@ func processUpload(
 
 	_, err = runtime.s3.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(runtime.stagingBucket),
-		Key:    aws.String(complete.RelativePath),
+		Key:    aws.String(wantStagingPath),
 	})
 	require.Error(t, err, "staging source must be deleted after successful DB commit")
 
@@ -456,7 +473,219 @@ func processUpload(
 	require.Empty(t, completed.URL)
 	require.Empty(t, completed.GetData().Uploader)
 	require.NotContains(t, completed.FolderPath, runtime.cfg.S3.Endpoint)
-	return processedUpload{file: completed, userID: userID}
+	return processedUpload{file: completed, userID: runtime.userID}
+}
+
+type tusHTTPResult struct {
+	fileID      int64
+	sessionID   string
+	stagingPath string
+}
+
+func completeTusUpload(
+	t *testing.T,
+	ctx context.Context,
+	runtime uploadRuntime,
+	tt scenario,
+	objectID int64,
+	deletedID int64,
+	wantCompleteStatus int,
+) tusHTTPResult {
+	t.Helper()
+
+	metadata := map[string]string{
+		"filename":    tt.originalName,
+		"entity_type": host.ObjectTypeAdmin.String(),
+		"entity_id":   strconv.FormatInt(objectID, 10),
+		"file_type":   tt.artifacts[0].mediaType,
+	}
+	if deletedID > 0 {
+		metadata["replace_file_id"] = strconv.FormatInt(deletedID, 10)
+	}
+
+	createResponse, _ := sendFiberRequest(t, ctx, runtime.httpApp, http.MethodPost, "/files/tus", nil, map[string]string{
+		"Tus-Resumable":   "1.0.0",
+		"Upload-Length":   strconv.FormatInt(int64(len(tt.sourceBody)), 10),
+		"Upload-Metadata": encodeTusMetadata(metadata),
+	})
+	require.Equal(t, http.StatusCreated, createResponse.StatusCode)
+	location := createResponse.Header.Get("Location")
+	require.NotEmpty(t, location)
+	sessionID := path.Base(location)
+
+	patchResponse, _ := sendFiberRequest(t, ctx, runtime.httpApp, http.MethodPatch, location, tt.sourceBody, map[string]string{
+		"Tus-Resumable": "1.0.0",
+		"Content-Type":  "application/offset+octet-stream",
+		"Upload-Offset": "0",
+	})
+	require.Equal(t, http.StatusNoContent, patchResponse.StatusCode)
+	require.Equal(t, strconv.Itoa(len(tt.sourceBody)), patchResponse.Header.Get("Upload-Offset"))
+
+	session, err := runtime.tusStore.Get(ctx, sessionID)
+	require.NoError(t, err)
+	require.Equal(t, path.Join("staging/v1/tus", sessionID, "source"+path.Ext(tt.originalName)), session.Path)
+
+	completeResponse, responseBody := sendFiberRequest(
+		t,
+		ctx,
+		runtime.httpApp,
+		http.MethodPost,
+		location+"/complete",
+		nil,
+		map[string]string{"Tus-Resumable": "1.0.0"},
+	)
+	require.Equal(t, wantCompleteStatus, completeResponse.StatusCode, "completion response: %s", responseBody)
+
+	result := tusHTTPResult{sessionID: sessionID, stagingPath: session.Path}
+	if wantCompleteStatus == http.StatusAccepted {
+		var payload struct {
+			File struct {
+				ID int64 `json:"id"`
+			} `json:"file"`
+		}
+		require.NoError(t, json.Unmarshal(responseBody, &payload))
+		require.Positive(t, payload.File.ID)
+		result.fileID = payload.File.ID
+		_, err = runtime.tusStore.Get(ctx, sessionID)
+		require.ErrorIs(t, err, host.ErrTusNotFound)
+	}
+
+	return result
+}
+
+func sendFiberRequest(
+	t *testing.T,
+	ctx context.Context,
+	app *fiber.App,
+	method string,
+	requestPath string,
+	body []byte,
+	headers map[string]string,
+) (*http.Response, []byte) {
+	t.Helper()
+
+	request := httptest.NewRequestWithContext(ctx, method, requestPath, bytes.NewReader(body))
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+	response, err := app.Test(request)
+	require.NoError(t, err)
+	responseBody, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+
+	return response, responseBody
+}
+
+func encodeTusMetadata(metadata map[string]string) string {
+	parts := make([]string, 0, len(metadata))
+	for key, value := range metadata {
+		parts = append(parts, key+" "+base64.StdEncoding.EncodeToString([]byte(value)))
+	}
+	return strings.Join(parts, ",")
+}
+
+func verifyForeignReplacementRejected(
+	t *testing.T,
+	ctx context.Context,
+	runtime uploadRuntime,
+	tt scenario,
+	existing processedUpload,
+) {
+	t.Helper()
+
+	rejected := completeTusUpload(t, ctx, runtime, tt, 43, existing.file.ID, http.StatusBadRequest)
+	require.Zero(t, rejected.fileID)
+	session, err := runtime.tusStore.Get(ctx, rejected.sessionID)
+	require.NoError(t, err)
+	require.Equal(t, host.TusStatusReady, session.Status)
+	_, err = runtime.s3.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(runtime.stagingBucket),
+		Key:    aws.String(rejected.stagingPath),
+	})
+	require.NoError(t, err, "rejected replacement must not delete the staging object")
+	require.Empty(t, runtime.outbox.TakeAll(deletedfilejob.JobName))
+	require.Empty(t, runtime.outbox.TakeAll(sendresizefilejob.JobName))
+	verifyFinalObjects(t, ctx, runtime.s3, runtime.publicBucket, runtime.publicBaseURL, existing.file, tt.artifacts)
+}
+
+func executeCleanupJobs(
+	t *testing.T,
+	ctx context.Context,
+	runtime uploadRuntime,
+	payloads []string,
+	stagingPath string,
+	deletedID int64,
+) {
+	t.Helper()
+
+	foundStaging := false
+	foundReplacement := false
+	for _, payloadData := range payloads {
+		payload, err := deletedfilejob.UnmarshalPayload(payloadData)
+		require.NoError(t, err)
+		switch payload.FileID {
+		case 0:
+			foundStaging = true
+			require.Equal(t, stagingPath, payload.FilePath)
+			require.Empty(t, payload.ObjectType)
+			require.Zero(t, payload.ObjectID)
+		default:
+			foundReplacement = true
+			require.Equal(t, deletedID, payload.FileID)
+			require.Empty(t, payload.FilePath)
+			require.Equal(t, host.ObjectTypeAdmin, payload.ObjectType)
+			require.Equal(t, host.ObjectID(42), payload.ObjectID)
+		}
+		require.NoError(t, runtime.deleteJob.Handle(ctx, payloadData))
+		require.NoError(t, runtime.deleteJob.Handle(ctx, payloadData), "cleanup job must be idempotent")
+	}
+	require.True(t, foundStaging)
+	require.Equal(t, deletedID > 0, foundReplacement)
+}
+
+func seedLegacyPresetObjects(t *testing.T, ctx context.Context, runtime uploadRuntime, file model.File) []string {
+	t.Helper()
+
+	keys := make([]string, 0, len(file.GetData().Presets))
+	for presetName, preset := range file.GetData().Presets {
+		name := strings.TrimSpace(preset.PresetName)
+		if name == "" {
+			name = presetName.String()
+		}
+		if name == "" || shared.PresetName(name) == shared.FilePresetMainName {
+			continue
+		}
+		key := path.Join(file.FolderPath, name, file.FileName)
+		_, err := runtime.s3.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(runtime.publicBucket),
+			Key:         aws.String(key),
+			Body:        strings.NewReader("legacy preset"),
+			ContentType: aws.String("application/octet-stream"),
+		})
+		require.NoError(t, err)
+		keys = append(keys, key)
+	}
+
+	return keys
+}
+
+func verifyFileObjectsAbsent(t *testing.T, ctx context.Context, runtime uploadRuntime, file model.File) {
+	t.Helper()
+
+	requireObjectMissing(t, ctx, runtime.s3, runtime.publicBucket, file.GetFullPath())
+	for _, preset := range file.GetData().Presets {
+		if preset.RelativePath != "" {
+			requireObjectMissing(t, ctx, runtime.s3, runtime.publicBucket, preset.RelativePath)
+		}
+	}
+}
+
+func requireObjectMissing(t *testing.T, ctx context.Context, client *s3.Client, bucket, key string) {
+	t.Helper()
+
+	_, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	require.Error(t, err, "object must be absent: %s", key)
 }
 
 func verifyFinalObjects(
@@ -604,6 +833,15 @@ func (s *artifactHTTPServer) SignedURL(artifactPath string) string {
 	return s.URL + artifactPath + "?signature=integration-secret&expires=9999999999"
 }
 
+func (s *artifactHTTPServer) FailOnce(artifactPath string) {
+	if artifactPath == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failuresRemaining[artifactPath]++
+}
+
 func (s *artifactHTTPServer) handle(writer http.ResponseWriter, request *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -705,7 +943,12 @@ func failurePath(tt scenario) string {
 	if !tt.partialFailure || len(tt.artifacts) < 2 {
 		return ""
 	}
-	return tt.artifacts[1].path
+	for _, artifact := range tt.artifacts {
+		if artifact.preset == "thumbnail" {
+			return artifact.path
+		}
+	}
+	return tt.artifacts[len(tt.artifacts)-1].path
 }
 
 func envOr(name, fallback string) string {
