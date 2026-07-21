@@ -1,5 +1,31 @@
 # Implementation Notes
 
+## 2026-07-21: Complete TUS and replacement cleanup lifecycle
+
+- Published commit `1d423eacf3c9aa7017dfa8f66fd353eb4110f294` as
+  `v0.10.0-alpha.6`; the pushed tag passed the clean published-consumer gate.
+- HTTP TUS completion now derives physical filename/folder/path only from the
+  normalized `CompleteResult.RelativePath`; the client filename remains only
+  in `OriginalName`.
+- Kept exact staging cleanup (`FileID=0`) and old-record cleanup (`DeletedID`)
+  as independent idempotent jobs. Replacement ownership is checked by
+  `(ObjectType, ObjectID)` both before task creation and before deletion.
+- Old-record deletion now sends the deduplicated current preset paths,
+  `GetFullPath`, and legacy preset paths to `DeleteBatch`. The replacement job
+  is not enqueued until all new artifacts and their transaction are durable.
+- Corrected unfinished-session expiry so a stored `expires_at` is compared with
+  the current expiry threshold once instead of applying `SessionTTL` twice.
+- Added structured cleanup logs and a real Fiber HTTP/TUS production-shaped
+  E2E covering mismatched client/physical names, replacement, no replacement,
+  foreign ownership, partial preset failure, idempotency and TTL timing.
+- Site adoption and Dokploy deployment completed at `site v0.0.24`. The live DB
+  audit found no unfinished sessions, queued jobs, failed jobs or confirmed S3
+  orphans, so no manual object deletion was performed.
+- The live storage contract probe exposed a separate deployment issue: the
+  empty staging-bucket override falls back to the public bucket, so unsigned
+  staging GET returns 200 instead of the required 403. This does not change the
+  alpha.6 deletion logic and needs a separate bucket-policy/topology decision.
+
 ## 2026-07-21: Independent object and replacement file identifiers
 
 - Removed validation that rejected uploads when `object_id` numerically matched
