@@ -57,10 +57,6 @@ func (r SingleRequest) Validate() error {
 		return shared.ErrUnknownUploadUser
 	}
 
-	if r.ObjectID == r.DeletedID {
-		return shared.ErrInvalidParameters
-	}
-
 	return validator.Validator.Struct(r)
 }
 
@@ -79,10 +75,6 @@ type ReaderRequest struct {
 func (r ReaderRequest) Validate() error {
 	if r.UserID == 0 && r.ManagerID == 0 {
 		return shared.ErrUnknownUploadUser
-	}
-
-	if r.ObjectID == r.DeletedID {
-		return shared.ErrInvalidParameters
 	}
 
 	return validator.Validator.Struct(r)

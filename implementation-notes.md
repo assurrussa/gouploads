@@ -1,5 +1,14 @@
 # Implementation Notes
 
+## 2026-07-21: Independent object and replacement file identifiers
+
+- Removed validation that rejected uploads when `object_id` numerically matched
+  `replace_file_id`. The values identify a host entity and a stored file,
+  respectively, so equality is valid and does not imply self-replacement.
+- Kept uploader, required input, and object-type validation unchanged.
+- Added focused regression coverage for both multipart `SingleRequest` and TUS
+  `ReaderRequest` validation with equal numeric identifiers.
+
 ## 2026-07-20: Portable S3 media implementation
 
 - Started implementation from docs/tasks/portable-s3-media.md.
