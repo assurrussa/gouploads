@@ -53,8 +53,11 @@ reach.
 For private S3 objects, `host.NewSourceURLResolver` signs `GetObject` at
 dispatch time against the configured S3 endpoint and staging bucket. The URL
 is passed directly to media-resizer; host rewriting and a source proxy are not
-supported. Signed query strings must not be logged. Local storage remains
-pass-through.
+supported. Signed query strings must not be logged. Local storage may configure
+`StorageLocalConfig.SourceBaseURL` as the backend origin reachable by
+media-resizer; relative temporary paths are then composed below
+`tmp/uploads/...`. With an empty source base, the legacy shared-filesystem path
+flow remains pass-through.
 
 ## Minimal Runtime Wiring
 
@@ -97,6 +100,26 @@ pass-through.
        },
    }
    ```
+
+   A local filesystem host with a separate media-resizer should keep public
+   delivery and temporary source delivery independent:
+
+   ```go
+   cfg := host.StorageConfig{
+       AppDomainURL: "https://app.example.test",
+       Driver: host.StorageDriverLocal,
+       Local: host.StorageLocalConfig{
+           Root: "/app/publicdata",
+           BaseURL: "",
+           SourceBaseURL: "http://backend:8080",
+       },
+   }
+   ```
+
+   Final files remain below `uploads/...` and use `BaseURL` or
+   `AppDomainURL`. Only temporary `tmp/uploads/...` paths use
+   `SourceBaseURL`. The host must serve both `/uploads` and `/tmp` from the
+   configured local root.
 
    Provider profiles are ordinary values of that same struct, not presets:
 

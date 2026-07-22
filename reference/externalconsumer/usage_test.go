@@ -53,6 +53,17 @@ func TestHostSurfaceCoversEmbeddingWorkflow(t *testing.T) {
 	sourceResolver, err := host.NewSourceURLResolver(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, sourceResolver)
+	localSourceResolver, err := host.NewSourceURLResolver(host.StorageConfig{
+		Driver: host.StorageDriverLocal,
+		Local: host.StorageLocalConfig{
+			Root:          t.TempDir(),
+			SourceBaseURL: "http://backend:8080",
+		},
+	})
+	require.NoError(t, err)
+	localSourceURL, err := localSourceResolver.Resolve(context.Background(), "tmp/uploads/source.webp")
+	require.NoError(t, err)
+	require.Equal(t, "http://backend:8080/tmp/uploads/source.webp", localSourceURL)
 	contractChecker, err := host.NewStorageContractChecker(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, contractChecker)

@@ -70,14 +70,79 @@ func TestS3ResolverUsesPublicBucketWhenStagingBucketIsEmpty(t *testing.T) {
 	require.NotEmpty(t, parsed.Query().Get("X-Amz-Signature"))
 }
 
+func TestLocalResolverComposesConfiguredHTTPSource(t *testing.T) {
+	t.Parallel()
+
+	resolver, err := New(uploadconfig.StorageConfig{
+		Driver: uploadconfig.StorageDriverLocal,
+		Local: uploadconfig.StorageLocalConfig{
+			SourceBaseURL: " http://backend:8080/source/ ",
+		},
+	})
+	require.NoError(t, err)
+
+	got, err := resolver.Resolve(context.Background(), "tmp/uploads/post/42/source.webp")
+	require.NoError(t, err)
+	require.Equal(t, "http://backend:8080/source/tmp/uploads/post/42/source.webp", got)
+}
+
 func TestLocalResolverKeepsExistingURL(t *testing.T) {
-	resolver, err := New(uploadconfig.StorageConfig{Driver: uploadconfig.StorageDriverLocal})
+	t.Parallel()
+
+	resolver, err := New(uploadconfig.StorageConfig{
+		Driver: uploadconfig.StorageDriverLocal,
+		Local: uploadconfig.StorageLocalConfig{
+			SourceBaseURL: "http://backend:8080",
+		},
+	})
 	require.NoError(t, err)
 
 	const source = "http://backend:8080/uploads/image.jpg?cache=1"
 	got, err := resolver.Resolve(context.Background(), source)
 	require.NoError(t, err)
 	require.Equal(t, source, got)
+}
+
+func TestLocalResolverKeepsRelativePathWithoutSourceBase(t *testing.T) {
+	t.Parallel()
+
+	resolver, err := New(uploadconfig.StorageConfig{Driver: uploadconfig.StorageDriverLocal})
+	require.NoError(t, err)
+
+	const source = "tmp/uploads/image.jpg"
+	got, err := resolver.Resolve(context.Background(), source)
+	require.NoError(t, err)
+	require.Equal(t, source, got)
+}
+
+func TestLocalResolverRejectsInvalidSourceBase(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(uploadconfig.StorageConfig{
+		Driver: uploadconfig.StorageDriverLocal,
+		Local: uploadconfig.StorageLocalConfig{
+			SourceBaseURL: "http://backend:8080?token=secret",
+		},
+	})
+	require.ErrorContains(t, err, "local source base URL")
+}
+
+func TestLocalResolverRejectsSourceOutsideTemporaryPrefix(t *testing.T) {
+	t.Parallel()
+
+	resolver, err := New(uploadconfig.StorageConfig{
+		Driver: uploadconfig.StorageDriverLocal,
+		Local: uploadconfig.StorageLocalConfig{
+			SourceBaseURL: "http://backend:8080",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = resolver.Resolve(context.Background(), "uploads/media/v1/post/42/main.webp")
+	require.ErrorContains(t, err, "outside the temporary upload prefix")
+
+	_, err = resolver.Resolve(context.Background(), "tmp/uploads/source.webp?token=secret")
+	require.ErrorContains(t, err, "must not contain query")
 }
 
 func TestS3ResolverValidatesTTLAndAppliesDefault(t *testing.T) {

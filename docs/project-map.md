@@ -107,6 +107,8 @@ Storage driver and URL:
 - `STORAGE_DRIVER`
 - `STORAGE_LOCAL_ROOT`
 - `STORAGE_LOCAL_BASE_URL`
+- `STORAGE_LOCAL_SOURCE_BASE_URL` (optional internal HTTP origin for
+  `tmp/uploads/...`; empty preserves shared-filesystem paths)
 
 Public delivery and S3:
 
@@ -155,6 +157,8 @@ single env values.
 - `make test-surface-integration`: `hosttest` integration build-tag surface.
 - `make test-tus-postgres-integration`: real PostgreSQL fencing and
   cross-repository session-state gate.
+- `make test-portable-media-e2e`: real HTTP/TUS local-filesystem and
+  S3/MinIO media finalization, retry, replacement, and cleanup gates.
 - `make externalconsumer-local`: generated clean consumer using local
   `replace`.
 - `make externalconsumer-published VERSION=vX.Y.Z`: generated clean consumer

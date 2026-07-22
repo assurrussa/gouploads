@@ -63,7 +63,7 @@ func (s *Storage) SavePersist(ctx context.Context, input filestorage.SaveFileInp
 
 	input.Dir = filestorage.DirPersistPath(relDir)
 
-	return s.saveFile(ctx, input)
+	return s.saveFile(ctx, input, true)
 }
 
 func (s *Storage) SaveTemp(ctx context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
@@ -74,7 +74,7 @@ func (s *Storage) SaveTemp(ctx context.Context, input filestorage.SaveFileInput)
 
 	input.Dir = filestorage.DirTemptPath(relDir)
 
-	return s.saveFile(ctx, input)
+	return s.saveFile(ctx, input, false)
 }
 
 func (s *Storage) Commit(_ context.Context, input filestorage.CommitInput) (filestorage.StoredFile, error) {
@@ -176,7 +176,11 @@ func (s *Storage) DeleteBatch(_ context.Context, relativePaths []string) error {
 	return nil
 }
 
-func (s *Storage) saveFile(_ context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
+func (s *Storage) saveFile(
+	_ context.Context,
+	input filestorage.SaveFileInput,
+	replace bool,
+) (filestorage.StoredFile, error) {
 	if err := input.Validate(); err != nil {
 		return filestorage.StoredFile{}, err
 	}
@@ -193,17 +197,9 @@ func (s *Storage) saveFile(_ context.Context, input filestorage.SaveFileInput) (
 	}
 
 	absPath := filepath.Join(s.rootDir, filepath.FromSlash(relPath))
-
-	file, err := os.OpenFile(absPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
+	written, err := writeFile(absDir, absPath, input.Reader, replace)
 	if err != nil {
-		return filestorage.StoredFile{}, fmt.Errorf("local storage: create temp file: %w", err)
-	}
-	defer file.Close()
-
-	written, err := io.Copy(file, input.Reader)
-	if err != nil {
-		_ = os.Remove(absPath)
-		return filestorage.StoredFile{}, fmt.Errorf("local storage: write temp file: %w", err)
+		return filestorage.StoredFile{}, err
 	}
 
 	relPath = toSlash(relPath)
@@ -214,6 +210,52 @@ func (s *Storage) saveFile(_ context.Context, input filestorage.SaveFileInput) (
 		Size:         written,
 		MimeType:     input.MimeType,
 	}, nil
+}
+
+func writeFile(absDir, absPath string, reader io.Reader, replace bool) (int64, error) {
+	if !replace {
+		file, err := os.OpenFile(absPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
+		if err != nil {
+			return 0, fmt.Errorf("local storage: create temp file: %w", err)
+		}
+
+		written, copyErr := io.Copy(file, reader)
+		closeErr := file.Close()
+		if copyErr != nil || closeErr != nil {
+			_ = os.Remove(absPath)
+			if copyErr != nil {
+				return 0, fmt.Errorf("local storage: write temp file: %w", copyErr)
+			}
+			return 0, fmt.Errorf("local storage: close temp file: %w", closeErr)
+		}
+
+		return written, nil
+	}
+
+	file, err := os.CreateTemp(absDir, ".gouploads-persist-*")
+	if err != nil {
+		return 0, fmt.Errorf("local storage: create persistent temp file: %w", err)
+	}
+	tempPath := file.Name()
+	defer func() { _ = os.Remove(tempPath) }()
+
+	if err := file.Chmod(0o644); err != nil {
+		_ = file.Close()
+		return 0, fmt.Errorf("local storage: chmod persistent temp file: %w", err)
+	}
+	written, copyErr := io.Copy(file, reader)
+	closeErr := file.Close()
+	if copyErr != nil {
+		return 0, fmt.Errorf("local storage: write persistent temp file: %w", copyErr)
+	}
+	if closeErr != nil {
+		return 0, fmt.Errorf("local storage: close persistent temp file: %w", closeErr)
+	}
+	if err := os.Rename(tempPath, absPath); err != nil {
+		return 0, fmt.Errorf("local storage: replace persistent file: %w", err)
+	}
+
+	return written, nil
 }
 
 func (s *Storage) cleanupParent(relPath string) {

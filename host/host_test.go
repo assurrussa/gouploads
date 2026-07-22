@@ -162,6 +162,22 @@ func TestNewSourceURLResolverKeepsLocalSourceURL(t *testing.T) {
 	require.Equal(t, source, got)
 }
 
+func TestNewSourceURLResolverComposesLocalHTTPSourceURL(t *testing.T) {
+	t.Parallel()
+
+	resolver, err := host.NewSourceURLResolver(host.StorageConfig{
+		Driver: host.StorageDriverLocal,
+		Local: host.StorageLocalConfig{
+			SourceBaseURL: "http://backend:8080",
+		},
+	})
+	require.NoError(t, err)
+
+	got, err := resolver.Resolve(context.Background(), "tmp/uploads/admin/42/source.webp")
+	require.NoError(t, err)
+	require.Equal(t, "http://backend:8080/tmp/uploads/admin/42/source.webp", got)
+}
+
 func TestAfterProcessPayloadHelpers(t *testing.T) {
 	userID := host.NewUserID()
 

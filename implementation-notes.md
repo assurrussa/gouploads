@@ -473,3 +473,28 @@
   source, portable-media HTTP/TUS E2E, local clean-consumer, and cross-repo
   import-policy checks also passed. The published-consumer gate remains a
   post-tag check for `v0.10.0-alpha.6`.
+
+## 2026-07-22: Complete local media pipeline
+
+- Added `StorageLocalConfig.SourceBaseURL` as a dedicated dispatch-time origin
+  for a separate media-resizer. It composes only confined
+  `tmp/uploads/...` references; public completed URLs still use the existing
+  local delivery base/application domain. An empty source base preserves the
+  previous shared-filesystem pass-through behavior.
+- Changed local persistent writes to a same-directory temporary file plus
+  atomic rename. Temporary uploads retain exclusive creation. This lets a
+  retry replace deterministic partial final keys without exposing a partially
+  rewritten file or destroying the prior complete attempt on reader failure.
+- Fixed image-dimension inspection for reader/TUS uploads by replaying every
+  byte consumed by `image.DecodeConfig` before storage. The source stream is no
+  longer empty or truncated after metadata inspection.
+- Added a PostgreSQL-backed local media E2E through real Fiber TUS
+  POST/PATCH/complete mapping. It fetches the source through the configured
+  HTTP origin, retries a failed preset, preserves the old media until all new
+  variants are durable, removes current/original/preset/legacy files, verifies
+  public GETs, rejects a foreign replacement, and repeats cleanup jobs.
+- Verification passed for the full `make check` gate and every functional
+  stage of `make publish-readiness VERSION=v0.10.0-alpha.7`, including both
+  portable-media E2Es, PostgreSQL TUS fencing, the source URL integration,
+  public-surface tests, a generated clean consumer, and the site import policy.
+  The pre-commit gate stopped only at its intentional final dirty-tree check.

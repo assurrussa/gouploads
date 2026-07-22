@@ -85,6 +85,9 @@ curl -X POST http://localhost:3000/api/v1/uploads \
 
 Some of the main configurations include:
 - `STORAGE_DRIVER`: `local` or `s3`
+- `STORAGE_LOCAL_ROOT`, `STORAGE_LOCAL_BASE_URL`, and optional
+  `STORAGE_LOCAL_SOURCE_BASE_URL` for local filesystem delivery and the
+  internal HTTP origin used by a separate media-resizer
 - `STORAGE_PUBLIC_BASE_URL` and `STORAGE_PUBLIC_PREFIX` for canonical delivery
 - `STORAGE_S3_ENDPOINT`, `STORAGE_S3_REGION`, `STORAGE_S3_BUCKET`, and optional
   `STORAGE_S3_STAGING_BUCKET`
@@ -145,9 +148,11 @@ and is not scheduled until every new artifact and the database update succeed.
 `host.NewSourceURLResolver(cfg)` is the stable narrow source-read facade. In S3
 mode it creates an AWS SigV4 presigned `GetObject` URL immediately before media
 dispatch against the configured S3 endpoint and staging bucket. Host rewriting
-and source proxies are not part of the contract. Local storage keeps the
-existing URL unchanged. The TTL defaults to `15m` and cannot exceed the SigV4
-seven-day maximum.
+and source proxies are not part of the S3 contract. In local mode, an optional
+`StorageLocalConfig.SourceBaseURL` composes confined `tmp/uploads/...` paths
+into an absolute HTTP URL that a separate media-resizer can read. An empty
+source base preserves the existing shared-filesystem path behavior. The S3 TTL
+defaults to `15m` and cannot exceed the SigV4 seven-day maximum.
 
 Final media keys are deterministic and immutable:
 `media/v1/<object-type>/<object-id>/<file-slug>/<preset>.<ext>`. Managed DB

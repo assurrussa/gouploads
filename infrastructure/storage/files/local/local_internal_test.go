@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +13,22 @@ import (
 
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 )
+
+var errReaderFailed = errors.New("reader failed")
+
+type failingReader struct {
+	data []byte
+}
+
+func (r *failingReader) Read(data []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, errReaderFailed
+	}
+
+	written := copy(data, r.data)
+	r.data = r.data[written:]
+	return written, nil
+}
 
 func TestStorage_SaveTempAndCommit(t *testing.T) {
 	ctx := context.Background()
@@ -89,6 +106,77 @@ func TestStorage_SavePersistAndCommit(t *testing.T) {
 	finalData, err := os.ReadFile(finalAbs)
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(finalData))
+}
+
+func TestStorage_SavePersistAtomicallyReplacesExistingFile(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+
+	storage, err := New(root, "")
+	require.NoError(t, err)
+
+	input := filestorage.SaveFileInput{
+		Dir:      "media/v1/post/42/file",
+		FileName: "main.webp",
+		Reader:   strings.NewReader("first"),
+	}
+	first, err := storage.SavePersist(ctx, input)
+	require.NoError(t, err)
+
+	input.Reader = strings.NewReader("second")
+	second, err := storage.SavePersist(ctx, input)
+	require.NoError(t, err)
+	require.Equal(t, first.RelativePath, second.RelativePath)
+
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(second.RelativePath)))
+	require.NoError(t, err)
+	require.Equal(t, "second", string(data))
+}
+
+func TestStorage_SavePersistFailureKeepsExistingFile(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+
+	storage, err := New(root, "")
+	require.NoError(t, err)
+
+	stored, err := storage.SavePersist(ctx, filestorage.SaveFileInput{
+		Dir:      "media/v1/post/42/file",
+		FileName: "main.webp",
+		Reader:   strings.NewReader("stable"),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.SavePersist(ctx, filestorage.SaveFileInput{
+		Dir:      "media/v1/post/42/file",
+		FileName: "main.webp",
+		Reader:   &failingReader{data: []byte("partial")},
+	})
+	require.ErrorIs(t, err, errReaderFailed)
+
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(stored.RelativePath)))
+	require.NoError(t, err)
+	require.Equal(t, "stable", string(data))
+}
+
+func TestStorage_SaveTempRejectsExistingFile(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+
+	storage, err := New(root, "")
+	require.NoError(t, err)
+
+	input := filestorage.SaveFileInput{
+		Dir:      "post/42/session",
+		FileName: "source.webp",
+		Reader:   strings.NewReader("first"),
+	}
+	_, err = storage.SaveTemp(ctx, input)
+	require.NoError(t, err)
+
+	input.Reader = strings.NewReader("second")
+	_, err = storage.SaveTemp(ctx, input)
+	require.ErrorContains(t, err, "file exists")
 }
 
 func TestStorage_DeleteCleansUp(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
 	uploadconfig "github.com/assurrussa/gouploads/config"
+	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 )
 
 const (
@@ -35,6 +37,10 @@ func (passthroughResolver) Resolve(_ context.Context, source string) (string, er
 	return source, nil
 }
 
+type localResolver struct {
+	baseURL *url.URL
+}
+
 type s3Resolver struct {
 	presigner     *awss3.PresignClient
 	bucket        string
@@ -43,8 +49,26 @@ type s3Resolver struct {
 }
 
 // New builds the resolver for the configured storage driver. Local storage
-// keeps its existing source URL flow; S3 creates a SigV4 presigned GET URL.
+// can expose temporary files through a dedicated HTTP base, while an empty
+// base preserves the shared-filesystem path flow. S3 creates a SigV4
+// presigned GetObject URL.
 func New(cfg uploadconfig.StorageConfig) (Resolver, error) {
+	if cfg.Driver == uploadconfig.StorageDriverLocal {
+		normalized, err := uploadconfig.NormalizeStorageConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if normalized.Local.SourceBaseURL == "" {
+			return passthroughResolver{}, nil
+		}
+
+		baseURL, err := url.Parse(normalized.Local.SourceBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse local source base URL: %w", err)
+		}
+
+		return &localResolver{baseURL: baseURL}, nil
+	}
 	if cfg.Driver != uploadconfig.StorageDriverS3 {
 		return passthroughResolver{}, nil
 	}
@@ -89,6 +113,39 @@ func New(cfg uploadconfig.StorageConfig) (Resolver, error) {
 		stagingPrefix: strings.Trim(cfg.Tus.StagingPrefix, "/"),
 		ttl:           ttl,
 	}, nil
+}
+
+func (r *localResolver) Resolve(_ context.Context, source string) (string, error) {
+	raw := strings.TrimSpace(source)
+	if raw == "" {
+		return "", errors.New("source is required")
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse local source URL: %w", err)
+	}
+	if parsed.IsAbs() || parsed.Host != "" {
+		return raw, nil
+	}
+
+	storagePath, err := filesanitize.EnsureRelativePath(parsed.Path)
+	if err != nil {
+		return "", fmt.Errorf("normalize local source path: %w", err)
+	}
+	stagingPrefix := filestorage.FolderPrefixPathTemp.String()
+	if storagePath != stagingPrefix && !strings.HasPrefix(storagePath, stagingPrefix+"/") {
+		return "", errors.New("local source path is outside the temporary upload prefix")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("local source path must not contain query or fragment")
+	}
+
+	resolved := *r.baseURL
+	resolved.Path = path.Join(resolved.Path, storagePath)
+	resolved.RawPath = ""
+
+	return resolved.String(), nil
 }
 
 func (r *s3Resolver) Resolve(ctx context.Context, source string) (string, error) {

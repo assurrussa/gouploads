@@ -33,6 +33,25 @@ func TestNormalizeStorageConfigAppliesPortableS3Defaults(t *testing.T) {
 	require.Equal(t, 10, cfg.S3.MaxRetries)
 }
 
+func TestNormalizeStorageConfigNormalizesOptionalLocalSourceBase(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := uploadconfig.NormalizeStorageConfig(uploadconfig.StorageConfig{
+		Driver: uploadconfig.StorageDriverLocal,
+		Local: uploadconfig.StorageLocalConfig{
+			SourceBaseURL: " http://backend:8080/source/ ",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "http://backend:8080/source", cfg.Local.SourceBaseURL)
+
+	cfg, err = uploadconfig.NormalizeStorageConfig(uploadconfig.StorageConfig{
+		Driver: uploadconfig.StorageDriverLocal,
+	})
+	require.NoError(t, err)
+	require.Empty(t, cfg.Local.SourceBaseURL)
+}
+
 func TestNormalizeStorageConfigRejectsInvalidS3Contract(t *testing.T) {
 	t.Parallel()
 

@@ -247,7 +247,7 @@ func (s *Service) processFile(
 		return UploadedFile{}, err
 	}
 
-	width, height := imageDimensions(reader, mimeType)
+	reader, width, height := inspectImageDimensions(reader, mimeType)
 	reader, limited := wrapWithSizeLimit(reader, config.MaxFileSize)
 	fileName := uuid.New().String() + ext
 
@@ -338,7 +338,7 @@ func (s *Service) processReader(
 		return UploadedFile{}, err
 	}
 
-	width, height := imageDimensions(reader, mimeType)
+	reader, width, height := inspectImageDimensions(reader, mimeType)
 	reader, limited := wrapWithSizeLimit(reader, config.MaxFileSize)
 	fileName := uuid.New().String() + ext
 
@@ -675,17 +675,19 @@ func normalizeExtensions(exts []string) []string {
 	return result
 }
 
-func imageDimensions(fileRemote io.Reader, mime string) (width, height int) {
+func inspectImageDimensions(reader io.Reader, mime string) (replay io.Reader, width, height int) {
 	if mime == "" || !isImage(mime) {
-		return 0, 0
+		return reader, 0, 0
 	}
 
-	cfg, _, err := image.DecodeConfig(fileRemote)
+	var consumed bytes.Buffer
+	cfg, _, err := image.DecodeConfig(io.TeeReader(reader, &consumed))
+	replay = io.MultiReader(bytes.NewReader(consumed.Bytes()), reader)
 	if err != nil {
-		return 0, 0
+		return replay, 0, 0
 	}
 
-	return cfg.Width, cfg.Height
+	return replay, cfg.Width, cfg.Height
 }
 
 func isImage(mime string) bool {

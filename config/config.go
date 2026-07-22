@@ -25,8 +25,9 @@ type StoragePublicConfig struct {
 }
 
 type StorageLocalConfig struct {
-	Root    string `toml:"root" long:"storage-local-root" env:"STORAGE_LOCAL_ROOT" value-default:"public"`
-	BaseURL string `toml:"base_url" long:"storage-local-base-url" env:"STORAGE_LOCAL_BASE_URL" value-default:""`
+	Root          string `toml:"root" long:"storage-local-root" env:"STORAGE_LOCAL_ROOT" value-default:"public"`
+	BaseURL       string `toml:"base_url" long:"storage-local-base-url" env:"STORAGE_LOCAL_BASE_URL" value-default:""`
+	SourceBaseURL string `toml:"source_base_url" long:"storage-local-source-base-url" env:"STORAGE_LOCAL_SOURCE_BASE_URL" value-default:"" validate:"omitempty,url"`
 }
 
 type StorageS3Config struct {

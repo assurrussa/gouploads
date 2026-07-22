@@ -20,9 +20,26 @@ const (
 	maximumS3RetryAttempts = 50
 )
 
-// NormalizeStorageConfig validates the generic S3 contract and applies the
-// defaults used by every gouploads S3 entrypoint. The input is copied.
+// NormalizeStorageConfig validates driver-specific storage contracts and
+// applies the defaults used by every gouploads entrypoint. The input is copied.
 func NormalizeStorageConfig(cfg StorageConfig) (StorageConfig, error) {
+	if cfg.Driver == StorageDriverLocal {
+		if strings.TrimSpace(cfg.Local.SourceBaseURL) == "" {
+			cfg.Local.SourceBaseURL = ""
+			return cfg, nil
+		}
+
+		var err error
+		cfg.Local.SourceBaseURL, err = normalizeAbsoluteHTTPURL(
+			"local source base URL",
+			cfg.Local.SourceBaseURL,
+		)
+		if err != nil {
+			return StorageConfig{}, err
+		}
+
+		return cfg, nil
+	}
 	if cfg.Driver != StorageDriverS3 {
 		return cfg, nil
 	}
