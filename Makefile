@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := check
-.PHONY: check publish-readiness release-readiness release-version-check tidy-check test-surface test-surface-integration test-tus-postgres-integration test-source-url-s3-integration test-portable-media-e2e test-portable-s3-media-e2e test-portable-local-media-e2e externalconsumer-local externalconsumer-published import-policy-site tidy generate fmt lint vet test test-race bench-all cover-html
+.PHONY: full prepare check publish-readiness release-readiness release-version-check tidy-check test-surface test-surface-integration test-tus-postgres-integration test-source-url-s3-integration test-portable-media-e2e test-portable-s3-media-e2e test-portable-local-media-e2e externalconsumer-local externalconsumer-published import-policy-site tidy generate fmt fmt-check lint lint-fix vet test test-full test-race bench-all cover-html
 GO_MODULE := $(shell go list -m)
 GO_FILES := $(shell find . -type f -name '*.go' -not -path './.cache/*' -not -path './.go-cache/*' -not -path './tmp/*' -not -path './vendor/*')
 IMPORT_POLICY_REPO_ROOT ?= ..
@@ -13,13 +13,17 @@ export GOMODCACHE
 export GOPATH
 export GOLANGCI_LINT_CACHE
 
-check: tidy generate fmt vet lint test test-race cover-html
+full: prepare check
+
+prepare: tidy generate fmt lint-fix
+
+check: tidy-check fmt-check vet lint test-full
 
 release-version-check:
 	@printf '%s\n' "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' || \
 		(echo "VERSION must be an exact semver tag" && exit 2)
 
-publish-readiness: release-version-check check test-surface test-surface-integration test-tus-postgres-integration test-source-url-s3-integration test-portable-media-e2e externalconsumer-local import-policy-site
+publish-readiness: release-version-check prepare check test-surface test-surface-integration test-tus-postgres-integration test-source-url-s3-integration test-portable-media-e2e externalconsumer-local import-policy-site
 	@git diff --exit-code
 
 release-readiness: publish-readiness externalconsumer-published
@@ -74,7 +78,16 @@ fmt:
 	gofumpt -l -w $(GO_FILES)
 	gci write -s standard -s default -s "prefix($(GO_MODULE))" $(GO_FILES)
 
+fmt-check:
+	@unformatted="$$(gofumpt -l $(GO_FILES))"; \
+		test -z "$$unformatted" || { printf 'gofumpt changes are required:\n%s\nRun: make prepare\n' "$$unformatted" >&2; exit 1; }
+	@import_diff="$$(gci diff -s standard -s default -s "prefix($(GO_MODULE))" $(GO_FILES))"; \
+		test -z "$$import_diff" || { printf 'gci changes are required:\n%s\nRun: make prepare\n' "$$import_diff" >&2; exit 1; }
+
 lint:
+	golangci-lint run -v --timeout=5m ./...
+
+lint-fix:
 	golangci-lint run -v --fix --timeout=5m ./...
 
 vet:
@@ -82,6 +95,9 @@ vet:
 
 test:
 	go test ./...
+
+test-full:
+	go test -race -cover -covermode=atomic -count=1 ./...
 
 test-race:
 	go test -race -count=5 ./...

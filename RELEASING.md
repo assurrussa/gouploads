@@ -21,6 +21,11 @@ The Makefile uses repository-local `.go-cache` paths by default so the check is
 stable in sandboxed local environments without polluting scanned Go package
 roots.
 
+`make publish-readiness` intentionally runs mutating `make prepare` before the
+read-only checks and rejects any resulting diff. For normal development, use
+package-scoped tests and one final `make check`; five-run race stress and HTML
+coverage remain explicit `make test-race` and `make cover-html` diagnostics.
+
 PostgreSQL integration targets honor explicit `TEST_PSQL_ADDRESS_LOCAL` and
 `TEST_PSQL_PORT_LOCAL` values first. Without overrides, host-side runs discover
 the published port of the live Compose service named

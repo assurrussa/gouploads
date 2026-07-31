@@ -498,3 +498,12 @@
   portable-media E2Es, PostgreSQL TUS fencing, the source URL integration,
   public-surface tests, a generated clean consumer, and the site import policy.
   The pre-commit gate stopped only at its intentional final dirty-tree check.
+
+## 2026-07-31: Development gate efficiency
+
+- Preserved all existing release, surface, integration, consumer, and import
+  policy target names.
+- Split mutating preparation from source-read-only `make check` and combined
+  normal race plus coverage execution into one package traversal.
+- Kept repeated race stress and HTML coverage available explicitly; the
+  publish gate still prepares first and rejects generated or formatting drift.

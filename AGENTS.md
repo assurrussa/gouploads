@@ -78,8 +78,12 @@ notes, and boundary checks together.
 Use the Makefile targets because they set repository-local Go cache paths.
 
 - `make release-readiness`: main reusable-boundary gate.
-- `make check`: full local check, including generation, formatting, lint, race
-  tests, and coverage HTML.
+- `make prepare`: mutating tidy, generation, formatting, and lint fixes.
+- `make check`: source-read-only local verification with formatting, vet, lint,
+  and one race+coverage test pass.
+- `make full`: preparation followed by verification.
+- `make test-race`: explicit five-run race stress diagnostic.
+- `make cover-html`: explicit HTML coverage artifact.
 - `make test-surface`: focused public surface and probe tests.
 - `make test-surface-integration`: `hosttest` integration-tag surface check.
 - `make externalconsumer-local`: clean consumer probe with local `replace`.
@@ -96,6 +100,10 @@ GOCACHE="$PWD/.go-cache/gocache" GOPATH="$PWD/.go-cache/gopath" go test ./...
 
 The first direct `go` command can fail if it uses the user-level Go build cache;
 prefer Makefile targets or the local cache env vars above.
+
+During implementation, prefer tests for the affected package or public
+surface. Run `make check` once after a coherent batch; do not stack it with
+`make test`, `make test-race`, and `make cover-html` on an unchanged tree.
 
 ## Code Generation
 

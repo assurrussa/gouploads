@@ -151,8 +151,12 @@ single env values.
 ## Verification Gates
 
 - `make release-readiness`: primary reusable-boundary gate for local readiness.
-- `make check`: broader local gate, including generation, formatting, lint,
-  race tests, and coverage HTML.
+- `make prepare`: mutating tidy, generation, formatting, and lint fixes.
+- `make check`: non-mutating formatting, vet, lint, and one race+coverage test
+  pass.
+- `make full`: preparation plus verification.
+- `make test-race` and `make cover-html`: explicit stress and report
+  diagnostics, not additional default-check stages.
 - `make test-surface`: public facade and probe packages.
 - `make test-surface-integration`: `hosttest` integration build-tag surface.
 - `make test-tus-postgres-integration`: real PostgreSQL fencing and
