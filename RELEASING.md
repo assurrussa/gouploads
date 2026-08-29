@@ -7,7 +7,7 @@ This checklist is the reusable-boundary gate for `gouploads`.
 Before tagging, run:
 
 ```bash
-make publish-readiness VERSION=v0.10.0-alpha.7
+make publish-readiness VERSION=v0.10.0-alpha.8
 ```
 
 This verifies `go.mod`/`go.sum` tidiness, the host facade, host test-support
@@ -43,19 +43,17 @@ consumer path must fail the gate instead of silently checking nothing.
 ## Release Sequence
 
 The published stable baseline is `v0.9.0`, and the current published prerelease
-baseline is `v0.10.0-alpha.6`. The source candidate is `v0.10.0-alpha.7`; it
-keeps the portable public/staging S3 and complete cleanup contracts while
-restoring the full local-filesystem media path. Local sources can use a
-separate backend HTTP origin, TUS reader inspection preserves every source
-byte, and deterministic final files are atomically replaceable across retry.
-The mandatory local HTTP/TUS E2E proves source fetch, failed-preset retry,
-replacement, public reads, and idempotent cleanup.
+baseline is `v0.10.0-alpha.7`. The source candidate is `v0.10.0-alpha.8`; it
+adopts the unified Outbox `v0.12.0` batch-reservation and lease-token contract.
+Existing upload jobs remain schema v1 through the Outbox default, and the
+service keeps the default reservation batch size of `1`. Outbox storage
+migrations remain host-owned.
 
-1. Run `make publish-readiness VERSION=v0.10.0-alpha.7`.
+1. Run `make publish-readiness VERSION=v0.10.0-alpha.8`.
 2. Commit the `gouploads` changes.
-3. Tag the reviewed commit, for example `git tag v0.10.0-alpha.7`.
+3. Tag the reviewed commit, for example `git tag v0.10.0-alpha.8`.
 4. Push the commit and tag.
-5. Run `make release-readiness VERSION=v0.10.0-alpha.7`.
+5. Run `make release-readiness VERSION=v0.10.0-alpha.8`.
 6. Update host projects to the published version and re-run their platform
    boundary checks.
 
