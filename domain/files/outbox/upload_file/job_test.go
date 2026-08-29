@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/assurrussa/goshared/pkg/logger"
 	"github.com/assurrussa/goshared/pkg/tests"
@@ -145,15 +146,56 @@ func TestJobHandle_CleanupOnlyOnTerminalOutboxAttempt(t *testing.T) {
 			require.NoError(t, err)
 
 			jobID := outboxtypes.NewJobID()
-			jobsRepo.EXPECT().FindAndReserveJob(gomock.Any(), gomock.Any(), gomock.Any()).Return(models.Job{
-				ID:       jobID,
-				Name:     uploadfilejob.JobName,
-				Payload:  payload,
-				Attempts: tt.attempt,
-			}, nil).Times(1)
-			jobsRepo.EXPECT().DeleteJob(gomock.Any(), jobID).Return(int64(1), nil).Times(1)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			t.Cleanup(cancel)
 
-			ctx, cancel := context.WithCancel(context.Background())
+			var reservedLease sharedoutbox.LeaseToken
+			jobsRepo.EXPECT().MaxReservationBatchSize().Return(sharedoutbox.MaxReservationBatchSize).Times(1)
+			jobsRepo.EXPECT().FindAndReserveJobsForCapabilities(
+				gomock.Any(),
+				gomock.Any(),
+				gomock.Any(),
+				gomock.Any(),
+				[]sharedoutbox.JobCapability{{
+					Name:          uploadfilejob.JobName,
+					SchemaVersion: sharedoutbox.DefaultSchemaVersion,
+				}},
+				1,
+			).DoAndReturn(func(
+				_ context.Context,
+				_, _ time.Time,
+				leaseToken sharedoutbox.LeaseToken,
+				_ []sharedoutbox.JobCapability,
+				_ int,
+			) ([]models.Job, error) {
+				reservedLease = leaseToken
+
+				return []models.Job{{
+					ID:            jobID,
+					Name:          uploadfilejob.JobName,
+					SchemaVersion: sharedoutbox.DefaultSchemaVersion,
+					Payload:       payload,
+					Attempts:      tt.attempt,
+					LeaseToken:    leaseToken,
+				}}, nil
+			}).Times(1)
+			jobsRepo.EXPECT().DeleteJobWithLease(
+				gomock.Any(),
+				jobID,
+				gomock.Any(),
+				gomock.Any(),
+			).DoAndReturn(func(
+				_ context.Context,
+				_ outboxtypes.JobID,
+				leaseToken sharedoutbox.LeaseToken,
+				_ time.Time,
+			) (int64, error) {
+				require.Equal(t, reservedLease, leaseToken)
+				cancel()
+
+				return 1, nil
+			}).Times(1)
+
 			uploadUseCase.EXPECT().Handle(gomock.Any(), uploadfile.Request{
 				FileID: 123,
 				Artifacts: []uploadfile.Artifact{{
@@ -162,10 +204,7 @@ func TestJobHandle_CleanupOnlyOnTerminalOutboxAttempt(t *testing.T) {
 					ContentType: "image/png",
 				}},
 				CleanupOnFailure: tt.wantCleanup,
-			}).DoAndReturn(func(context.Context, uploadfile.Request) (uploadfile.Response, error) {
-				cancel()
-				return uploadfile.Response{}, nil
-			}).Times(1)
+			}).Return(uploadfile.Response{}, nil).Times(1)
 
 			service, err := sharedoutbox.New(
 				sharedoutbox.WithJobsRepo(jobsRepo),
