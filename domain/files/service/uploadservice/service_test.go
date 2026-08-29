@@ -105,7 +105,7 @@ func TestService_UploadBatch_Success(t *testing.T) {
 	input := filestorage.SaveFileInput{
 		Dir:      "uploads/admin/12",
 		FileName: fileModel.OriginalFileName,
-		Size:     fileModel.Size,
+		Size:     fileHeader.Size,
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
@@ -179,7 +179,7 @@ func TestService_UploadBatch_RelativeSourceKey(t *testing.T) {
 	input := filestorage.SaveFileInput{
 		Dir:      "uploads/admin/12",
 		FileName: fileModel.OriginalFileName,
-		Size:     fileModel.Size,
+		Size:     fileHeader.Size,
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
@@ -245,7 +245,7 @@ func TestService_UploadBatch_DefaultConfigApplied(t *testing.T) {
 	input := filestorage.SaveFileInput{
 		Dir:      "uploads/admin/12",
 		FileName: fileModel.OriginalFileName,
-		Size:     fileModel.Size,
+		Size:     fileHeader.Size,
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
@@ -400,7 +400,7 @@ func TestService_UploadSingle_Success(t *testing.T) {
 	input := filestorage.SaveFileInput{
 		Dir:      "uploads/admin/12",
 		FileName: fileModel.OriginalFileName,
-		Size:     fileModel.Size,
+		Size:     fileHeader.Size,
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
@@ -484,7 +484,7 @@ func TestService_UploadSingle_SkipResizer(t *testing.T) {
 	input := filestorage.SaveFileInput{
 		Dir:      "uploads/admin/12",
 		FileName: fileModel.OriginalFileName,
-		Size:     fileModel.Size,
+		Size:     fileHeader.Size,
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
@@ -612,7 +612,7 @@ func TestService_UploadSingle_EnqueueError(t *testing.T) {
 	input := filestorage.SaveFileInput{
 		Dir:      "uploads/admin/12",
 		FileName: fileModel.OriginalFileName,
-		Size:     fileModel.Size,
+		Size:     fileHeader.Size,
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
@@ -673,7 +673,7 @@ func TestService_UploadSingle_OutboxError(t *testing.T) {
 	input := filestorage.SaveFileInput{
 		Dir:      "uploads/admin/12",
 		FileName: fileModel.OriginalFileName,
-		Size:     fileModel.Size,
+		Size:     fileHeader.Size,
 		MimeType: fileModel.MimeType,
 		Reader:   body,
 	}
