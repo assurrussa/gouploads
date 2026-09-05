@@ -17,28 +17,33 @@ explicitly asks to expand it.
 Local verified docs and code are the source of truth for commands, public APIs,
 config keys, supported imports, runtime behavior, and release gates.
 
-Read in this order:
+Read this `AGENTS.md` and the relevant part of `README.md` first, then
+select the source for the task:
 
-1. `AGENTS.md`
-2. `README.md`
-3. `CONTEXT.md`
-4. `docs/host-integration.md`
-5. `docs/project-map.md`
-6. `RELEASING.md`
-7. `reference/externalconsumer`
-8. Relevant code, tests, migrations, configs, and generated contracts
+- Package/domain boundaries: `CONTEXT.md` and `docs/project-map.md`.
+- Host wiring or API integration: `docs/host-integration.md`.
+- Published compatibility or release work: `RELEASING.md` and
+  `reference/externalconsumer`.
+- Behavior changes: the affected code, tests, migrations, configs and generated
+  contracts. Do not read every document for a local fix.
 
 Use `$project-context-router` when a task needs cross-project context or the
 shared wiki. Expose the shared wiki root through `AGENT_CONTEXT_ROOT` or let `$project-context-router` resolve it for the current session.
-After local grounding, read:
-
 Do not hard-code machine-local absolute paths in this public repository.
 
-- `streams/wiki/index.md`
-- `streams/wiki/glossary.md`
+When shared context is needed, follow `streams/AGENTS.md` and its query route.
+Reuse already loaded root rules, PII policy and glossary. Open the known hub
+and only the topic relevant to the task:
+
 - `streams/wiki/platforms/gouploads.md`
+
+For integration work, open only the affected neighbour hub:
+
 - `streams/wiki/platforms/media-resizer.md`
 - `streams/wiki/platforms/outbox.md`
+
+Use `streams/wiki/index.md` only to locate an unknown area or answer an overview
+question. This is a task router, not a mandatory list of wiki pages.
 
 If local verified docs/code conflict with the shared wiki, treat the wiki as
 stale. When the task includes documentation upkeep, update the relevant platform
@@ -131,13 +136,8 @@ but it is not enough to claim published reusable readiness.
 
 ## Documentation Lookup
 
-When the user asks about a library, framework, SDK, API, CLI tool, or cloud
-service, use the `ctx7` CLI first:
-
-```bash
-npx ctx7@latest library <name> "<user question>"
-npx ctx7@latest docs <libraryId> "<user question>"
-```
-
-Do not use Context7 for ordinary refactors, business-logic debugging, code
-review, or general programming concepts.
+Use `$find-docs` for version-sensitive library, framework, SDK, API and CLI
+questions. It selects an available documentation tool, resolves the version and
+owns query limits and fallback. Reuse applicable docs already fetched in this
+task. Ordinary refactors, scripts, business logic and reviews need no lookup
+unless an external API contract is the unresolved question.
