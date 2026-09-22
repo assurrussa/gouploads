@@ -12,7 +12,7 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	commonshared "github.com/assurrussa/goshared/pkg/filetypes"
+	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/assurrussa/goshared/pkg/tests"
 	eventstreammocks "github.com/assurrussa/goshared/services/event-stream/mocks"

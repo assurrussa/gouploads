@@ -8,6 +8,7 @@ tool github.com/assurrussa/gouploads/tools/toolsmocks
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
+	github.com/assurrussa/gocache v0.2.1
 	github.com/assurrussa/godi v0.9.3
 	github.com/assurrussa/gologger v0.1.0
 	github.com/assurrussa/goredis v0.5.0

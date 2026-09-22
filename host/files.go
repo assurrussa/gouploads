@@ -39,6 +39,7 @@ type (
 	FileEventAfterJob     = fileshared.FileEventAfterJob
 	FileLoader            = fileloader.Service
 	FilePreset            = fileshared.FilePreset
+	FileType              = uploadmodel.FileType
 	FileUploadEventFile   = fileshared.FileUploadEventFile
 	FileUploadStatusEvent = fileshared.FileUploadStatusEvent
 	FileRepo              = filerepo.Repo
@@ -92,7 +93,30 @@ const (
 	TusStatusActive                TusStatus            = tusupload.StatusActive
 	TusStatusFinalizing            TusStatus            = tusupload.StatusFinalizing
 	TusStatusReady                 TusStatus            = tusupload.StatusReady
+
+	FileTypeUnknown FileType = uploadmodel.FileTypeUnknown
+	FileTypeImage   FileType = uploadmodel.FileTypeImage
+	FileTypeVideo   FileType = uploadmodel.FileTypeVideo
+	FileTypePdf     FileType = uploadmodel.FileTypePdf
+	FileTypeDocx    FileType = uploadmodel.FileTypeDocx
+	FileTypeLink    FileType = uploadmodel.FileTypeLink
+	FileTypeText    FileType = uploadmodel.FileTypeText
 )
+
+// GetFileType возвращает строковое имя типа файла.
+func GetFileType(fileType FileType) string {
+	return uploadmodel.GetFileType(fileType)
+}
+
+// GetFileTypeString парсит строку в FileType.
+func GetFileTypeString(fileType string) FileType {
+	return uploadmodel.GetFileTypeString(fileType)
+}
+
+// GetFileTypeFromMimeType определяет FileType по MIME-типу.
+func GetFileTypeFromMimeType(mime string) (FileType, error) {
+	return uploadmodel.GetFileTypeFromMimeType(mime)
+}
 
 func NewTusStore(cfg StorageConfig, database pgsql.Client) (TusStore, error) {
 	return tusupload.BuildDurableStore(cfg, database)

@@ -6,7 +6,8 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	rcu2 "github.com/assurrussa/goshared/pkg/cache/rcu"
+
+	"github.com/assurrussa/gocache/rcu"
 )
 
 //go:generate toolsmocks
@@ -40,7 +41,7 @@ type Data struct {
 }
 
 type CacheService struct {
-	cache             *rcu2.Cache[string, Data]
+	cache             *rcu.Cache[string, Data]
 	syncInterval      time.Duration
 	syncCacheInterval time.Duration
 }
@@ -55,10 +56,20 @@ func NewCache(ctx context.Context, log logger.Logger, rolesAllUseCase settingsUs
 		opt(c)
 	}
 
-	c.cache = rcu2.NewCache[string, Data](
-		ctx, log, LoadData(rolesAllUseCase), rcu2.WithSyncInterval[string, Data](c.syncCacheInterval),
+	var err error
+	c.cache, err = rcu.New[string, Data](
+		ctx,
+		LoadData(rolesAllUseCase),
+		rcu.WithRefreshInterval(c.syncCacheInterval),
+		rcu.WithErrorHandler(func(ctx context.Context, err error) {
+			log.ErrorContext(ctx, "rcu settings refresh failed", logger.Error(err))
+		}),
 	)
-	if err := <-c.cache.WaitLoading(); err != nil {
+	if err != nil {
+		return nil, fmt.Errorf("configurator: failed to construct cache: %w", err)
+	}
+
+	if err := c.cache.WaitInitial(ctx); err != nil {
 		return nil, fmt.Errorf("configurator: failed to load configs: %w", err)
 	}
 

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	commonshared "github.com/assurrussa/goshared/pkg/filetypes"
+	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/goshared/pkg/pointer"
 	"github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/google/uuid"

@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/assurrussa/goshared/pkg/filetypes"
 	"github.com/goccy/go-json"
 
 	filesshared "github.com/assurrussa/gouploads/domain/files/shared"
@@ -30,7 +29,7 @@ type File struct {
 	BlockCause       *string                        `json:"blockCause" db:"block_cause"`
 	Name             string                         `json:"name" db:"name"`
 	Description      *string                        `json:"description" db:"description"`
-	FileType         filetypes.FileType             `json:"fileType" db:"file_type"`
+	FileType         FileType                       `json:"fileType" db:"file_type"`
 	Position         int                            `json:"position" db:"position"`
 	IsPrimary        bool                           `json:"isPrimary" db:"is_primary"`
 	URL              string                         `json:"url" db:"url"`
@@ -236,15 +235,15 @@ func (f *File) getThumbnailName() string {
 
 func (f *File) GetFolderPath() string {
 	switch f.FileType {
-	case filetypes.FileTypeVideo:
+	case FileTypeVideo:
 		return "videos"
-	case filetypes.FileTypePdf:
+	case FileTypePdf:
 		return "documents/pdf"
-	case filetypes.FileTypeDocx:
+	case FileTypeDocx:
 		return "documents/docx"
-	case filetypes.FileTypeImage:
+	case FileTypeImage:
 		return "images"
-	case filetypes.FileTypeLink:
+	case FileTypeLink:
 		return "links"
 	default:
 		return "misc"

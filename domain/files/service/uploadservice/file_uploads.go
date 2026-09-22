@@ -14,7 +14,7 @@ import (
 
 	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/filesanitize"
-	commonshared "github.com/assurrussa/goshared/pkg/filetypes"
+	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/google/uuid"
 
 	"github.com/assurrussa/gouploads/domain/files/shared"
