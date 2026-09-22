@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/goshared/pkg/pointer"
 	"github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/google/uuid"
@@ -114,7 +113,7 @@ func CreateFile(t *testing.T) model.File {
 		FolderPath:       folderPath,
 		Size:             12345,
 		MimeType:         "image/png",
-		FileType:         commonshared.FileTypeImage,
+		FileType:         model.FileTypeImage,
 		URL:              fileURL,
 		Slug:             uuid.NewString(),
 		Data: &model.FileData{

@@ -10,7 +10,6 @@ import (
 
 	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/filesanitize"
-	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/goshared/pkg/pointer"
 	"github.com/google/uuid"
 
@@ -223,8 +222,8 @@ func (s *Service) UploadStored(ctx context.Context, req ReaderRequest, uploaded 
 		return model.File{}, errors.New("invalid uploaded file metadata")
 	}
 
-	if uploaded.FileType == commonshared.FileTypeUnknown {
-		fileType, err := commonshared.GetFileTypeFromMimeType(uploaded.MimeType)
+	if uploaded.FileType == model.FileTypeUnknown {
+		fileType, err := model.GetFileTypeFromMimeType(uploaded.MimeType)
 		if err != nil {
 			return model.File{}, fmt.Errorf("detect file type: %w", err)
 		}

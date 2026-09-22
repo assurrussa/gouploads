@@ -19,7 +19,6 @@ import (
 
 	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/filesanitize"
-	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
@@ -383,7 +382,7 @@ func (u *UseCase) updateMainArtifact(
 		fileData.Height = height
 	}
 
-	fileType, err := commonshared.GetFileTypeFromMimeType(storageFile.MimeType)
+	fileType, err := model.GetFileTypeFromMimeType(storageFile.MimeType)
 	if err != nil {
 		return fmt.Errorf("prepare mime type for file type: %w", err)
 	}

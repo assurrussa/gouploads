@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/goshared/pkg/tests"
 	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
@@ -190,7 +189,7 @@ func TestHandle_SuccessSkipResizeVideo(t *testing.T) {
 
 	jobID := outboxtypes.MustParse[outboxtypes.JobID]("f0317e88-bbfe-11ed-8728-461e464ebed8")
 	fileModel := testshelpers.CreateFile(t)
-	fileModel.FileType = commonshared.FileTypeVideo
+	fileModel.FileType = model.FileTypeVideo
 	fileModel.MimeType = "video/mp4"
 	respClient := clientresizer.Response{
 		JobID:  jobID,

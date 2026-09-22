@@ -19,7 +19,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/goshared/pkg/pointer"
 	"github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/assurrussa/goshared/pkg/tests"
@@ -1034,7 +1033,7 @@ func createModel() model.File {
 	return model.File{
 		ID:               201,
 		ObjectID:         pointer.To(shared.FileObjectID(134)),
-		FileType:         commonshared.FileTypeImage,
+		FileType:         model.FileTypeImage,
 		Position:         124345,
 		OriginalFileName: "sample.png",
 		FileName:         "sample-stored.png",

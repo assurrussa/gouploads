@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	logger "github.com/assurrussa/gologger"
-
 	"github.com/assurrussa/gocache/rcu"
+	logger "github.com/assurrussa/gologger"
 )
 
 //go:generate toolsmocks

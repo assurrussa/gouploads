@@ -64,7 +64,6 @@ func (f FileType) Value() (driver.Value, error) {
 	return int64(f), nil
 }
 
-//nolint:exhaustive // it's ok
 func (f FileType) Validate() error {
 	if f == FileTypeUnknown {
 		return fmt.Errorf("invalid object type: %d, %s", f, GetFileType(f))

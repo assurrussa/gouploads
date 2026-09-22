@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/Masterminds/squirrel"
-	querybuilder "github.com/assurrussa/outbox/shared/query_builder"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
+	querybuilder "github.com/assurrussa/outbox/shared/query_builder"
 	"github.com/georgysavva/scany/v2/pgxscan"
 
 	"github.com/assurrussa/gouploads/domain/files/model"

@@ -14,7 +14,6 @@ import (
 
 	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/filesanitize"
-	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 
@@ -164,7 +163,7 @@ func (h *Handler) tusCreate(c fiber.Ctx, cmsOnly bool) error {
 	}
 
 	fileTypeValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "file_type")))
-	fileType := commonshared.GetFileTypeString(fileTypeValue)
+	fileType := model.GetFileTypeString(fileTypeValue)
 	skipResize := parseBoolFlag(metadataValue(metadata, "skip_resize"))
 
 	resolution, err := h.resolveUploadStrategy(
@@ -385,7 +384,7 @@ func (h *Handler) TusComplete(c fiber.Ctx) error {
 	}
 
 	contextValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "context")))
-	fileType := commonshared.GetFileTypeString(strings.ToLower(strings.TrimSpace(metadataValue(metadata, "file_type"))))
+	fileType := model.GetFileTypeString(strings.ToLower(strings.TrimSpace(metadataValue(metadata, "file_type"))))
 	skipResize := parseBoolFlag(metadataValue(metadata, "skip_resize"))
 	deletedID := parseInt64(metadataValue(metadata, "replace_file_id", "deleteId", "delete_id"))
 
@@ -516,7 +515,7 @@ func (h *Handler) Upload(c fiber.Ctx) error {
 
 	deletedID := h.getDeletedIDRequest(c)
 	contextValue := strings.ToLower(strings.TrimSpace(c.FormValue("context")))
-	fileType := commonshared.GetFileTypeString(strings.ToLower(strings.TrimSpace(c.FormValue("file_type"))))
+	fileType := model.GetFileTypeString(strings.ToLower(strings.TrimSpace(c.FormValue("file_type"))))
 	skipResizer := parseBoolFlag(c.FormValue("skip_resize"))
 
 	metadata := map[string]string{
@@ -680,7 +679,7 @@ func (h *Handler) ListFiles(c fiber.Ctx) error {
 	}
 
 	if ft := strings.ToLower(c.Query("file_type")); ft != "" {
-		filters.FileType = commonshared.GetFileTypeString(ft).String()
+		filters.FileType = model.GetFileTypeString(ft).String()
 	}
 
 	files, _, err := h.fileRepo.List(c, filters)
@@ -824,21 +823,21 @@ func (h *Handler) resolveConfig(
 	objectType fileshared.FileObjectType,
 	objectID fileshared.FileObjectID,
 	_ string,
-	fileType commonshared.FileType,
+	fileType model.FileType,
 ) *uploadservice.FileUploadConfig {
 	// Fallback logic if no strategy is found
 	config := uploadservice.DefaultFileUploadConfig(objectType.String(), objectID.String())
 
 	//nolint:exhaustive // defaults
 	switch fileType {
-	case commonshared.FileTypeVideo:
+	case model.FileTypeVideo:
 		config.MaxFileSize = 50 * 1024 * 1024 // 50MB
 		config.AllowedExtensions = []string{".mp4", ".webm"}
 		config.AllowedMimeTypes = map[string][]string{
 			".mp4":  {"video/mp4"},
 			".webm": {"video/webm"},
 		}
-	case commonshared.FileTypeImage:
+	case model.FileTypeImage:
 		config.MaxFileSize = 10 * 1024 * 1024 // 10MB
 		config.AllowedExtensions = []string{".jpg", ".jpeg", ".png", ".gif", ".webp"}
 		config.AllowedMimeTypes = map[string][]string{
@@ -889,7 +888,7 @@ func (h *Handler) resolveUploadStrategy(
 	objectType fileshared.FileObjectType,
 	objectID fileshared.FileObjectID,
 	contextValue string,
-	fileType commonshared.FileType,
+	fileType model.FileType,
 	skipResize bool,
 	opts resolveUploadStrategyOptions,
 ) (resolveUploadStrategyResult, error) {
@@ -1113,7 +1112,7 @@ func (h *Handler) resolveTusPatchMimeType(
 	}
 
 	fileTypeValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "file_type")))
-	fileType := commonshared.GetFileTypeString(fileTypeValue)
+	fileType := model.GetFileTypeString(fileTypeValue)
 	skipResize := parseBoolFlag(metadataValue(metadata, "skip_resize"))
 
 	uCtx, _ := h.contextBuilder(c, metadata)

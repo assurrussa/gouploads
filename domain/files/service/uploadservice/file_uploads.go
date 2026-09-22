@@ -14,9 +14,9 @@ import (
 
 	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/filesanitize"
-	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/google/uuid"
 
+	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 )
@@ -110,7 +110,7 @@ type UploadedFile struct {
 	FolderPath   string
 	URL          string
 	MimeType     string
-	FileType     commonshared.FileType
+	FileType     model.FileType
 	Width        int
 	Height       int
 }
@@ -242,7 +242,7 @@ func (s *Service) processFile(
 		return UploadedFile{}, err
 	}
 
-	fileType, err := commonshared.GetFileTypeFromMimeType(mimeType)
+	fileType, err := model.GetFileTypeFromMimeType(mimeType)
 	if err != nil {
 		return UploadedFile{}, err
 	}
@@ -333,7 +333,7 @@ func (s *Service) processReader(
 
 	reader := io.MultiReader(bytes.NewReader(data), input.Reader)
 
-	fileType, err := commonshared.GetFileTypeFromMimeType(mimeType)
+	fileType, err := model.GetFileTypeFromMimeType(mimeType)
 	if err != nil {
 		return UploadedFile{}, err
 	}

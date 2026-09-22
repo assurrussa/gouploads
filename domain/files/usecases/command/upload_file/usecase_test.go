@@ -12,7 +12,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/assurrussa/goshared/pkg/tests"
 	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
@@ -110,7 +109,7 @@ func TestHandle_Success(t *testing.T) {
 	ctx, _, ts := NewTestSuite(t)
 
 	file := testshelpers.CreateFile(t)
-	file.FileType = commonshared.FileTypeImage
+	file.FileType = model.FileTypeImage
 	uploaderFile := file.GetData().Uploader
 	file.URL = fileURL
 	file.IsPrimary = true
@@ -240,7 +239,7 @@ func TestHandle_VideoPresets(t *testing.T) {
 	ctx, _, ts := NewTestSuite(t)
 
 	file := testshelpers.CreateFile(t)
-	file.FileType = commonshared.FileTypeVideo
+	file.FileType = model.FileTypeVideo
 	file.MimeType = "video/mp4"
 	file.FileName = uuid.NewString() + ".mov"
 	file.URL = videoFileURL
@@ -464,7 +463,7 @@ func TestHandle_PartialArtifactFailureSchedulesFinalCleanup(t *testing.T) {
 	ctx, cancel, ts := NewTestSuite(t)
 
 	file := testshelpers.CreateFile(t)
-	file.FileType = commonshared.FileTypeImage
+	file.FileType = model.FileTypeImage
 	body, err := io.ReadAll(testshelpers.CreateTestImage(t))
 	ts.Require().NoError(err)
 	mainPath := path.Join("media/v1", file.ObjectType.String(), file.ObjectID.String(), file.Slug, "main.png")
@@ -551,7 +550,7 @@ func TestHandle_PartialArtifactFailureKeepsFinalsForRetry(t *testing.T) {
 	ctx, _, ts := NewTestSuite(t)
 
 	file := testshelpers.CreateFile(t)
-	file.FileType = commonshared.FileTypeImage
+	file.FileType = model.FileTypeImage
 	body, err := io.ReadAll(testshelpers.CreateTestImage(t))
 	ts.Require().NoError(err)
 
@@ -615,7 +614,7 @@ func TestHandle_RejectsFinalizationWithoutMainArtifact(t *testing.T) {
 	ctx, _, ts := NewTestSuite(t)
 
 	file := testshelpers.CreateFile(t)
-	file.FileType = commonshared.FileTypeImage
+	file.FileType = model.FileTypeImage
 	body, err := io.ReadAll(testshelpers.CreateTestImage(t))
 	ts.Require().NoError(err)
 
@@ -653,7 +652,7 @@ func TestHandle_TransactionFailureSchedulesFinalCleanup(t *testing.T) {
 	ctx, _, ts := NewTestSuite(t)
 
 	file := testshelpers.CreateFile(t)
-	file.FileType = commonshared.FileTypeImage
+	file.FileType = model.FileTypeImage
 	body, err := io.ReadAll(testshelpers.CreateTestImage(t))
 	ts.Require().NoError(err)
 	mainPath := path.Join("media/v1", file.ObjectType.String(), file.ObjectID.String(), file.Slug, "main.png")
