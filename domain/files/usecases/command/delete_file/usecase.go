@@ -13,7 +13,7 @@ import (
 	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/filesanitize"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	eventstream "github.com/assurrussa/goshared/services/event-stream"
+	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 
 	"github.com/assurrussa/gouploads/domain/files/model"

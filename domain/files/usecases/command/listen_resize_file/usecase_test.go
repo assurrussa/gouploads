@@ -7,7 +7,7 @@ import (
 
 	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/tests"
-	eventstreammocks "github.com/assurrussa/goshared/services/event-stream/mocks"
+	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"

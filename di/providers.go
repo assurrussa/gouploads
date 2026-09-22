@@ -8,7 +8,7 @@ import (
 
 	logger "github.com/assurrussa/gologger"
 	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
-	inmemeventstream "github.com/assurrussa/goshared/services/event-stream/in-mem"
+	inmemeventstream "github.com/assurrussa/gowebsocket/eventstream/inmem"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/outbox"
 	"github.com/aws/aws-sdk-go-v2/aws"

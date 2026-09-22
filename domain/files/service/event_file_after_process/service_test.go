@@ -9,7 +9,7 @@ import (
 	logger "github.com/assurrussa/gologger"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/assurrussa/goshared/pkg/tests"
-	eventstreammocks "github.com/assurrussa/goshared/services/event-stream/mocks"
+	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"

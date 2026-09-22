@@ -21,7 +21,7 @@ import (
 	"github.com/assurrussa/goshared/pkg/filesanitize"
 	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	eventstream "github.com/assurrussa/goshared/services/event-stream"
+	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/google/uuid"

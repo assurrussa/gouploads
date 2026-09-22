@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	logger "github.com/assurrussa/gologger"
-	eventstream "github.com/assurrussa/goshared/services/event-stream"
+	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 
 	"github.com/assurrussa/gouploads/domain/files/model"

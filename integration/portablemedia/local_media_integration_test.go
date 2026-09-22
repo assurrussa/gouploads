@@ -20,7 +20,7 @@ import (
 
 	logger "github.com/assurrussa/gologger"
 	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
-	inmemeventstream "github.com/assurrussa/goshared/services/event-stream/in-mem"
+	inmemeventstream "github.com/assurrussa/gowebsocket/eventstream/inmem"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/gofiber/fiber/v3"

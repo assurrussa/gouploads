@@ -15,7 +15,7 @@ import (
 	commonshared "github.com/assurrussa/gouploads/domain/files/model"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/assurrussa/goshared/pkg/tests"
-	eventstreammocks "github.com/assurrussa/goshared/services/event-stream/mocks"
+	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"

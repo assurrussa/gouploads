@@ -7,7 +7,7 @@ import (
 
 	logger "github.com/assurrussa/gologger"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	eventstream "github.com/assurrussa/goshared/services/event-stream"
+	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
