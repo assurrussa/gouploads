@@ -12,7 +12,7 @@ require (
 	github.com/assurrussa/godi v0.9.3
 	github.com/assurrussa/gologger v0.1.0
 	github.com/assurrussa/goredis v0.5.0
-	github.com/assurrussa/goshared v1.1.0
+	github.com/assurrussa/goshared v1.2.0
 	github.com/assurrussa/gowebsocket v0.1.0
 	github.com/assurrussa/outbox v0.12.0
 	github.com/assurrussa/outbox/backends/pgsql v0.12.0
