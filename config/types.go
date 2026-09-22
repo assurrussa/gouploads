@@ -1,7 +1,7 @@
 package config
 
 import (
-	"github.com/assurrussa/goshared/pkg/tools"
+	"github.com/assurrussa/goshared/pkg/bytesize"
 )
 
 type ParseSize string
@@ -11,7 +11,7 @@ func (p ParseSize) String() string {
 }
 
 func (p ParseSize) Value() int {
-	messageSize, err := tools.ParseSize(p.String())
+	messageSize, err := bytesize.Parse(p.String())
 	if err != nil {
 		return 0
 	}
