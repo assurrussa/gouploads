@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/outbox/outbox"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 

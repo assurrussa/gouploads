@@ -1,14 +1,17 @@
 module github.com/assurrussa/gouploads
 
-go 1.26
+go 1.27.0
+
+toolchain go1.27.1
 
 tool github.com/assurrussa/gouploads/tools/toolsmocks
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/assurrussa/godi v0.9.3
-	github.com/assurrussa/goredis v0.4.5
-	github.com/assurrussa/goshared v1.0.3
+	github.com/assurrussa/gologger v0.1.0
+	github.com/assurrussa/goredis v0.5.0
+	github.com/assurrussa/goshared v1.1.0
 	github.com/assurrussa/outbox v0.12.0
 	github.com/assurrussa/outbox/backends/pgsql v0.12.0
 	github.com/aws/aws-sdk-go-v2 v1.41.11
@@ -39,9 +42,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.27 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.27 // indirect
 	github.com/aws/smithy-go v1.27.1 // indirect
-	github.com/bluele/gcache v0.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/cornelk/hashmap v1.0.8 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
@@ -55,6 +56,7 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
 	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
@@ -65,10 +67,6 @@ require (
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/pressly/goose/v3 v3.27.1 // indirect
-	github.com/samber/lo v1.53.0 // indirect
-	github.com/samber/slog-common v0.22.0 // indirect
-	github.com/samber/slog-multi v1.8.0 // indirect
-	github.com/samber/slog-sampling v1.6.0 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect

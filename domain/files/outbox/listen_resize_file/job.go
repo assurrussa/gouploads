@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 
 	listenresizefile "github.com/assurrussa/gouploads/domain/files/usecases/command/listen_resize_file"

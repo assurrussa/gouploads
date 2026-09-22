@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/pointer"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/assurrussa/goshared/pkg/tests"

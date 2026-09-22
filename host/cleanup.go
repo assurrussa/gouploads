@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 
 	cleanerfiles "github.com/assurrussa/gouploads/domain/files/usecases/command/cleaner_files"

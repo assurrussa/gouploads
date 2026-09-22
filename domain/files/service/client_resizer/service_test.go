@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/tests"
 	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
 	"github.com/gofiber/fiber/v3"

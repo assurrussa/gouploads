@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	logger "github.com/assurrussa/gologger"
 	commonshared "github.com/assurrussa/goshared/pkg/filetypes"
-	"github.com/assurrussa/goshared/pkg/logger"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/assurrussa/goshared/pkg/tests"
 	eventstreammocks "github.com/assurrussa/goshared/services/event-stream/mocks"

@@ -5,7 +5,7 @@ package listenresizefile
 import (
 	fmt461e464ebed9 "fmt"
 
-	logger "github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	eventstream "github.com/assurrussa/goshared/services/event-stream"
 	errors461e464ebed9 "github.com/kazhuravlev/options-gen/pkg/errors"
 	validator461e464ebed9 "github.com/kazhuravlev/options-gen/pkg/validator"

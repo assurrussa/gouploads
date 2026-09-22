@@ -1,7 +1,7 @@
 package host
 
 import (
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/outbox/outbox"
 
 	outboxdeleted "github.com/assurrussa/gouploads/domain/files/outbox/deleted_file"

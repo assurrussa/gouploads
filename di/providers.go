@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
 	inmemeventstream "github.com/assurrussa/goshared/services/event-stream/in-mem"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"

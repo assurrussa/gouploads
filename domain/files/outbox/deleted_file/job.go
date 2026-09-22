@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	logger "github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 
 	deletedfile "github.com/assurrussa/gouploads/domain/files/usecases/command/delete_file"

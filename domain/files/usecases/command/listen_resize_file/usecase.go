@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	logger "github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	eventstream "github.com/assurrussa/goshared/services/event-stream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"

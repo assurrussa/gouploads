@@ -3,7 +3,7 @@ package host
 import (
 	"context"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	"github.com/gofiber/fiber/v3"
 
 	uploadhttp "github.com/assurrussa/gouploads/domain/files/transport/http"

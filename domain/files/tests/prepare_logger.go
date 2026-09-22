@@ -5,7 +5,7 @@ package testshelpers
 import (
 	"testing"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 )
 
 func CreateLogger(t *testing.T) *logger.Log {

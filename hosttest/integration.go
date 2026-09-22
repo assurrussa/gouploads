@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/filecaller"
 	"github.com/assurrussa/goshared/pkg/loadenv"
-	"github.com/assurrussa/goshared/pkg/logger"
 	"github.com/assurrussa/goshared/pkg/tests/utilst"
 	"github.com/assurrussa/goshared/pkg/validator"
 	"github.com/assurrussa/outbox/backends/pgsql/migrator"

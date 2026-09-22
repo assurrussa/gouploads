@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/tests"
 	sharedoutbox "github.com/assurrussa/outbox/outbox"
 	outboxmocks "github.com/assurrussa/outbox/outbox/mocks"

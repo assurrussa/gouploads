@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
 	"github.com/gofiber/fiber/v3"
 )

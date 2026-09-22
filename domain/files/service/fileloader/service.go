@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 
 	commonmodels "github.com/assurrussa/gouploads/domain/files/model"
 )

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/assurrussa/goshared/pkg/tests"
 	eventstreammocks "github.com/assurrussa/goshared/services/event-stream/mocks"

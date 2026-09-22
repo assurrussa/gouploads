@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/outbox/backends/pgsql/migrator"
 	pgsqlpgx "github.com/assurrussa/outbox/backends/pgsql/storage"
 	pgsqlclient "github.com/assurrussa/outbox/backends/pgsql/storage/pgsqlclient"

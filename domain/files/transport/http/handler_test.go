@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
+	logger "github.com/assurrussa/gologger"
 	commonshared "github.com/assurrussa/goshared/pkg/filetypes"
-	"github.com/assurrussa/goshared/pkg/logger"
 	"github.com/assurrussa/goshared/pkg/pointer"
 	"github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/assurrussa/goshared/pkg/tests"

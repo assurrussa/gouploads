@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 
 	externalconsumerprobe "github.com/assurrussa/gouploads/internal/externalconsumerprobe"
 )

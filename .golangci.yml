@@ -81,6 +81,7 @@ linters:
           allow:
             - $gostd
             - go.uber.org/mock/gomock
+            - github.com/assurrussa/gologger
             - github.com/assurrussa/goredis
             - github.com/assurrussa/goshared
             - github.com/assurrussa/gouploads

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/filesanitize"
 	commonshared "github.com/assurrussa/goshared/pkg/filetypes"
-	logger "github.com/assurrussa/goshared/pkg/logger"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/assurrussa/goshared/pkg/logger"
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/tests"
 	eventstreammocks "github.com/assurrussa/goshared/services/event-stream/mocks"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"

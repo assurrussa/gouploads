@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/filesanitize"
 	commonshared "github.com/assurrussa/goshared/pkg/filetypes"
-	logger "github.com/assurrussa/goshared/pkg/logger"
 	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	eventstream "github.com/assurrussa/goshared/services/event-stream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	logger "github.com/assurrussa/gologger"
 	"github.com/assurrussa/goshared/pkg/filesanitize"
 	commonshared "github.com/assurrussa/goshared/pkg/filetypes"
-	"github.com/assurrussa/goshared/pkg/logger"
 	"github.com/assurrussa/goshared/pkg/pointer"
 	"github.com/google/uuid"
 

@@ -11,10 +11,10 @@ package clientresizermocks
 
 import (
 	context "context"
-	http "net/http"
+	http0 "net/http"
 	reflect "reflect"
 
-	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
+	http "github.com/assurrussa/goshared/pkg/transport/http"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -43,7 +43,7 @@ func (m *MockhttpClient) EXPECT() *MockhttpClientMockRecorder {
 }
 
 // DoWithRequestAndParse mocks base method.
-func (m *MockhttpClient) DoWithRequestAndParse(ctx context.Context, request transporthttp.Request, data any) error {
+func (m *MockhttpClient) DoWithRequestAndParse(ctx context.Context, request http.Request, data any) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DoWithRequestAndParse", ctx, request, data)
 	ret0, _ := ret[0].(error)
@@ -81,10 +81,10 @@ func (m *MockartifactHTTPClient) EXPECT() *MockartifactHTTPClientMockRecorder {
 }
 
 // Do mocks base method.
-func (m *MockartifactHTTPClient) Do(request *http.Request) (*http.Response, error) {
+func (m *MockartifactHTTPClient) Do(request *http0.Request) (*http0.Response, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Do", request)
-	ret0, _ := ret[0].(*http.Response)
+	ret0, _ := ret[0].(*http0.Response)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
