@@ -12,7 +12,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/assurrussa/goshared/pkg/pointer"
-	querybuilder "github.com/assurrussa/goshared/pkg/query_builder"
+	querybuilder "github.com/assurrussa/outbox/shared/query_builder"
 	tests "github.com/assurrussa/goshared/pkg/tests"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
