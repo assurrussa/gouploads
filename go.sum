@@ -11,8 +11,8 @@ github.com/assurrussa/gologger v0.1.0 h1:jo5VXaznPUReNXEruMrNOEfIbRLUctjfeRdEloc
 github.com/assurrussa/gologger v0.1.0/go.mod h1:/F/8c0qo2pd755T/YJ7A1hkCmbp/abM2747bsMta6ec=
 github.com/assurrussa/goredis v0.5.0 h1:hD9DHcMSDMTvE+6K6Z7hcPFwMOCDM7GsGvV8vrSNo/Q=
 github.com/assurrussa/goredis v0.5.0/go.mod h1:+M9R0Azl/P2skBa/OXDwuNTnYq73IqoxsRjp4sFAEDQ=
-github.com/assurrussa/goshared v1.2.0 h1:Gekrqvzu1SnO1ZN/R+nFb12Ra6W8Yr/iLvbEutK1bWg=
-github.com/assurrussa/goshared v1.2.0/go.mod h1:zmg2pYltOzdw7rQ0Z9ASTaSb7Cqzd8U97W7kX3sk3ws=
+github.com/assurrussa/goshared v1.3.0 h1:uMjt0Oy1BuzLv4EY0PaRmp0snB2uPg0utkVX+C1towQ=
+github.com/assurrussa/goshared v1.3.0/go.mod h1:zmg2pYltOzdw7rQ0Z9ASTaSb7Cqzd8U97W7kX3sk3ws=
 github.com/assurrussa/gowebsocket v0.1.0 h1:5raQE6OQkECJQgg6K+Yr2nqokPQ50G1ksKQGLABbaP4=
 github.com/assurrussa/gowebsocket v0.1.0/go.mod h1:At2uZIpfPiFNmtk0G0i21+72BI4o2N0/1Rqcv25R+xo=
 github.com/assurrussa/outbox v0.12.0 h1:ChnUueyc0rWPpLU9RS5Xcgq1xHPQdiGq6m7T6hY9mWc=
