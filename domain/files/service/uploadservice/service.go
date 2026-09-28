@@ -13,8 +13,10 @@ import (
 	"github.com/assurrussa/goshared/pkg/pointer"
 	"github.com/google/uuid"
 
+	uploadconfig "github.com/assurrussa/gouploads/config"
 	"github.com/assurrussa/gouploads/domain/files/model"
 	deletedfilejob "github.com/assurrussa/gouploads/domain/files/outbox/deleted_file"
+	finalizeoriginal "github.com/assurrussa/gouploads/domain/files/outbox/finalize_original"
 	sendresizefilejob "github.com/assurrussa/gouploads/domain/files/outbox/send_resize_file"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 )
@@ -42,6 +44,7 @@ type Service struct {
 	Options
 	listDirPrefix     []string
 	listDirTempPrefix []string
+	processingMode    uploadconfig.ProcessingMode
 }
 
 func Must(opts Options) *Service {
@@ -52,7 +55,20 @@ func Must(opts Options) *Service {
 	return service
 }
 
+// New preserves the historical deep-package constructor for existing consumers.
+// Deprecated: use NewWithProcessing or the supported host facade. An empty mode
+// in NewWithProcessing defaults to originals; this legacy constructor uses media.
 func New(opts Options) (*Service, error) {
+	return NewWithProcessing(opts, uploadconfig.ProcessingMediaResizer)
+}
+
+// NewWithProcessing selects the pipeline once at construction, not from
+// untrusted request metadata. The zero mode means original_only.
+func NewWithProcessing(opts Options, mode uploadconfig.ProcessingMode) (*Service, error) {
+	resolved, err := mode.Resolve()
+	if err != nil {
+		return nil, err
+	}
 	if err := opts.Validate(); err != nil {
 		return nil, fmt.Errorf("validate options: %w", err)
 	}
@@ -77,6 +93,7 @@ func New(opts Options) (*Service, error) {
 		Options:           opts,
 		listDirPrefix:     prefix,
 		listDirTempPrefix: prefixTemp,
+		processingMode:    resolved,
 	}, nil
 }
 
@@ -356,6 +373,14 @@ func (s *Service) GetFile(ctx context.Context, fileID int64) (model.File, error)
 }
 
 func (s *Service) prepareConfig(req SingleRequest) (*FileUploadConfig, error) {
+	if s.processingMode != uploadconfig.ProcessingMediaResizer {
+		if req.ObjectID <= 0 {
+			return nil, ClientError{Message: "original upload requires a positive object id"}
+		}
+		if err := req.ObjectType.Validate(); err != nil {
+			return nil, fmt.Errorf("validate original upload object type: %w", err)
+		}
+	}
 	var cfg FileUploadConfig
 	if req.Config != nil {
 		cfg = *req.Config
@@ -426,6 +451,17 @@ func (s *Service) uploadFile(
 		return model.File{}, fmt.Errorf("create upload task: %w", err)
 	}
 	fileModel.ID = fileID
+
+	if s.processingMode != uploadconfig.ProcessingMediaResizer {
+		payload, err := finalizeoriginal.MarshalPayload(finalizeoriginal.Payload{FileID: fileID})
+		if err != nil {
+			return model.File{}, err
+		}
+		if _, err := s.outbox.Put(ctx, finalizeoriginal.JobName, payload, now); err != nil {
+			return model.File{}, fmt.Errorf("put original finalization job: %w", err)
+		}
+		return fileModel, nil
+	}
 
 	skipResizeVideo := config != nil && config.SkipResizer
 

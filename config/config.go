@@ -9,14 +9,15 @@ const (
 )
 
 type StorageConfig struct {
-	AppDomainURL string              `toml:"app_domain_url" long:"app-domain-url" env:"APP_DOMAIN_URL" value-default:"https://localhost"`
-	Driver       string              `toml:"driver" long:"storage-driver" env:"STORAGE_DRIVER" value-default:"local" validate:"required,oneof=local s3"`
-	Public       StoragePublicConfig `toml:"public"`
-	Local        StorageLocalConfig  `toml:"local"`
-	S3           StorageS3Config     `toml:"s3"`
-	Image        ImagePipelineConfig `toml:"image_pipeline"`
-	Video        VideoPipelineConfig `toml:"video_pipeline"`
-	Tus          StorageTusConfig    `toml:"tus"`
+	AppDomainURL   string              `toml:"app_domain_url" long:"app-domain-url" env:"APP_DOMAIN_URL" value-default:"https://localhost"`
+	Driver         string              `toml:"driver" long:"storage-driver" env:"STORAGE_DRIVER" value-default:"local" validate:"required,oneof=local s3"`
+	ProcessingMode ProcessingMode      `toml:"processing_mode" long:"storage-processing-mode" env:"STORAGE_PROCESSING_MODE" value-default:"original_only" validate:"omitempty,oneof=original_only media_resizer"`
+	Public         StoragePublicConfig `toml:"public"`
+	Local          StorageLocalConfig  `toml:"local"`
+	S3             StorageS3Config     `toml:"s3"`
+	Image          ImagePipelineConfig `toml:"image_pipeline"`
+	Video          VideoPipelineConfig `toml:"video_pipeline"`
+	Tus            StorageTusConfig    `toml:"tus"`
 }
 
 type StoragePublicConfig struct {
@@ -54,10 +55,10 @@ type StorageTusConfig struct {
 }
 
 type VideoPipelineConfig struct {
-	ResizerHost         string              `toml:"resizer_host" long:"storage-video-resizer-host" env:"STORAGE_VIDEO_RESIZER_HOST" value-default:"http://media_resizer:18085/jobs" validate:"required"`
-	WebhookCallbackHost string              `toml:"webhook_host" long:"storage-video-resizer-webhook-host" env:"STORAGE_VIDEO_RESIZER_WEBHOOK_HOST" value-default:"http://backend:8080/api/v1/media-resize" validate:"required"`
+	ResizerHost         string              `toml:"resizer_host" long:"storage-video-resizer-host" env:"STORAGE_VIDEO_RESIZER_HOST" validate:"omitempty,url"`
+	WebhookCallbackHost string              `toml:"webhook_host" long:"storage-video-resizer-webhook-host" env:"STORAGE_VIDEO_RESIZER_WEBHOOK_HOST" validate:"omitempty,url"`
 	ResizerToken        string              `toml:"resizer_token" long:"storage-video-resizer-token" env:"STORAGE_VIDEO_RESIZER_TOKEN" value-default:""`
-	Presets             []VideoPresetConfig `toml:"presets" validate:"required,dive"`
+	Presets             []VideoPresetConfig `toml:"presets" validate:"omitempty,dive"`
 }
 
 type PresetPreviewConfig struct {
@@ -81,11 +82,11 @@ type VideoPresetConfig struct {
 }
 
 type ImagePipelineConfig struct {
-	DefaultFormat       string               `toml:"default_format" long:"storage-image-default-format" env:"STORAGE_IMAGE_DEFAULT_FORMAT" value-default:"jpg" validate:"required,oneof=jpg jpeg png webp"`
-	ResizerHost         string               `toml:"resizer_host" long:"storage-image-resizer-host" env:"STORAGE_IMAGE_RESIZER_HOST" value-default:"http://media_resizer:18085/jobs" validate:"required"`
-	WebhookCallbackHost string               `toml:"webhook_host" long:"storage-image-resizer-webhook-host" env:"STORAGE_IMAGE_RESIZER_WEBHOOK_HOST" value-default:"http://backend:8080/api/v1/media-resize" validate:"required"`
+	DefaultFormat       string               `toml:"default_format" long:"storage-image-default-format" env:"STORAGE_IMAGE_DEFAULT_FORMAT" value-default:"jpg" validate:"omitempty,oneof=jpg jpeg png webp"`
+	ResizerHost         string               `toml:"resizer_host" long:"storage-image-resizer-host" env:"STORAGE_IMAGE_RESIZER_HOST" validate:"omitempty,url"`
+	WebhookCallbackHost string               `toml:"webhook_host" long:"storage-image-resizer-webhook-host" env:"STORAGE_IMAGE_RESIZER_WEBHOOK_HOST" validate:"omitempty,url"`
 	ResizerToken        string               `toml:"resizer_token" long:"storage-image-resizer-token" env:"STORAGE_IMAGE_RESIZER_TOKEN" value-default:""`
-	Presets             []ImagePresetConfig  `toml:"presets" validate:"required,dive"`
+	Presets             []ImagePresetConfig  `toml:"presets" validate:"omitempty,dive"`
 	Watermark           ImageWatermarkConfig `toml:"watermark"`
 }
 

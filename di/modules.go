@@ -16,12 +16,13 @@ func ModuleBootstrap() sharedgodi.Dependencies {
 		sharedgodi.NewDependency(provideSourceURLResolver, sharedgodi.WithKey(KeyFilesSourceURLResolver)),
 		sharedgodi.NewDependency(provideResizerSettingsCache, sharedgodi.WithKey(KeyFilesResizerSettings)),
 		sharedgodi.NewDependency(provideClientResizer, sharedgodi.WithKey(KeyFilesClientResizer)),
-		sharedgodi.NewDependency(provideUploadService, sharedgodi.WithKey(KeyFilesUploadService)),
+		sharedgodi.NewDependency(provideConfiguredUploadService, sharedgodi.WithKey(KeyFilesUploadService)),
 		sharedgodi.NewDependency(provideEventFileAfterProcess, sharedgodi.WithKey(KeyFilesEventAfterProcess)),
 		sharedgodi.NewDependency(provideUseCaseDeleteFile, sharedgodi.WithKey(KeyFilesUseCaseDelete)),
 		sharedgodi.NewDependency(provideUseCaseSendResizeFile, sharedgodi.WithKey(KeyFilesUseCaseSendResize)),
 		sharedgodi.NewDependency(provideUseCaseListenResizeFile, sharedgodi.WithKey(KeyFilesUseCaseListenResize)),
 		sharedgodi.NewDependency(provideUseCaseUploadFile, sharedgodi.WithKey(KeyFilesUseCaseUpload)),
 		sharedgodi.NewDependency(provideUseCaseUploadRawFile, sharedgodi.WithKey(KeyFilesUseCaseUploadRaw)),
+		sharedgodi.NewDependency(provideUseCaseFinalizeOriginal, sharedgodi.WithKey(KeyFilesUseCaseFinalizeOriginal)),
 	)
 }
