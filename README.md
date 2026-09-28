@@ -1,193 +1,146 @@
 # gouploads
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/assurrussa/gouploads.svg)](https://pkg.go.dev/github.com/assurrussa/gouploads)
-[![Go Report Card](https://goreportcard.com/badge/github.com/assurrussa/gouploads)](https://goreportcard.com/report/github.com/assurrussa/gouploads)
 [![Go](https://github.com/assurrussa/gouploads/actions/workflows/go.yml/badge.svg)](https://github.com/assurrussa/gouploads/actions/workflows/go.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Overview
+`gouploads` is an embedded upload and storage orchestration library for Go
+applications. It supports multipart uploads, reader uploads, TUS, local/S3
+storage, durable finalization, cleanup and opt-in media processing.
 
-`gouploads` is a powerful, extensible Go library and service designed for handling file uploads, media processing, and storage orchestration. Built with the widely-used [gofiber](https://github.com/gofiber/fiber) framework, `gouploads` excels at managing modern upload complexities out of the box.
+## Start without site or media-resizer
 
-Key Features:
-- **Resumable Uploads**: TUS over S3 multipart with PostgreSQL-backed protocol
-  state, cross-replica resume, offset fencing, crash reconciliation, and
-  idempotent finalization.
-- **Storage Agnostic**: Built-in support for local filesystems and generic
-  S3-compatible storage via `aws-sdk-go-v2`.
-- **Media Processing Pipelines**: Integrated structures for video and image resizing/compression callbacks.
-- **Transaction Outbox Integration**: Works seamlessly with `outbox` patterns to guarantee the execution of post-upload background jobs (like resizing, webhook firing, or database cleanup).
-- **Flexible Context**: Highly adaptable file upload context building, enabling integrations with any authentication or multi-tenant system.
-
-## Install
-
-```bash
-go get github.com/assurrussa/gouploads@latest
-```
-
-## Quick Start
-
-`gouploads` uses an interface-driven architecture to wire its components together and register specific processing strategies for different contexts (e.g., standard uploads vs. rich-text uploads).
-
-Host applications should import `github.com/assurrussa/gouploads/host` as the
-stable runtime embedding surface. External consumer tests may import
-`github.com/assurrussa/gouploads/hosttest` for stable test-support contracts.
-Deep `domain/files/*`, `config`, and `di` packages are library internals unless
-a release note explicitly promotes a package.
-
-### 1. Server Initialization
+The standalone constructor is `host.NewOriginalRuntime`. Its default mode,
+`original_only`, saves the original without a resizer service or a callback to
+another application. Configured DI uses the same default. The application still
+supplies PostgreSQL, a compatible transaction manager, a durable outbox worker
+and persistent file storage; route mounting and authorization remain host-owned.
 
 ```go
-package main
-
-import (
-	uploadhost "github.com/assurrussa/gouploads/host"
-	"github.com/gofiber/fiber/v3"
-)
-
-func main() {
-	app := fiber.New()
-	
-    // 1. Initialize your TaskUploader, FileRepo, TusStore, Logger, etc.
-	// handler := uploadhost.NewUploadHandler(taskUploader, fileRepo, tusStore, logger, contextBuilder, urlComposer)
-	
-	// 2. Register uploadhost.UploadStrategy implementations (optional, but recommended for processing pipelines)
-	// handler.RegisterStrategy("avatar", avatarStrategy)
-	// handler.RegisterStrategy("rich-text", richTextStrategy)
-	
-	// 3. Wrap the handler for Fiber
-	// wrapper := uploadhost.NewFiberUploadHandler(handler)
-	
-	// 4. Register routes to a specific group
-	// wrapper.RegisterGroupRoutes("/api/v1/uploads", app)
-	
-	app.Listen(":3000")
+runtime, err := host.NewOriginalRuntime(host.StorageConfig{
+    Driver: host.StorageDriverLocal,
+    Local: host.StorageLocalConfig{Root: "./var/files"},
+}, host.OriginalRuntimeDeps{
+    Database: database,
+    Transaction: transactionManager,
+    Outbox: outboxService,
+    Logger: logger,
+})
+if err != nil {
+    return err
 }
+// Register runtime.Jobs with the outbox worker before accepting uploads.
+// Use runtime.Uploader, runtime.Files and runtime.TusStore with
+// host.NewUploadHandler and host.NewFiberUploadHandler.
 ```
 
-### 2. Client Usage (REST API)
+This is an embedding snippet, not a complete executable. See
+[Standalone uploads](docs/standalone-uploads.md) for wiring, required migrations,
+asynchronous completion, file types, safety limits and migration instructions.
+The constructor does not start a worker or serve a directory automatically.
+Do not expose temporary files or the entire storage root.
 
-Once connected, you can upload files via standard `multipart/form-data` requests or use the [Tus](https://tus.io/) protocol for resumable uploads.
+An upload returns a queued record. `finalize_original_file` reads the staged
+object from storage, validates content/size, calculates SHA-256, writes the final
+artifact and commits metadata and cleanup tasks. It never calls a resizer.
+The single `main` artifact retains the original bytes. Completion is not
+moderation approval or a guarantee that untrusted content is safe to publish.
 
-**Standard Batch Upload:**
-```bash
-curl -X POST http://localhost:3000/api/v1/uploads \
-  -H "Content-Type: multipart/form-data" \
-  -F "entity_type=user" \
-  -F "entity_id=123" \
-  -F "context=avatar" \
-  -F "files=@/path/to/profile.jpg"
+## Enable media processing explicitly
+
+Set `StorageConfig.ProcessingMode` to `host.ProcessingMediaResizer` (or map
+`STORAGE_PROCESSING_MODE=media_resizer`) and wire the existing media commands,
+resizer endpoints/tokens and independently authenticated callback route.
+Configured presets or watermarking without enabled processing are rejected.
+`SkipResizer` retains its old media-payload meaning; it is not a mode selector.
+
+`host.BuildOutboxJobs` supports original commands, a complete media pipeline, or
+both while draining old jobs. Deploy handlers before new producers, and keep
+old media callbacks and workers until their queues drain. Unsupported deep
+`uploadservice.New`/`Must` retain their historical media behavior for compatibility;
+new applications should use the stable host facade.
+
+## Supported packages and installation
+
+The stable runtime package is `github.com/assurrussa/gouploads/host`.
+External tests may use `github.com/assurrussa/gouploads/hosttest`.
+`reference/externalconsumer` defines the supported package list. Deep
+`domain/files/*`, `config`, `di`, `infrastructure/*` and `shared/*` packages are
+implementation details, not an additional stable SDK.
+
+```sh
+go get github.com/assurrussa/gouploads@<published-version>
 ```
 
-## Configuration
+Use a known accessible version. This change removes runtime coupling to site
+and media-resizer, **not** the remaining private Go-module dependencies. It is
+not evidence that the repository or its dependency graph is anonymously public.
 
-`gouploads` utilizes standard `toml` and `ENV` mapping to configure its internals.
+## Storage and TUS contracts
 
-Some of the main configurations include:
-- `STORAGE_DRIVER`: `local` or `s3`
-- `STORAGE_LOCAL_ROOT`, `STORAGE_LOCAL_BASE_URL`, and optional
-  `STORAGE_LOCAL_SOURCE_BASE_URL` for local filesystem delivery and the
-  internal HTTP origin used by a separate media-resizer
-- `STORAGE_PUBLIC_BASE_URL` and `STORAGE_PUBLIC_PREFIX` for canonical delivery
-- `STORAGE_S3_ENDPOINT`, `STORAGE_S3_REGION`, `STORAGE_S3_BUCKET`, and optional
-  `STORAGE_S3_STAGING_BUCKET`
-- `STORAGE_S3_SOURCE_URL_TTL`, `STORAGE_S3_TIMEOUT`, and
-  `STORAGE_S3_MAX_RETRIES`
-- `STORAGE_TUS_PART_SIZE`, `STORAGE_TUS_SESSION_TTL`,
-  `STORAGE_TUS_LEASE_TTL`, and `STORAGE_TUS_STAGING_PREFIX`
-- Sub-pipelines logic per media type (`STORAGE_IMAGE_DEFAULT_FORMAT`, `STORAGE_VIDEO_RESIZER_HOST`, etc).
+`host.NewStorage(cfg)` supports local storage and explicit generic S3 endpoints.
+MinIO, Yandex Object Storage and Selectel use the same endpoint, region, bucket,
+credentials and path-style fields; there is no hidden provider preset.
+`host.Storage.DeleteBatch` supports idempotent deletion of approved artifact sets.
 
-## Stable Host Surface
+Local TUS is the existing filesystem-backed single-node profile. S3 TUS uses
+PostgreSQL-backed multipart session state, fencing, crash reconciliation and
+idempotent protocol finalization; Redis is not its source of truth. Hosts run
+`host.MigrationFiles` for files/upload_sessions and their outbox backend's
+separate migrations. `host.NewTusStore(cfg, database)` constructs the store.
 
-The supported host-facing runtime package is:
+S3 staging uses `staging/v1/tus/<session-id>/source.<ext>` and
+`Cache-Control: private,no-store`. The adapter sends no object ACLs; staging
+privacy and public delivery are bucket-policy responsibilities. Final artifacts
+use deterministic keys below `media/v1/<object-type>/<object-id>/<file-slug>`.
+Managed records keep relative keys and checksums; delivery URLs are composed at
+HTTP/event boundaries. The original worker streams from `Storage.Open` and uses
+the same content validation and artifact-writing path as processed media.
 
-- `github.com/assurrussa/gouploads/host`
+Replacement cleanup remains ownership-bound to `(ObjectType, ObjectID)`.
+A staging-only deletion job has `FileID=0`; the prior file record and its
+main/original/preset keys are not scheduled for deletion before successful new
+finalization. Retry and uncertain-commit limitations are documented in the
+standalone guide; permanently failed uploads still need safe reconciliation.
 
-It exposes storage config types, file model contracts, object identifiers, TUS
-store contracts, upload handler contracts, resize webhook request helpers,
-cleanup use case factories, outbox job registration, and DI bootstrap helpers.
-Host projects remain responsible for local environment mapping, auth context
-extraction, route mounting, object-type policy, and deployment topology.
+`FiberUploadHandler.RegisterCMSTusRoutes` mounts only `OPTIONS/POST/HEAD/PATCH`.
+The isolated CMS quarantine lifecycle and `host.NewQuarantinePromoter` are
+unchanged. Generic completion/read/delete routes must not be inherited by CMS
+transports. `UploadRouteGuards` separates read, create/resume and delete policy.
 
-`host.NewStorage(cfg)` is the supported constructor for the object store used
-by embedded features. It selects local filesystem or S3-compatible storage;
-MinIO, Yandex Object Storage, and Selectel use the same explicit endpoint,
-region, bucket, credentials, and path-style fields. There is no provider enum
-or hidden provider preset. The returned `host.Storage` includes idempotent
-`DeleteBatch`, so a CMS worker can delete an approved original/variant object
-set without importing storage internals.
+## External media and storage probes
 
-`FiberUploadHandler.RegisterCMSTusRoutes` mounts only
-`OPTIONS/POST/HEAD/PATCH` under the CMS prefix. It deliberately omits generic
-completion, listing, file reads and delete. CMS finalization consumes the
-quarantined session through its own lifecycle and decides whether an asset is
-eligible for purge. `UploadRouteGuards` keeps generic read, create/resume and
-delete authorization independent when the full upload surface is used.
+For explicit external processing, `host.NewSourceURLResolver(cfg)` creates a
+fresh S3 SigV4 GetObject URL at dispatch time. It uses the configured staging
+bucket and endpoint; no site source proxy is required. Signed queries must not
+be logged. Local `StorageLocalConfig.SourceBaseURL` remains an optional internal
+origin for confined temporary source paths. That setting is unnecessary for
+original-only mode.
 
-It also exposes the embedded `files` table migrations through `host.MigrationsFS`
-and `host.MigrationFiles`, including durable `upload_sessions` state. S3 hosts
-construct the TUS store with `host.NewTusStore(cfg, database)`; PostgreSQL is
-the source of truth and Redis is not required for TUS session durability. Hosts
-still need to run the storage migrations owned by their selected outbox
-backend.
+`host.NewStorageContractChecker(cfg)` is an explicit live storage probe for host
+CLIs, not a startup side effect. It checks staging privacy, presigned reads,
+public HEAD/GET/Range behavior, transport/cache metadata, deletion and cleanup.
 
-S3 TUS objects are created in the staging bucket under
-`staging/v1/tus/<session-id>/source.<ext>` with
-`Cache-Control: private,no-store`. The adapter never sends object ACLs;
-staging privacy and public `media/v1/*` delivery are bucket-policy concerns.
-`TusCompleteResult.Quarantined` remains available for compatibility, but its
-durable location is a private staging key.
+## Development and release
 
-After every successful media finalization, cleanup remains split into two
-independent idempotent jobs. One deletes the exact physical staging key with
-`FileID=0`; an optional replacement job deletes the prior file record only
-when its `ObjectType` and `ObjectID` still match the new upload. Replacement
-deletion includes the stored main/original/preset keys and legacy preset paths,
-and is not scheduled until every new artifact and the database update succeed.
+Use the declared Go/toolchain and repository-local Makefile caches:
 
-`host.NewSourceURLResolver(cfg)` is the stable narrow source-read facade. In S3
-mode it creates an AWS SigV4 presigned `GetObject` URL immediately before media
-dispatch against the configured S3 endpoint and staging bucket. Host rewriting
-and source proxies are not part of the S3 contract. In local mode, an optional
-`StorageLocalConfig.SourceBaseURL` composes confined `tmp/uploads/...` paths
-into an absolute HTTP URL that a separate media-resizer can read. An empty
-source base preserves the existing shared-filesystem path behavior. The S3 TTL
-defaults to `15m` and cannot exceed the SigV4 seven-day maximum.
-
-Final media keys are deterministic and immutable:
-`media/v1/<object-type>/<object-id>/<file-slug>/<preset>.<ext>`. Managed DB
-records store relative keys and SHA-256 values, not provider URLs. Completed
-HTTP/WebSocket responses compose canonical URLs from
-`StorageConfig.Public.BaseURL`; earlier states expose no location fields.
-
-`host.NewStorageContractChecker(cfg)` exposes an explicit, non-startup live
-probe for host CLIs. It verifies private staging, presigned reads, public
-HEAD/GET/Range semantics, TLS/cache/content metadata, deletion, and cleanup
-without requiring `ListBucket`.
-
-The supported external test-support package is:
-
-- `github.com/assurrussa/gouploads/hosttest`
-
-It exposes narrow aliases and matchers for consumer tests and test helpers that
-need to assert upload storage input/output values or resize callback payloads
-without importing gouploads internals.
-Integration-only database helpers are compiled by the release probe with
-`-tags integration`.
-
-The machine-readable source of truth is
-`gouploads/reference/externalconsumer`. Host projects should treat packages not
-listed there, including `domain/files/*`, `shared/*`, `config`, and `di`, as
-internal implementation details.
-
-To check a host repository:
-
-```bash
-go run ./cmd/importpolicy --repo-root .. --consumers site/backend,goadmin,site/fixtures/second-go-host
+```sh
+make check
+make externalconsumer-local
+make publish-readiness VERSION=<planned-version>
+make release-readiness VERSION=<published-version>
+make externalconsumer-published VERSION=<published-version>
 ```
 
-For the full host integration contract, see [docs/host-integration.md](docs/host-integration.md).
-For release readiness, see [RELEASING.md](RELEASING.md).
+The standalone candidate's actual validation and outstanding gates are recorded
+in [Verification](docs/standalone-verification.md). Do not treat a local replace
+probe as a public release check. See [RELEASING.md](RELEASING.md) for the existing
+release process and [CHANGELOG.md](CHANGELOG.md) for the default-mode change.
+
+[Host integration](docs/host-integration.md) describes the existing detailed
+media pipeline; use the standalone guide first for the new default.
+[Project map](docs/project-map.md) describes the package boundaries.
 
 ## License
 
