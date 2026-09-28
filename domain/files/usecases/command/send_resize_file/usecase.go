@@ -8,8 +8,6 @@ import (
 	"strconv"
 
 	logger "github.com/assurrussa/gologger"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 
@@ -17,6 +15,8 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/model"
 	clientresizer "github.com/assurrussa/gouploads/domain/files/service/client_resizer"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 //go:generate toolsmocks
@@ -38,7 +38,7 @@ type Options struct {
 	fileRepository fileRepository             `option:"mandatory" validate:"required"`
 	remoteClient   resizeClient               `option:"mandatory" validate:"required"`
 	sourceResolver sourceURLResolver          `option:"mandatory" validate:"required"`
-	eventStream    eventstream.EventStream    `option:"mandatory" validate:"required"`
+	eventStream    eventstream.Publisher      `option:"mandatory" validate:"required"`
 	imagePipeline  config.ImagePipelineConfig `option:"mandatory" validate:"required"`
 	videoPipeline  config.VideoPipelineConfig `option:"mandatory" validate:"required"`
 	logger         logger.Logger              `option:"mandatory" validate:"required"`

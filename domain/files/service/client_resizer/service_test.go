@@ -1,20 +1,17 @@
 package clientresizer_test
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/tests"
-	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
 	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,6 +20,7 @@ import (
 
 	clientresizer "github.com/assurrussa/gouploads/domain/files/service/client_resizer"
 	clientresizermocks "github.com/assurrussa/gouploads/domain/files/service/client_resizer/mocks"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestSuite struct {
@@ -76,22 +74,17 @@ func TestHandle_Success(t *testing.T) {
 	// Arrange.
 	data := []byte("data")
 
-	httpReq := transporthttp.Request{
-		ExpectStatusCode: http.StatusAccepted,
-		Method:           fiber.MethodPost,
-		URL:              ts.urlImage,
-		Body:             bytes.NewReader(data),
-		Headers: map[string]string{
-			fiber.HeaderContentType: fiber.MIMEApplicationJSONCharsetUTF8,
-		},
-	}
 	respExp := `{"job_id": "9d435a36-6fad-4a52-a0a7-d474d3393ab3", "status": "queued"}`
-	ts.httpClientMock.EXPECT().DoWithRequestAndParse(ctx, httpReq, gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ transporthttp.Request, data any) error {
-			ts.Require().NoError(json.Unmarshal([]byte(respExp), data))
-
-			return nil
-		}).Times(1)
+	ts.httpClientMock.EXPECT().Do(gomock.Any()).DoAndReturn(func(r *http.Request) (*http.Response, error) {
+		ts.Equal(ctx, r.Context())
+		ts.Equal(http.MethodPost, r.Method)
+		ts.Equal(ts.urlImage, r.URL.String())
+		ts.Equal(fiber.MIMEApplicationJSONCharsetUTF8, r.Header.Get(fiber.HeaderContentType))
+		body, err := io.ReadAll(r.Body)
+		ts.Require().NoError(err)
+		ts.Equal(data, body)
+		return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(strings.NewReader(respExp))}, nil
+	}).Times(1)
 
 	// Action.
 	resp, err := ts.client.SendResize(ctx, clientresizer.Request{
@@ -111,10 +104,7 @@ func TestHandle_Error(t *testing.T) {
 	// Arrange.
 	data := []byte("data")
 
-	ts.httpClientMock.EXPECT().DoWithRequestAndParse(ctx, gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ transporthttp.Request, _ any) error {
-			return ts.errExpect
-		}).Times(1)
+	ts.httpClientMock.EXPECT().Do(gomock.Any()).Return(nil, ts.errExpect).Times(1)
 
 	// Action.
 	resp, err := ts.client.SendResize(ctx, clientresizer.Request{
@@ -275,4 +265,53 @@ type failingArtifactClient struct {
 
 func (c *failingArtifactClient) Do(*http.Request) (*http.Response, error) {
 	return nil, c.err
+}
+
+func TestSendResizeHTTPContract(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusAccepted, http.StatusOK, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "/video", r.URL.Path)
+				assert.Equal(t, "Bearer video-secret", r.Header.Get(fiber.HeaderAuthorization))
+				assert.Equal(t, "video-secret", r.Header.Get("X-API-Token"))
+				assert.Equal(t, fiber.MIMEApplicationJSONCharsetUTF8, r.Header.Get(fiber.HeaderContentType))
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, `{"job_id":"9d435a36-6fad-4a52-a0a7-d474d3393ab3","status":"queued"}`)
+			}))
+			t.Cleanup(server.Close)
+			service := clientresizer.Must(clientresizer.NewOptions(
+				server.Client(), server.URL+"/image", server.URL+"/video", logger.Discard(),
+				clientresizer.WithTokenProvider(func(context.Context) (string, string) {
+					return "image-secret", "video-secret"
+				}),
+			))
+			response, err := service.SendResize(t.Context(), clientresizer.Request{TypeMedia: "video", Data: []byte(`{}`)})
+			if status == http.StatusAccepted {
+				require.NoError(t, err)
+				assert.Equal(t, "queued", response.Status)
+			} else {
+				require.ErrorContains(t, err, "unexpected status")
+				assert.Empty(t, response)
+			}
+		})
+	}
+}
+
+func TestSendResizeCancellationAndInvalidJSON(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, "invalid json")
+	}))
+	t.Cleanup(server.Close)
+	service := clientresizer.Must(clientresizer.NewOptions(server.Client(), server.URL, server.URL, logger.Discard()))
+	_, err := service.SendResize(t.Context(), clientresizer.Request{Data: []byte(`{}`)})
+	require.ErrorContains(t, err, "decode resize response")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = service.SendResize(ctx, clientresizer.Request{Data: []byte(`{}`)})
+	require.ErrorIs(t, err, context.Canceled)
 }

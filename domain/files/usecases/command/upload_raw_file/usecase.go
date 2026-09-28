@@ -5,11 +5,11 @@ import (
 	"fmt"
 
 	logger "github.com/assurrussa/gologger"
-	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/service/uploadservice"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
 )
 
 //go:generate toolsmocks
@@ -20,9 +20,9 @@ type uploadService interface {
 
 //go:generate options-gen -out-filename=usecase_options.gen.go -from-struct=Options
 type Options struct {
-	uploadService uploadService           `option:"mandatory" validate:"required"`
-	eventStream   eventstream.EventStream `option:"mandatory" validate:"required"`
-	logger        logger.Logger           `option:"mandatory" validate:"required"`
+	uploadService uploadService         `option:"mandatory" validate:"required"`
+	eventStream   eventstream.Publisher `option:"mandatory" validate:"required"`
+	logger        logger.Logger         `option:"mandatory" validate:"required"`
 }
 
 type UseCase struct {

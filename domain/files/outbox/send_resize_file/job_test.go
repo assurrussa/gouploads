@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/tests"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"
@@ -15,6 +14,7 @@ import (
 	sendresizefilejob "github.com/assurrussa/gouploads/domain/files/outbox/send_resize_file"
 	sendresizefilejobmocks "github.com/assurrussa/gouploads/domain/files/outbox/send_resize_file/mocks"
 	usecase "github.com/assurrussa/gouploads/domain/files/usecases/command/send_resize_file"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestSuite struct {

@@ -17,8 +17,10 @@ func TestOriginalPayloadRoundTrip(t *testing.T) {
 }
 
 func TestOriginalPayloadRejectsInvalidInput(t *testing.T) {
-	for _, value := range []string{"", "null", "{}", `{"fileId":0}`, `{"fileId":-1}`, `{"fileId":"1"}`,
-		`{"fileId":1,"url":"https://attacker.invalid"}`, `{"fileId":1} {"fileId":2}`, `{"fileId":1} garbage`} {
+	for _, value := range []string{
+		"", "null", "{}", `{"fileId":0}`, `{"fileId":-1}`, `{"fileId":"1"}`,
+		`{"fileId":1,"url":"https://attacker.invalid"}`, `{"fileId":1} {"fileId":2}`, `{"fileId":1} garbage`,
+	} {
 		if _, err := UnmarshalPayload(value); err == nil {
 			t.Fatalf("accepted invalid payload %q", value)
 		}

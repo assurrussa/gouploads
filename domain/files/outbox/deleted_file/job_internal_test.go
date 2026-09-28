@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	"github.com/assurrussa/goshared/pkg/tests"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"
@@ -17,6 +15,8 @@ import (
 	deletedfilejobmocks "github.com/assurrussa/gouploads/domain/files/outbox/deleted_file/mocks"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	usecase "github.com/assurrussa/gouploads/domain/files/usecases/command/delete_file"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestSuite struct {

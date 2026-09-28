@@ -7,7 +7,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/tests"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -15,6 +14,7 @@ import (
 
 	rcusettings "github.com/assurrussa/gouploads/domain/files/cache/rcu/settings"
 	rcusettingsmocks "github.com/assurrussa/gouploads/domain/files/cache/rcu/settings/mocks"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type testSuite struct {

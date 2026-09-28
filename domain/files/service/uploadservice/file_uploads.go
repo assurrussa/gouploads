@@ -13,12 +13,12 @@ import (
 	"strings"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/filesanitize"
 	"github.com/google/uuid"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	"github.com/assurrussa/gouploads/internal/filesanitize"
 )
 
 const sniffLen = 512

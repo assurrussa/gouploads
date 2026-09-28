@@ -89,7 +89,7 @@ The host application owns:
 - auth/session extraction into `host.UploadContext`;
 - route mounting and middleware policy;
 - object-type policy and upload strategies;
-- database, Redis, transaction manager, logger, and event stream wiring;
+- database, transaction manager, logger, and event publisher wiring;
 - outbox backend selection, migrations, lifecycle, and worker process;
 - media-resizer deployment URL, API token, and callback URL;
 - migration execution order for `gouploads` files and selected outbox backend.

@@ -9,12 +9,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/assurrussa/goshared/pkg/filecaller"
-	"github.com/assurrussa/goshared/pkg/loadenv"
-	"github.com/assurrussa/goshared/pkg/tests/utilst"
-	"github.com/assurrussa/goshared/pkg/validator"
 	"github.com/ilyakaznacheev/cleanenv"
 	"github.com/joho/godotenv"
+
+	"github.com/assurrussa/gouploads/internal/testsupport"
+	validator "github.com/assurrussa/gouploads/internal/validation"
 )
 
 type CleanUp func(ctx context.Context)
@@ -46,18 +45,13 @@ type configIntegration struct {
 	TLSKey               string        `env:"TEST_PSQL_TLS_KEY"`
 	MaxConnIdleTime      time.Duration `env:"TEST_PSQL_MAX_CONN_IDLE_TIME" env-default:"5m" validate:"min=1s,max=1h"`
 	MaxConnLifeTime      time.Duration `env:"TEST_PSQL_MAX_CONN_LIFE_TIME" env-default:"1h" validate:"min=1m"`
-
-	RedisAddr       string `env:"TEST_REDIS_ADDR" env-default:"integration-redis-tests" validate:"required"`
-	RedisAddrLocal  string `env:"TEST_REDIS_LOCAL_ADDR"`
-	RedisPort       string `env:"TEST_REDIS_PORT" env-default:"33795"`
-	RedisClientName string `env:"TEST_REDIS_NAME" env-default:"tests-redis-pool"`
 }
 
 func init() {
-	loadenv.Load()
+	testsupport.LoadEnvironment(testsupport.CallerCurrentFile())
 
-	callerFile := filecaller.CallerCurrentFile()
-	filePath := filecaller.FindFileDir(".env", callerFile)
+	callerFile := testsupport.CallerCurrentFile()
+	filePath := testsupport.FindFileDir(".env", callerFile)
 	if err := godotenv.Load(filePath); err != nil {
 		slog.Default().Warn("not found .env file")
 	}
@@ -72,12 +66,8 @@ func init() {
 		panic(fmt.Sprintf("validate testing config: %v", err))
 	}
 
-	if Config.RedisAddrLocal != "" {
-		Config.RedisAddr = Config.RedisAddrLocal
-	}
-
 	Config.CurrentPath = filepath.Dir(filePath)
-	Config.BasePath, err = utilst.FindBasePath()
+	Config.BasePath, err = testsupport.FindBasePath()
 	if err != nil {
 		panic(fmt.Sprintf("find base path: %v", err))
 	}

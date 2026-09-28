@@ -7,9 +7,6 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/pointer"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	"github.com/assurrussa/goshared/pkg/tests"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -24,6 +21,9 @@ import (
 	testshelpers "github.com/assurrussa/gouploads/domain/files/tests"
 	testsmatcher "github.com/assurrussa/gouploads/domain/files/tests/matcher"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	"github.com/assurrussa/gouploads/internal/pointer"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 const (

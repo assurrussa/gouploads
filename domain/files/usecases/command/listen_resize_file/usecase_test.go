@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/tests"
-	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -19,6 +17,8 @@ import (
 	testsmatcher "github.com/assurrussa/gouploads/domain/files/tests/matcher"
 	listenresizefile "github.com/assurrussa/gouploads/domain/files/usecases/command/listen_resize_file"
 	listenresizefilemocks "github.com/assurrussa/gouploads/domain/files/usecases/command/listen_resize_file/mocks"
+	eventstreammocks "github.com/assurrussa/gouploads/internal/events/mocks"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestSuite struct {
@@ -26,7 +26,7 @@ type TestSuite struct {
 
 	fileRepositoryMock *listenresizefilemocks.MockfileRepository
 	outboxPutterMock   *listenresizefilemocks.MockoutboxPutter
-	eventStreamMock    *eventstreammocks.MockEventStream
+	eventStreamMock    *eventstreammocks.MockPublisher
 
 	useCase       *listenresizefile.UseCase
 	expectedError error
@@ -43,7 +43,7 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 		ctrl := gomock.NewController(t)
 		fileRepositoryMock := listenresizefilemocks.NewMockfileRepository(ctrl)
 		outboxPutterMock := listenresizefilemocks.NewMockoutboxPutter(ctrl)
-		eventStreamMock := eventstreammocks.NewMockEventStream(ctrl)
+		eventStreamMock := eventstreammocks.NewMockPublisher(ctrl)
 
 		useCase := listenresizefile.Must(listenresizefile.NewOptions(
 			fileRepositoryMock,

@@ -6,13 +6,13 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/tests"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"
 
 	commonmodel "github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/service/fileloader"
 	fileloadermocks "github.com/assurrussa/gouploads/domain/files/service/fileloader/mocks"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestSuite struct {

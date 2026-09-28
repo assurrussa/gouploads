@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/assurrussa/goshared/pkg/filesanitize"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	awss3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/s3store"
+	"github.com/assurrussa/gouploads/internal/filesanitize"
 )
 
 type s3Client interface {

@@ -17,8 +17,8 @@ application. It still requires a database, transaction manager, durable outbox
 with a running worker, and persistent local or S3 storage. The host owns route
 mounting, authentication, authorization, migrations and the outbox lifecycle.
 Redis and a WebSocket server are not runtime requirements of the new constructor.
-Private Go modules are still present in the build graph; removing them is a
-separate migration, not accomplished by disabling a runtime feature.
+The Go dependency graph excludes `goshared`, `goredis` and `gowebsocket`.
+Local TUS uses the filesystem; S3 TUS uses PostgreSQL. No Redis backend is exposed.
 
 ```go
 runtime, err := host.NewOriginalRuntime(host.StorageConfig{
@@ -98,6 +98,8 @@ concurrent retries across workers without introducing a new lease table.
 Bound worker concurrency, upload sizes and storage timeouts. For large media,
 a fenced short-transaction finalizer would be a separate optimization.
 
+Deletion acquires the same row lock before reading ownership and artifact paths,
+so a deletion waiting for finalization removes the committed final artifacts.
 A completed or deleted row makes repeated original jobs no-ops. On failure,
 staging is retained and the deterministic final key is retryable. In particular,
 no deletion of the final key is scheduled after an uncertain commit result: that
@@ -141,17 +143,40 @@ make check
 make test-surface
 make test-tus-postgres-integration
 make test-portable-media-e2e
+make test-originals-integration
+make anonymous-source
 ```
 
-Additionally verify the new original pipeline against real PostgreSQL and local
-storage, then S3/MinIO, including concurrent duplicate jobs, worker restart,
-failed final writes, lost commit acknowledgement, replacement and staging cleanup.
-Unit-test transaction fakes are not evidence of actual database locking.
+`test-originals-integration` exercises real PostgreSQL with local storage and
+MinIO, all ingestion paths, durable queue processing, duplicate jobs, row-lock
+concurrency, replacement, staging cleanup and a fresh worker. Fault injection
+for failed writes and uncertain commits remains unit-level evidence. HTTP TUS
+runs through Fiber's in-process HTTP test stack, not a browser or live socket.
 
 Test the affected goadmin/site consumers separately before changing their pinned
 versions. Before tagging, run `make publish-readiness VERSION=<planned-tag>`
 with the required services and sibling repositories. This gate runs the mutating
 preparation phase; review generated and tidy changes. After approval and actual
 publication of that immutable tag, run `make release-readiness VERSION=<tag>`
-and the included `externalconsumer-published` gate. That gate is not
-an anonymous-public-access guarantee while private build dependencies remain.
+and the included `externalconsumer-published` gate. Anonymous source and published-tag checks are separate gates; a private root
+repository can still block the latter. See [anonymous checks](anonymous-consumer.md).
+
+## Identity and notification migration
+
+`host.UserID` and `host.EventID` are now library-owned UUID types. UUIDv4
+creation, canonical text/JSON strings and SQL value/scan formats are unchanged;
+no stored-data migration is required. The Go type identity changes: hosts using
+old shared types must explicitly convert UUID values at their boundary.
+
+`host.EventPublisher` requires only
+`Publish(context.Context, host.UserID, host.Event) error`. `host.Event` keeps
+`EventID() host.EventID`, `EventName() string` and `Validate() error`. An existing
+WebSocket stream needs a host-owned adapter converting the user/event ID types.
+The library never subscribes to or closes that stream. `NewOriginalRuntime`
+accepts a nil publisher; durable `AfterJobs` remain active.
+
+Configured DI expects a provider returning `host.EventPublisher` (the interface,
+not just the concrete adapter). Media client DI now accepts `*http.Client`;
+manual client options accept any `Do(*http.Request) (*http.Response, error)`
+implementation. Remove the former shared HTTP wrapper from that wiring.
+Existing goadmin/site pins are intentionally unchanged by this library PR.

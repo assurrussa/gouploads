@@ -11,9 +11,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/filesanitize"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
@@ -21,12 +18,15 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	"github.com/assurrussa/gouploads/domain/files/shared/fileurl"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
+	"github.com/assurrussa/gouploads/internal/filesanitize"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 //go:generate toolsmocks
 
 type fileRepository interface {
-	GetByID(ctx context.Context, id int64) (model.File, error)
+	GetByIDForUpdate(ctx context.Context, id int64) (model.File, error)
 	DeleteByID(ctx context.Context, id int64) error
 }
 
@@ -45,13 +45,13 @@ type outboxPutter interface {
 
 //go:generate options-gen -out-filename=usecase_options.gen.go -from-struct=Options
 type Options struct {
-	transactor      transactor              `option:"mandatory" validate:"required"`
-	files           fileRepository          `option:"mandatory" validate:"required"`
-	eventStream     eventstream.EventStream `option:"mandatory" validate:"required"`
-	logger          logger.Logger           `option:"mandatory" validate:"required"`
-	storage         fileStorage             `option:"mandatory" validate:"required"`
-	outbox          outboxPutter            `option:"mandatory" validate:"required"`
-	deliveryBaseURL string                  `validate:"omitempty,url"`
+	transactor      transactor            `option:"mandatory" validate:"required"`
+	files           fileRepository        `option:"mandatory" validate:"required"`
+	eventStream     eventstream.Publisher `option:"mandatory" validate:"required"`
+	logger          logger.Logger         `option:"mandatory" validate:"required"`
+	storage         fileStorage           `option:"mandatory" validate:"required"`
+	outbox          outboxPutter          `option:"mandatory" validate:"required"`
+	deliveryBaseURL string                `validate:"omitempty,url"`
 }
 
 type UseCase struct {
@@ -93,69 +93,53 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 	}
 
 	var file model.File
+	var loaded bool
+	operation := func(ctx context.Context) error {
+		if req.FileID > 0 {
+			file, err = u.files.GetByIDForUpdate(ctx, req.FileID)
+			if err != nil {
+				return fmt.Errorf("get task %d: %w", req.FileID, err)
+			}
+		} else if filePath != "" {
+			file = model.File{
+				FolderPath: path.Dir(filePath),
+				FileName:   path.Base(filePath),
+			}
+		}
+		if file.ID > 0 {
+			filePath = file.GetFullPath()
+		}
+		if err := validateOwnership(file, req); err != nil {
+			return err
+		}
+
+		loaded = true
+		deletePaths := collectPaths(file, filePath)
+
+		taskLogger := u.logger.WithAttrs(
+			slog.Int64("file_id", req.FileID),
+			slog.Int64("deleted_id", req.FileID),
+			slog.String("file_path", filePath),
+		)
+		if req.FileID == 0 {
+			taskLogger = taskLogger.WithAttrs(slog.String("staging_key", filePath))
+		} else {
+			taskLogger = taskLogger.WithAttrs(slog.Any("public_keys", deletePaths))
+		}
+		taskLogger.InfoContext(ctx, "deleting media objects")
+
+		return u.deleteRecordAndStorage(ctx, req, file, filePath)
+	}
 	if req.FileID > 0 {
-		file, err = u.files.GetByID(ctx, req.FileID)
-		if err != nil {
-			return Response{}, fmt.Errorf("get task %d: %w", req.FileID, err)
-		}
-	} else if filePath != "" {
-		file = model.File{
-			FolderPath: path.Dir(filePath),
-			FileName:   path.Base(filePath),
-		}
-	}
-	if file.ID > 0 {
-		//nolint:ineffassign,staticcheck,wastedassign,nolintlint // Если есть файл, то и путь надо брать от него, а не от реквеста.
-		filePath = file.GetFullPath()
-	}
-	if err := validateOwnership(file, req); err != nil {
-		return Response{}, err
-	}
-
-	deletePaths := collectPaths(file, filePath)
-
-	taskLogger := u.logger.WithAttrs(
-		slog.Int64("file_id", req.FileID),
-		slog.Int64("deleted_id", req.FileID),
-		slog.String("file_path", filePath),
-	)
-	if req.FileID == 0 {
-		taskLogger = taskLogger.WithAttrs(slog.String("staging_key", filePath))
+		err = u.transactor.RunInTx(ctx, operation)
 	} else {
-		taskLogger = taskLogger.WithAttrs(slog.Any("public_keys", deletePaths))
+		err = operation(ctx)
 	}
-	taskLogger.InfoContext(ctx, "deleting media objects")
-
-	defer func() {
-		if errReturn == nil || req.FileID == 0 {
-			return
+	if err != nil {
+		if loaded && req.FileID > 0 && file.ID > 0 {
+			u.publish(ctx, req.UserID, u.buildFailedEvent(file, err))
 		}
-
-		taskLogger.ErrorContext(ctx, "failed deleted file", logger.Error(errReturn))
-		u.publish(ctx, req.UserID, u.buildFailedEvent(file, errReturn))
-	}()
-
-	switch file.ID {
-	case 0:
-		// Если файл в итоге будет не найден в БД - можно будет попробовать просто удалить файл из S3
-		if err := u.removeFile(ctx, file, filePath); err != nil {
-			return Response{}, fmt.Errorf("remove file: %w", err)
-		}
-	default:
-		err = u.transactor.RunInTx(ctx, func(ctx context.Context) error {
-			if err := u.files.DeleteByID(ctx, file.ID); err != nil {
-				return fmt.Errorf("delete old file record: %w", err)
-			}
-
-			if err := u.enqueueAfterJobs(ctx, file.ID, file, req.AfterEvents); err != nil {
-				return fmt.Errorf("schedule after jobs: %w", err)
-			}
-
-			return u.removeFile(ctx, file, filePath)
-		})
-		if err != nil {
-			return Response{}, fmt.Errorf("trx: %w", err)
-		}
+		return Response{}, err
 	}
 
 	if req.FileID > 0 {
@@ -337,4 +321,24 @@ func (u *UseCase) buildFailedEvent(file model.File, err error) shared.FileDelete
 
 func (u *UseCase) publicURL(file model.File) string {
 	return fileurl.Compose(u.deliveryBaseURL, "", file.GetPublicURL())
+}
+
+func (u *UseCase) deleteRecordAndStorage(ctx context.Context, req Request, file model.File, filePath string) error {
+	switch file.ID {
+	case 0:
+		// Если файл в итоге будет не найден в БД - можно будет попробовать просто удалить файл из S3
+		if err := u.removeFile(ctx, file, filePath); err != nil {
+			return fmt.Errorf("remove file: %w", err)
+		}
+	default:
+		if err := u.files.DeleteByID(ctx, file.ID); err != nil {
+			return fmt.Errorf("delete old file record: %w", err)
+		}
+		if err := u.enqueueAfterJobs(ctx, file.ID, file, req.AfterEvents); err != nil {
+			return fmt.Errorf("schedule after jobs: %w", err)
+		}
+		return u.removeFile(ctx, file, filePath)
+	}
+
+	return nil
 }

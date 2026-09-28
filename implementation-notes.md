@@ -507,3 +507,19 @@
   normal race plus coverage execution into one package traversal.
 - Kept repeated race stress and HTML coverage available explicitly; the
   publish gate still prepares first and rejects generated or formatting drift.
+
+## 2026-09-29: Standalone dependency and consistency boundary
+
+- Follow-up to merged PR #6: keep asynchronous original-only uploads and explicit
+  media mode; remove unused Redis contracts and private shared/WebSocket imports.
+- UUID values preserve UUIDv4, JSON/text and SQL representations. The Go types
+  are now library-owned; hosts adapt old identity and event transport types.
+- `host.EventPublisher` only publishes. `NewOriginalRuntime` accepts nil events;
+  configured DI receives a host-registered publisher and standard HTTP client.
+- Deletion reads ownership and storage paths under the finalizer's row lock in
+  the same transaction. A blocked deletion observes completed metadata.
+- Validation passed: real PostgreSQL/MinIO original-only E2E (race, three runs),
+  media regressions, `make source-readiness`, public consumer, import policy and anonymous
+  dependency probe. Published anonymous root resolution remains blocked by
+  repository visibility; no reachable vulnerabilities found by govulncheck.
+  No tag, consumer migration or production deployment is part of this change.

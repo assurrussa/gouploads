@@ -4,12 +4,11 @@ import (
 	"errors"
 	"mime/multipart"
 
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	"github.com/assurrussa/goshared/pkg/validator"
-
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	"github.com/assurrussa/gouploads/domain/files/shared/fileurl"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	validator "github.com/assurrussa/gouploads/internal/validation"
 )
 
 var (

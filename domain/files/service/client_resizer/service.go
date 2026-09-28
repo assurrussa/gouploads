@@ -3,8 +3,10 @@ package clientresizer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -12,7 +14,6 @@ import (
 	"strings"
 
 	logger "github.com/assurrussa/gologger"
-	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
 	"github.com/gofiber/fiber/v3"
 )
 
@@ -24,7 +25,7 @@ const (
 //go:generate toolsmocks
 
 type httpClient interface {
-	DoWithRequestAndParse(ctx context.Context, request transporthttp.Request, data any) error
+	Do(request *http.Request) (*http.Response, error)
 }
 
 type artifactHTTPClient interface {
@@ -73,24 +74,33 @@ func New(opts Options) (*Service, error) {
 func (s *Service) SendResize(ctx context.Context, req Request) (Response, error) {
 	rawToken := s.tokenForType(ctx, req.TypeMedia)
 
-	request := transporthttp.Request{
-		ExpectStatusCode: http.StatusAccepted,
-		Method:           http.MethodPost,
-		URL:              s.getMediaResizerURL(req),
-		Body:             bytes.NewReader(req.Data),
-		Headers: map[string]string{
-			fiber.HeaderContentType: fiber.MIMEApplicationJSONCharsetUTF8,
-		},
-	}
-	if rawToken != "" {
-		request.Headers[fiber.HeaderAuthorization] = "Bearer " + rawToken
-		request.Headers["X-API-Token"] = rawToken
-	}
-
-	var resp Response
-	err := s.client.DoWithRequestAndParse(ctx, request, &resp)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.getMediaResizerURL(req), bytes.NewReader(req.Data))
 	if err != nil {
-		return Response{}, fmt.Errorf("DoWithRequestAndParse : %w", err)
+		return Response{}, fmt.Errorf("create resize request: %w", err)
+	}
+	request.Header.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSONCharsetUTF8)
+	if rawToken != "" {
+		request.Header.Set(fiber.HeaderAuthorization, "Bearer "+rawToken)
+		request.Header.Set("X-API-Token", rawToken)
+	}
+	response, err := s.client.Do(request)
+	if err != nil {
+		return Response{}, fmt.Errorf("send resize request: %w", err)
+	}
+	if response == nil || response.Body == nil {
+		return Response{}, errors.New("send resize request: empty response")
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusAccepted {
+		return Response{}, fmt.Errorf("send resize request: unexpected status %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return Response{}, fmt.Errorf("read resize response: %w", err)
+	}
+	var resp Response
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return Response{}, fmt.Errorf("decode resize response: %w", err)
 	}
 
 	return resp, nil

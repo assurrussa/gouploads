@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	testshelpers "github.com/assurrussa/gouploads/domain/files/tests"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 func TestIntegration_PostgresSessionRepositoryFencesCompetingReplicas(t *testing.T) {

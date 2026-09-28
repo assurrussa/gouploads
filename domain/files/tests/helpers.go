@@ -16,13 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/assurrussa/goshared/pkg/pointer"
-	"github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	"github.com/assurrussa/gouploads/internal/pointer"
 )
 
 func MakeFileHeader(t *testing.T, fieldName, fileName, content, contentType string) *multipart.FileHeader {

@@ -11,8 +11,9 @@ import (
 	"path/filepath"
 	"time"
 
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/google/uuid"
+
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 var (

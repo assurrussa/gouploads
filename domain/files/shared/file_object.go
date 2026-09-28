@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 type (

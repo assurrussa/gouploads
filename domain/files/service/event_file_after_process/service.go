@@ -6,13 +6,13 @@ import (
 	"log/slog"
 
 	logger "github.com/assurrussa/gologger"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	"github.com/assurrussa/gouploads/domain/files/shared/fileurl"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 //go:generate toolsmocks
@@ -33,10 +33,10 @@ type transactor interface {
 
 //go:generate options-gen -out-filename=service_options.gen.go -from-struct=Options
 type Options struct {
-	transactor         transactor              `option:"mandatory" validate:"required"`
-	files              fileRepository          `option:"mandatory" validate:"required"`
-	eventStream        eventstream.EventStream `option:"mandatory" validate:"required"`
-	logger             logger.Logger           `option:"mandatory" validate:"required"`
+	transactor         transactor            `option:"mandatory" validate:"required"`
+	files              fileRepository        `option:"mandatory" validate:"required"`
+	eventStream        eventstream.Publisher `option:"mandatory" validate:"required"`
+	logger             logger.Logger         `option:"mandatory" validate:"required"`
 	fnCallAfterProcess FnCallAfterProcess
 	deliveryBaseURL    string `validate:"omitempty,url"`
 }

@@ -18,9 +18,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/filesanitize"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/google/uuid"
@@ -32,6 +29,9 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	"github.com/assurrussa/gouploads/domain/files/shared/fileurl"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
+	"github.com/assurrussa/gouploads/internal/filesanitize"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 const (
@@ -80,15 +80,15 @@ type fileStorageDTO struct {
 
 //go:generate options-gen -out-filename=usecase_options.gen.go -from-struct=Options
 type Options struct {
-	transactor      transactor              `option:"mandatory" validate:"required"`
-	fileRepository  fileRepository          `option:"mandatory" validate:"required"`
-	resizeClient    resizeClient            `option:"mandatory" validate:"required"`
-	eventStream     eventstream.EventStream `option:"mandatory" validate:"required"`
-	logger          logger.Logger           `option:"mandatory" validate:"required"`
-	storage         fileStorage             `option:"mandatory" validate:"required"`
-	outbox          outboxPutter            `option:"mandatory" validate:"required"`
-	baseFolder      string                  `default:"media/v1"`
-	deliveryBaseURL string                  `validate:"omitempty,url"`
+	transactor      transactor            `option:"mandatory" validate:"required"`
+	fileRepository  fileRepository        `option:"mandatory" validate:"required"`
+	resizeClient    resizeClient          `option:"mandatory" validate:"required"`
+	eventStream     eventstream.Publisher `option:"mandatory" validate:"required"`
+	logger          logger.Logger         `option:"mandatory" validate:"required"`
+	storage         fileStorage           `option:"mandatory" validate:"required"`
+	outbox          outboxPutter          `option:"mandatory" validate:"required"`
+	baseFolder      string                `default:"media/v1"`
+	deliveryBaseURL string                `validate:"omitempty,url"`
 }
 
 type UseCase struct {

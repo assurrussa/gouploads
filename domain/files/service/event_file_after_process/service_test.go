@@ -7,9 +7,6 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	"github.com/assurrussa/goshared/pkg/tests"
-	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"
@@ -18,6 +15,9 @@ import (
 	eventfileafterprocess "github.com/assurrussa/gouploads/domain/files/service/event_file_after_process"
 	eventfileafterprocessmocks "github.com/assurrussa/gouploads/domain/files/service/event_file_after_process/mocks"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	eventstreammocks "github.com/assurrussa/gouploads/internal/events/mocks"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestSuite struct {
@@ -25,7 +25,7 @@ type TestSuite struct {
 
 	fileMock        *eventfileafterprocessmocks.MockfileRepository
 	transactorMock  *eventfileafterprocessmocks.Mocktransactor
-	eventStreamMock *eventstreammocks.MockEventStream
+	eventStreamMock *eventstreammocks.MockPublisher
 
 	job *eventfileafterprocess.Service
 }
@@ -44,7 +44,7 @@ func NewTestSuite(
 		ctrl := gomock.NewController(t)
 		transactorMock := eventfileafterprocessmocks.NewMocktransactor(ctrl)
 		fileMock := eventfileafterprocessmocks.NewMockfileRepository(ctrl)
-		eventStreamMock := eventstreammocks.NewMockEventStream(ctrl)
+		eventStreamMock := eventstreammocks.NewMockPublisher(ctrl)
 
 		var fnCall eventfileafterprocess.FnCallAfterProcess
 		for _, fn := range fnCalls {

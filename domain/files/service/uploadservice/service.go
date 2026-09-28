@@ -9,8 +9,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/filesanitize"
-	"github.com/assurrussa/goshared/pkg/pointer"
 	"github.com/google/uuid"
 
 	uploadconfig "github.com/assurrussa/gouploads/config"
@@ -19,6 +17,8 @@ import (
 	finalizeoriginal "github.com/assurrussa/gouploads/domain/files/outbox/finalize_original"
 	sendresizefilejob "github.com/assurrussa/gouploads/domain/files/outbox/send_resize_file"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	"github.com/assurrussa/gouploads/internal/filesanitize"
+	"github.com/assurrussa/gouploads/internal/pointer"
 )
 
 //go:generate options-gen -out-filename=service_options.gen.go -from-struct=Options -defaults-from=func
@@ -56,6 +56,7 @@ func Must(opts Options) *Service {
 }
 
 // New preserves the historical deep-package constructor for existing consumers.
+//
 // Deprecated: use NewWithProcessing or the supported host facade. An empty mode
 // in NewWithProcessing defaults to originals; this legacy constructor uses media.
 func New(opts Options) (*Service, error) {

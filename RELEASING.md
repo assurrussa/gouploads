@@ -4,10 +4,12 @@ This checklist is the reusable-boundary gate for `gouploads`.
 
 ## Local Readiness
 
-Before tagging, run:
+For an untagged candidate, run `make source-readiness` with the integration
+services available. This read-only source gate includes original-only E2E and
+an anonymous dependency probe. Set `VERSION` to the new exact semver tag before tagging, then run:
 
 ```bash
-make publish-readiness VERSION=v0.10.0-alpha.8
+make publish-readiness VERSION="$VERSION"
 ```
 
 This verifies `go.mod`/`go.sum` tidiness, the host facade, host test-support
@@ -42,18 +44,15 @@ consumer path must fail the gate instead of silently checking nothing.
 
 ## Release Sequence
 
-The published stable baseline is `v0.9.0`, and the current published prerelease
-baseline is `v0.10.0-alpha.7`. The source candidate is `v0.10.0-alpha.8`; it
-adopts the unified Outbox `v0.12.0` batch-reservation and lease-token contract.
-Existing upload jobs remain schema v1 through the Outbox default, and the
-service keeps the default reservation batch size of `1`. Outbox storage
-migrations remain host-owned.
+Choose a new immutable tag for the reviewed commit. Examples below illustrate
+the sequence, not an instruction to reuse an existing tag. The source gate
+never substitutes an older published tag for the candidate's evidence.
 
-1. Run `make publish-readiness VERSION=v0.10.0-alpha.8`.
+1. Run `make publish-readiness VERSION="$VERSION"`.
 2. Commit the `gouploads` changes.
-3. Tag the reviewed commit, for example `git tag v0.10.0-alpha.8`.
+3. Tag the reviewed commit, for example `git tag "$VERSION"`.
 4. Push the commit and tag.
-5. Run `make release-readiness VERSION=v0.10.0-alpha.8`.
+5. Run `make release-readiness VERSION="$VERSION"`.
 6. Update host projects to the published version and re-run their platform
    boundary checks.
 
@@ -113,3 +112,12 @@ make externalconsumer-published VERSION=vX.Y.Z
 
 Only call the version externally reusable after this clean consumer resolves the
 published tag in both normal and `-tags integration` consumer builds.
+
+## Anonymous availability
+
+`anonymous-source` downloads the source dependency graph with isolated caches
+and no host credentials. `anonymous-published VERSION=<tag>` additionally
+resolves and compiles the actual tag with no local replacement. The latter is
+required by `release-readiness`; a private root repository blocks public
+reusability even when all dependencies are public. See
+[anonymous consumer checks](docs/anonymous-consumer.md).

@@ -1,10 +1,10 @@
 package testsmatcher
 
 import (
-	"github.com/assurrussa/goshared/pkg/pointer"
 	"go.uber.org/mock/gomock"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
+	"github.com/assurrussa/gouploads/internal/pointer"
 )
 
 var _ gomock.Matcher = FileMatcher{}

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/filesanitize"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 
@@ -22,6 +21,7 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/service/tusupload"
 	"github.com/assurrussa/gouploads/domain/files/service/uploadservice"
 	fileshared "github.com/assurrussa/gouploads/domain/files/shared"
+	"github.com/assurrussa/gouploads/internal/filesanitize"
 	"github.com/assurrussa/gouploads/shared/uploadstrategies"
 )
 

@@ -3,12 +3,11 @@ package uploadrawfile
 import (
 	"mime/multipart"
 
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	"github.com/assurrussa/goshared/pkg/validator"
-
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/service/uploadservice"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	validator "github.com/assurrussa/gouploads/internal/validation"
 )
 
 type Request struct {
