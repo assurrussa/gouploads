@@ -1,8 +1,9 @@
 package sendresizefile
 
 import (
-	"github.com/assurrussa/goshared/pkg/validator"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
+
+	validator "github.com/assurrussa/gouploads/internal/validation"
 )
 
 type Request struct {

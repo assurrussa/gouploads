@@ -14,10 +14,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/filecaller"
-	"github.com/assurrussa/goshared/pkg/loadenv"
-	"github.com/assurrussa/goshared/pkg/tests/utilst"
-	"github.com/assurrussa/goshared/pkg/validator"
 	"github.com/assurrussa/outbox/backends/pgsql/migrator"
 	pgsqlpgx "github.com/assurrussa/outbox/backends/pgsql/storage"
 	pgsqlclient "github.com/assurrussa/outbox/backends/pgsql/storage/pgsqlclient"
@@ -28,6 +24,9 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/assurrussa/gouploads/internal/testsupport"
+	validator "github.com/assurrussa/gouploads/internal/validation"
 )
 
 type CleanUp func(ctx context.Context)
@@ -206,10 +205,10 @@ func readIntegrationConfig(t *testing.T) integrationConfig {
 }
 
 func loadIntegrationConfig() (integrationConfig, error) {
-	loadenv.Load()
+	testsupport.LoadEnvironment(testsupport.CallerCurrentFile())
 
-	callerFile := filecaller.CallerCurrentFile()
-	filePath := filecaller.FindFileDir(".env", callerFile)
+	callerFile := testsupport.CallerCurrentFile()
+	filePath := testsupport.FindFileDir(".env", callerFile)
 	if err := godotenv.Load(filePath); err != nil {
 		slog.Default().Warn("not found .env file")
 	}
@@ -223,7 +222,7 @@ func loadIntegrationConfig() (integrationConfig, error) {
 	}
 
 	cfg.CurrentPath = filepath.Dir(filePath)
-	basePath, err := utilst.FindBasePath()
+	basePath, err := testsupport.FindBasePath()
 	if err != nil {
 		return integrationConfig{}, fmt.Errorf("find base path: %w", err)
 	}

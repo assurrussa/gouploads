@@ -13,8 +13,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/stretchr/testify/require"
 
@@ -22,12 +20,16 @@ import (
 	deletedfilejob "github.com/assurrussa/gouploads/domain/files/outbox/deleted_file"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 var errOriginalTest = errors.New("original test failure")
 
-type originalTxKey struct{}
-type originalTestJob struct{ name, payload string }
+type (
+	originalTxKey   struct{}
+	originalTestJob struct{ name, payload string }
+)
 
 // The fake transaction serializes workers and rolls back both the row and jobs.
 // It is not a substitute for the real PostgreSQL FOR UPDATE integration gate.
@@ -71,28 +73,32 @@ func (f *originalFixture) RunInTx(ctx context.Context, fn func(context.Context) 
 func (f *originalFixture) GetByID(ctx context.Context, _ int64) (model.File, error) {
 	return f.GetByIDForUpdate(ctx, f.file.ID)
 }
+
 func (f *originalFixture) GetByIDForUpdate(ctx context.Context, _ int64) (model.File, error) {
-	if ctx.Value(originalTxKey{}) != true {
+	if inTx, _ := ctx.Value(originalTxKey{}).(bool); !inTx {
 		return model.File{}, errors.New("read outside transaction")
 	}
 	return cloneOriginalFile(f.file), nil
 }
+
 func (f *originalFixture) Update(ctx context.Context, _ int64, file model.File) error {
-	if ctx.Value(originalTxKey{}) != true || f.failUpdate {
+	if inTx, _ := ctx.Value(originalTxKey{}).(bool); !inTx || f.failUpdate {
 		return errOriginalTest
 	}
 	f.file = cloneOriginalFile(file)
 	return nil
 }
+
 func (f *originalFixture) Put(ctx context.Context, name, payload string, _ time.Time) (outboxtypes.JobID, error) {
 	f.puts++
-	if ctx.Value(originalTxKey{}) != true || f.failPutAt == f.puts {
+	if inTx, _ := ctx.Value(originalTxKey{}).(bool); !inTx || f.failPutAt == f.puts {
 		var id outboxtypes.JobID
 		return id, errOriginalTest
 	}
 	f.jobs = append(f.jobs, originalTestJob{name, payload})
 	return outboxtypes.NewJobID(), nil
 }
+
 func (f *originalFixture) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -103,6 +109,7 @@ func (f *originalFixture) Open(ctx context.Context, key string) (io.ReadCloser, 
 	}
 	return io.NopCloser(bytes.NewReader(body)), nil
 }
+
 func (f *originalFixture) SavePersist(ctx context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
 	if err := ctx.Err(); err != nil {
 		return filestorage.StoredFile{}, err
@@ -120,10 +127,6 @@ func (f *originalFixture) SavePersist(ctx context.Context, input filestorage.Sav
 	return filestorage.StoredFile{RelativePath: key, Size: int64(len(body)), MimeType: input.MimeType}, nil
 }
 func (f *originalFixture) Delete(context.Context, string) error { f.deletes++; return nil }
-func (f *originalFixture) Close() error                         { return nil }
-func (f *originalFixture) Subscribe(context.Context, sharedtypes.UserID) (<-chan eventstream.Event, error) {
-	return nil, errors.New("unused test subscription")
-}
 func (f *originalFixture) Publish(ctx context.Context, _ sharedtypes.UserID, _ eventstream.Event) error {
 	if ctx.Value(originalTxKey{}) != nil {
 		return errors.New("event published before commit")

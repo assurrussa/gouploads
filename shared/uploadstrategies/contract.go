@@ -3,10 +3,9 @@ package uploadstrategies
 import (
 	"context"
 
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-
 	"github.com/assurrussa/gouploads/domain/files/service/uploadservice"
 	fileshared "github.com/assurrussa/gouploads/domain/files/shared"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 // UploadContext contains information about the upload request agnostic of the transport layer.

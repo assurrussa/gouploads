@@ -1,6 +1,8 @@
 package externalconsumer_test
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
@@ -45,4 +47,23 @@ func TestOriginalModeRejectsPresetsThroughPublicConfig(t *testing.T) {
 		Image: host.ImagePipelineConfig{Presets: []host.ImagePresetConfig{{Name: "thumb"}}},
 	}, host.OriginalRuntimeDeps{})
 	require.ErrorIs(t, err, host.ErrProcessingDisabled)
+}
+
+// A host adapter only implements publication, with no subscription or Close.
+type publisher struct{}
+
+func (publisher) Publish(context.Context, host.UserID, host.Event) error { return nil }
+
+var _ host.EventPublisher = publisher{}
+
+func TestIdentityAndEventSurface(t *testing.T) {
+	id := host.NewUserID()
+	data, err := json.Marshal(id)
+	require.NoError(t, err)
+	var decoded host.UserID
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Equal(t, id, decoded)
+	require.NoError(t, host.NewEventID().Validate())
+	deps := host.OriginalRuntimeDeps{Events: publisher{}}
+	require.NotNil(t, deps.Events)
 }

@@ -31,7 +31,7 @@ those migrations in addition to the `gouploads` file migration.
 Every host application owns:
 
 - local env/config mapping into `host.StorageConfig`;
-- database, Redis, transaction manager, logger, and event stream wiring;
+- database, transaction manager, logger, and event publisher wiring;
 - HTTP route mounting and auth/session middlewares;
 - upload context extraction from the host auth/session model;
 - upload strategies for project-specific contexts such as `avatar`,
@@ -66,6 +66,7 @@ flow remains pass-through.
    ```go
    cfg := host.StorageConfig{
        Driver: host.StorageDriverS3,
+       ProcessingMode: host.ProcessingMediaResizer,
        Public: host.StoragePublicConfig{
            BaseURL: "https://media.example.test",
            Prefix: "media/v1",
@@ -107,6 +108,7 @@ flow remains pass-through.
    ```go
    cfg := host.StorageConfig{
        AppDomainURL: "https://app.example.test",
+       ProcessingMode: host.ProcessingMediaResizer,
        Driver: host.StorageDriverLocal,
        Local: host.StorageLocalConfig{
            Root: "/app/publicdata",
@@ -315,3 +317,6 @@ The external consumer probe checks both normal and `-tags integration` builds
 so integration-only host test helpers stay part of the verified contract.
 `hosttest` owns its public database helper types directly; host consumers
 should not import `domain/files/tests`.
+
+Identity, notification and HTTP-client migration is documented in
+[Standalone uploads](standalone-uploads.md#identity-and-notification-migration).

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	testshelpers "github.com/assurrussa/gouploads/domain/files/tests"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 func TestConfiguredUploaderDefaultsToOriginalForEveryIngress(t *testing.T) {

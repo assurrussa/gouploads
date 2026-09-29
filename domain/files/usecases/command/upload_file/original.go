@@ -8,11 +8,11 @@ import (
 	"strings"
 
 	logger "github.com/assurrussa/gologger"
-	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	clientresizer "github.com/assurrussa/gouploads/domain/files/service/client_resizer"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
 )
 
 type OriginalRepository interface {
@@ -32,7 +32,7 @@ type OriginalOptions struct {
 	Repository      OriginalRepository
 	Storage         OriginalStorage
 	Outbox          outboxPutter
-	Events          eventstream.EventStream
+	Events          eventstream.Publisher
 	Logger          logger.Logger
 	BaseFolder      string
 	DeliveryBaseURL string
@@ -171,7 +171,9 @@ type storedArtifactSource struct {
 	storage OriginalStorage
 }
 
-func (s storedArtifactSource) DownloadFile(ctx context.Context, req clientresizer.RequestDownload) (clientresizer.ResponseDownload, error) {
+func (s storedArtifactSource) DownloadFile(
+	ctx context.Context, req clientresizer.RequestDownload,
+) (clientresizer.ResponseDownload, error) {
 	body, err := s.storage.Open(ctx, req.URL)
 	if err != nil {
 		return clientresizer.ResponseDownload{}, err

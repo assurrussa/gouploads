@@ -72,9 +72,11 @@ implementation details, not an additional stable SDK.
 go get github.com/assurrussa/gouploads@<published-version>
 ```
 
-Use a known accessible version. This change removes runtime coupling to site
-and media-resizer, **not** the remaining private Go-module dependencies. It is
-not evidence that the repository or its dependency graph is anonymously public.
+Use a known accessible version. The dependency graph no longer includes
+`goshared`, `goredis` or `gowebsocket`. Runtime notifications use the narrow
+`host.EventPublisher` contract; the host owns any WebSocket adapter and lifecycle.
+See [anonymous consumer checks](docs/anonymous-consumer.md) for isolated source
+and published-tag probes. Source availability does not publish the root module.
 
 ## Storage and TUS contracts
 

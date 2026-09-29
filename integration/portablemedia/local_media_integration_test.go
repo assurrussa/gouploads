@@ -19,8 +19,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
-	inmemeventstream "github.com/assurrussa/gowebsocket/eventstream/inmem"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/gofiber/fiber/v3"
@@ -40,6 +38,7 @@ import (
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
 	"github.com/assurrussa/gouploads/host"
 	"github.com/assurrussa/gouploads/hosttest"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
 )
 
 func TestIntegrationLocalMedia(t *testing.T) {
@@ -138,7 +137,7 @@ func TestIntegrationLocalMedia(t *testing.T) {
 		clientresizer.WithArtifactClient(artifactServer.Client()),
 	))
 	outbox := &outboxCollector{}
-	events := inmemeventstream.New()
+	events := eventstream.Discard{}
 	listener := listenresizefile.Must(listenresizefile.NewOptions(repo, outbox, events, logger.Discard()))
 	uploadUseCase := uploadfile.Must(uploadfile.NewOptions(
 		tx,
@@ -505,46 +504,40 @@ type sourceFetchTransport struct {
 	sourceURLs   []string
 }
 
-func (t *sourceFetchTransport) DoWithRequestAndParse(
-	ctx context.Context,
-	request transporthttp.Request,
-	data any,
-) error {
+func (t *sourceFetchTransport) Do(request *http.Request) (*http.Response, error) {
 	payloadData, err := io.ReadAll(request.Body)
 	if err != nil {
-		return fmt.Errorf("read resizer request: %w", err)
+		return nil, fmt.Errorf("read resizer request: %w", err)
 	}
 	var payload sendresizefile.Payload
 	if err := json.Unmarshal(payloadData, &payload); err != nil {
-		return fmt.Errorf("decode resizer request: %w", err)
+		return nil, fmt.Errorf("decode resizer request: %w", err)
 	}
 
-	sourceRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, payload.Source.URL, nil)
+	sourceRequest, err := http.NewRequestWithContext(request.Context(), http.MethodGet, payload.Source.URL, nil)
 	if err != nil {
-		return fmt.Errorf("create source request: %w", err)
+		return nil, fmt.Errorf("create source request: %w", err)
 	}
 	response, err := t.client.Do(sourceRequest)
 	if err != nil {
-		return fmt.Errorf("fetch source: %w", err)
+		return nil, fmt.Errorf("fetch source: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("fetch source: unexpected status %d", response.StatusCode)
+		return nil, fmt.Errorf("fetch source: unexpected status %d", response.StatusCode)
 	}
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return fmt.Errorf("read source: %w", err)
+		return nil, fmt.Errorf("read source: %w", err)
 	}
 	if !bytes.Equal(t.expectedBody, body) {
-		return fmt.Errorf("source body mismatch: got %d bytes", len(body))
+		return nil, fmt.Errorf("source body mismatch: got %d bytes", len(body))
 	}
 	t.sourceURLs = append(t.sourceURLs, payload.Source.URL)
 
-	result, ok := data.(*clientresizer.Response)
-	if !ok {
-		return fmt.Errorf("unexpected resizer response type %T", data)
+	data, err := json.Marshal(clientresizer.Response{JobID: outboxtypes.NewJobID(), Status: "queued"})
+	if err != nil {
+		return nil, err
 	}
-	result.JobID = outboxtypes.NewJobID()
-	result.Status = "queued"
-	return nil
+	return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(bytes.NewReader(data))}, nil
 }

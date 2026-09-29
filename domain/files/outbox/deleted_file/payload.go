@@ -5,9 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 type Payload struct {

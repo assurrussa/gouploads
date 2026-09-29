@@ -10,11 +10,9 @@
 package clientresizermocks
 
 import (
-	context "context"
-	http0 "net/http"
+	http "net/http"
 	reflect "reflect"
 
-	http "github.com/assurrussa/goshared/pkg/transport/http"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -42,18 +40,19 @@ func (m *MockhttpClient) EXPECT() *MockhttpClientMockRecorder {
 	return m.recorder
 }
 
-// DoWithRequestAndParse mocks base method.
-func (m *MockhttpClient) DoWithRequestAndParse(ctx context.Context, request http.Request, data any) error {
+// Do mocks base method.
+func (m *MockhttpClient) Do(request *http.Request) (*http.Response, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DoWithRequestAndParse", ctx, request, data)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret := m.ctrl.Call(m, "Do", request)
+	ret0, _ := ret[0].(*http.Response)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
-// DoWithRequestAndParse indicates an expected call of DoWithRequestAndParse.
-func (mr *MockhttpClientMockRecorder) DoWithRequestAndParse(ctx, request, data any) *gomock.Call {
+// Do indicates an expected call of Do.
+func (mr *MockhttpClientMockRecorder) Do(request any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DoWithRequestAndParse", reflect.TypeOf((*MockhttpClient)(nil).DoWithRequestAndParse), ctx, request, data)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Do", reflect.TypeOf((*MockhttpClient)(nil).Do), request)
 }
 
 // MockartifactHTTPClient is a mock of artifactHTTPClient interface.
@@ -81,10 +80,10 @@ func (m *MockartifactHTTPClient) EXPECT() *MockartifactHTTPClientMockRecorder {
 }
 
 // Do mocks base method.
-func (m *MockartifactHTTPClient) Do(request *http0.Request) (*http0.Response, error) {
+func (m *MockartifactHTTPClient) Do(request *http.Request) (*http.Response, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Do", request)
-	ret0, _ := ret[0].(*http0.Response)
+	ret0, _ := ret[0].(*http.Response)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

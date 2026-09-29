@@ -9,8 +9,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/outbox"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
@@ -20,6 +18,7 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/shared/fileurl"
 	deletefile "github.com/assurrussa/gouploads/domain/files/usecases/command/delete_file"
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
 )
 
 type ProcessingMode = uploadconfig.ProcessingMode
@@ -43,7 +42,7 @@ type OriginalRuntimeDeps struct {
 	Transaction pgsql.TxManager
 	Outbox      UploadOutbox
 	Logger      logger.Logger
-	Events      eventstream.EventStream // Optional; nil disables live events.
+	Events      EventPublisher // Optional; nil disables live events.
 }
 
 // OriginalRuntime does not start workers, mount routes or own supplied clients.
@@ -75,7 +74,7 @@ func NewOriginalRuntime(cfg StorageConfig, deps OriginalRuntimeDeps) (*OriginalR
 		deps.Logger = logger.Discard()
 	}
 	if nilRuntimeDependency(deps.Events) {
-		deps.Events = discardedUploadEvents{}
+		deps.Events = eventstream.Discard{}
 	}
 	if cfg.Driver == "" {
 		cfg.Driver = StorageDriverLocal
@@ -134,19 +133,10 @@ func NewOriginalRuntime(cfg StorageConfig, deps OriginalRuntimeDeps) (*OriginalR
 	if err != nil {
 		return nil, err
 	}
-	return &OriginalRuntime{Uploader: uploader, Files: repo, Storage: storage, TusStore: tusStore, Finalizer: finalizer, Jobs: jobs}, nil
-}
-
-// discardedUploadEvents does not acknowledge durable business events; only
-// optional best-effort UI updates are omitted. AfterJobs still use the outbox.
-type discardedUploadEvents struct{}
-
-func (discardedUploadEvents) Close() error { return nil }
-func (discardedUploadEvents) Publish(ctx context.Context, _ sharedtypes.UserID, _ eventstream.Event) error {
-	return ctx.Err()
-}
-func (discardedUploadEvents) Subscribe(context.Context, sharedtypes.UserID) (<-chan eventstream.Event, error) {
-	return nil, errors.New("live upload events are disabled")
+	return &OriginalRuntime{
+		Uploader: uploader, Files: repo, Storage: storage,
+		TusStore: tusStore, Finalizer: finalizer, Jobs: jobs,
+	}, nil
 }
 
 func nilRuntimeDependency(value any) bool {

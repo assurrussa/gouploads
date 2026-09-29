@@ -3,7 +3,7 @@ package shared
 import (
 	"errors"
 
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 const EventTypeAfterProcess = "file.after.process"

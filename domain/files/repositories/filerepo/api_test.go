@@ -11,11 +11,9 @@ import (
 	"time"
 
 	"github.com/Masterminds/squirrel"
-	"github.com/assurrussa/goshared/pkg/pointer"
-	querybuilder "github.com/assurrussa/outbox/shared/query_builder"
-	tests "github.com/assurrussa/goshared/pkg/tests"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
+	querybuilder "github.com/assurrussa/outbox/shared/query_builder"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,6 +23,8 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/repositories/filerepo"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	testshelpers "github.com/assurrussa/gouploads/domain/files/tests"
+	"github.com/assurrussa/gouploads/internal/pointer"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestRepoSuite struct {

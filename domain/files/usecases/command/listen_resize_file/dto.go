@@ -3,7 +3,7 @@ package listenresizefile
 import (
 	"time"
 
-	"github.com/assurrussa/goshared/pkg/validator"
+	validator "github.com/assurrussa/gouploads/internal/validation"
 )
 
 type Request struct {

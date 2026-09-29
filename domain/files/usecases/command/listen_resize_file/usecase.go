@@ -7,14 +7,14 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	eventstream "github.com/assurrussa/gowebsocket/eventstream"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	uploadfilejob "github.com/assurrussa/gouploads/domain/files/outbox/upload_file"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 //go:generate toolsmocks
@@ -29,10 +29,10 @@ type outboxPutter interface {
 
 //go:generate options-gen -out-filename=usecase_options.gen.go -from-struct=Options
 type Options struct {
-	fileRepository fileRepository          `option:"mandatory" validate:"required"`
-	outboxPutter   outboxPutter            `option:"mandatory" validate:"required"`
-	eventStream    eventstream.EventStream `option:"mandatory" validate:"required"`
-	logger         logger.Logger           `option:"mandatory" validate:"required"`
+	fileRepository fileRepository        `option:"mandatory" validate:"required"`
+	outboxPutter   outboxPutter          `option:"mandatory" validate:"required"`
+	eventStream    eventstream.Publisher `option:"mandatory" validate:"required"`
+	logger         logger.Logger         `option:"mandatory" validate:"required"`
 }
 
 type UseCase struct {

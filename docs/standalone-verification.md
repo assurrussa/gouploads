@@ -1,5 +1,47 @@
 # Standalone implementation and verification notes
 
+## 2026-09-29 follow-up candidate
+
+Base: merged PR #6 (`e05fe44`). Branch: `tasks/standalone-decoupling`.
+This record supersedes the earlier environment limitations for this candidate;
+the historical checks below still describe only the earlier source snapshot.
+
+Verified with repository Go 1.27.1:
+
+- `make source-readiness` passes as one complete gate; it includes `make check`
+  (tidy, formatting, vet, lint and the full race/coverage suite) and the checks below.
+- Public surface, integration-tag surface and `externalconsumer-local` pass.
+- PostgreSQL TUS fencing, direct S3 source URLs and both portable-media E2Es pass.
+- `make test-originals-integration` passes on isolated PostgreSQL 18.6 and MinIO.
+  The package also passed `go test -race -tags=integration ./integration/originals -count=3`.
+  It checks reader, multipart single/batch and in-process HTTP TUS ingestion;
+  queued state, bytes/SHA256, durable jobs, fresh workers, duplicate delivery,
+  actual row-lock waiters, replacement ownership and finalization/delete races.
+- `import-policy-site` passes for the configured sibling consumers without
+  changing their code or pinned versions.
+- Anonymous source graph/download passes with empty caches and no credentials.
+  Anonymous published `v0.10.0-alpha.7` fails through the public proxy because
+  the root module is private. It is a visibility diagnostic, not candidate
+  release evidence; no candidate tag was created.
+- `govulncheck` reports zero reachable or imported-package vulnerabilities.
+  Three module-level `x/crypto` advisories concern unused packages.
+- Independent review found no actionable introduced data/locking/API defects.
+
+The normal Go diagnostics MCP is attached to a different checkout and cannot
+resolve this worktree correctly; compiler, vet, lint and tests provide the
+worktree verification. Generated options/mocks were regenerated with options-gen v0.58.0 and mockgen
+v0.6.0 from the module versions, not hand-edited.
+
+Remaining boundaries: no browser/live-socket TUS smoke, consumer application
+regression, production deployment or published candidate consumer gate. Storage
+failure/uncertain commit injection remains unit-level coverage. A fresh worker
+is recreated in-process, not by killing an OS process. Holding a row lock across
+storage IO remains the explicit throughput trade-off. Existing physical deletion
+before database commit cannot atomically roll back storage; this change fixes
+stale paths under concurrent finalization, not cross-system atomic deletion.
+The hosted CI billing restriction is external to these local checks.
+
+
 ## 2026-09-28 candidate
 
 Base: `3e0df76ff465d3e190713987857e735c0fdcea65`.

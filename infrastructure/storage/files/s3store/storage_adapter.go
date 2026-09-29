@@ -10,12 +10,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/assurrussa/goshared/pkg/filesanitize"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	"github.com/assurrussa/gouploads/internal/filesanitize"
 )
 
 type StorageAdapter struct {

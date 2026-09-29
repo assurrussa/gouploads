@@ -12,9 +12,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	"github.com/assurrussa/goshared/pkg/tests"
-	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -27,6 +24,9 @@ import (
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
 	uploadfilemocks "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file/mocks"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	eventstreammocks "github.com/assurrussa/gouploads/internal/events/mocks"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 const (
@@ -51,7 +51,7 @@ type TestSuite struct {
 	fileStorageMock  *uploadfilemocks.MockfileStorage
 	transactorMock   *uploadfilemocks.Mocktransactor
 	outboxMock       *uploadfilemocks.MockoutboxPutter
-	eventStreamMock  *eventstreammocks.MockEventStream
+	eventStreamMock  *eventstreammocks.MockPublisher
 
 	useCase       *uploadfile.UseCase
 	expectedError error
@@ -70,7 +70,7 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 		fileStorageMock := uploadfilemocks.NewMockfileStorage(ctrl)
 		transactorMock := uploadfilemocks.NewMocktransactor(ctrl)
 		fileMock := uploadfilemocks.NewMockfileRepository(ctrl)
-		eventStreamMock := eventstreammocks.NewMockEventStream(ctrl)
+		eventStreamMock := eventstreammocks.NewMockPublisher(ctrl)
 		outboxMock := uploadfilemocks.NewMockoutboxPutter(ctrl)
 
 		useCase := uploadfile.Must(uploadfile.NewOptions(

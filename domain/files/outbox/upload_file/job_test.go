@@ -7,7 +7,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/tests"
 	sharedoutbox "github.com/assurrussa/outbox/outbox"
 	outboxmocks "github.com/assurrussa/outbox/outbox/mocks"
 	"github.com/assurrussa/outbox/outbox/models"
@@ -20,6 +19,7 @@ import (
 	uploadfilejob "github.com/assurrussa/gouploads/domain/files/outbox/upload_file"
 	uploadsmocks "github.com/assurrussa/gouploads/domain/files/outbox/upload_file/mocks"
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestSuite struct {

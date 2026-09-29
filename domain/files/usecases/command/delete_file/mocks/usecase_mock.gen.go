@@ -58,19 +58,19 @@ func (mr *MockfileRepositoryMockRecorder) DeleteByID(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteByID", reflect.TypeOf((*MockfileRepository)(nil).DeleteByID), ctx, id)
 }
 
-// GetByID mocks base method.
-func (m *MockfileRepository) GetByID(ctx context.Context, id int64) (model.File, error) {
+// GetByIDForUpdate mocks base method.
+func (m *MockfileRepository) GetByIDForUpdate(ctx context.Context, id int64) (model.File, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetByID", ctx, id)
+	ret := m.ctrl.Call(m, "GetByIDForUpdate", ctx, id)
 	ret0, _ := ret[0].(model.File)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetByID indicates an expected call of GetByID.
-func (mr *MockfileRepositoryMockRecorder) GetByID(ctx, id any) *gomock.Call {
+// GetByIDForUpdate indicates an expected call of GetByIDForUpdate.
+func (mr *MockfileRepositoryMockRecorder) GetByIDForUpdate(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByID", reflect.TypeOf((*MockfileRepository)(nil).GetByID), ctx, id)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByIDForUpdate", reflect.TypeOf((*MockfileRepository)(nil).GetByIDForUpdate), ctx, id)
 }
 
 // MockfileStorage is a mock of fileStorage interface.

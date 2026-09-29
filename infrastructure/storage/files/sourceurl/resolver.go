@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/assurrussa/goshared/pkg/filesanitize"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -18,6 +17,7 @@ import (
 
 	uploadconfig "github.com/assurrussa/gouploads/config"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	"github.com/assurrussa/gouploads/internal/filesanitize"
 )
 
 const (

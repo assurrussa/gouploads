@@ -1,7 +1,6 @@
 package tusupload
 
 import (
-	"errors"
 	"net/http"
 	"path/filepath"
 
@@ -14,14 +13,6 @@ import (
 	"github.com/assurrussa/gouploads/config"
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/s3store"
 )
-
-func BuildStore(storageCfg config.StorageConfig, _ redisClient) (Store, error) {
-	if storageCfg.Driver != config.StorageDriverS3 {
-		return NewFileStore(filepath.Join(storageCfg.Local.Root, "tmp", "tus"))
-	}
-
-	return nil, errors.New("tus store: S3 requires BuildDurableStore with PostgreSQL")
-}
 
 func BuildDurableStore(storageCfg config.StorageConfig, database pgsql.Client) (Store, error) {
 	if storageCfg.Driver != config.StorageDriverS3 {

@@ -4,12 +4,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/assurrussa/goshared/pkg/tests"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"
 
 	crtpkg "github.com/assurrussa/gouploads/domain/files/usecases/command/cleaner_tus_uploads"
 	crtpkgmocks "github.com/assurrussa/gouploads/domain/files/usecases/command/cleaner_tus_uploads/mocks"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestUseCaseSuite struct {

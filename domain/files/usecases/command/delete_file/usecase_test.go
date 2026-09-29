@@ -9,10 +9,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/pointer"
-	sharedtypes "github.com/assurrussa/goshared/pkg/sharedtypes"
-	"github.com/assurrussa/goshared/pkg/tests"
-	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"
@@ -22,6 +18,10 @@ import (
 	testsmatcher "github.com/assurrussa/gouploads/domain/files/tests/matcher"
 	deletedfile "github.com/assurrussa/gouploads/domain/files/usecases/command/delete_file"
 	deletedfilemocks "github.com/assurrussa/gouploads/domain/files/usecases/command/delete_file/mocks"
+	eventstreammocks "github.com/assurrussa/gouploads/internal/events/mocks"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	"github.com/assurrussa/gouploads/internal/pointer"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestSuite struct {
@@ -31,7 +31,7 @@ type TestSuite struct {
 	transactorMock  *deletedfilemocks.Mocktransactor
 	storageMock     *deletedfilemocks.MockfileStorage
 	outboxMock      *deletedfilemocks.MockoutboxPutter
-	eventStreamMock *eventstreammocks.MockEventStream
+	eventStreamMock *eventstreammocks.MockPublisher
 
 	useCase   *deletedfile.UseCase
 	errExpect error
@@ -50,7 +50,7 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 		fileMock := deletedfilemocks.NewMockfileRepository(ctrl)
 		outboxMock := deletedfilemocks.NewMockoutboxPutter(ctrl)
 		storageMock := deletedfilemocks.NewMockfileStorage(ctrl)
-		eventStreamMock := eventstreammocks.NewMockEventStream(ctrl)
+		eventStreamMock := eventstreammocks.NewMockPublisher(ctrl)
 
 		useCase := deletedfile.Must(deletedfile.NewOptions(
 			transactorMock,
@@ -106,7 +106,7 @@ func TestHandle_Success(t *testing.T) {
 		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
 			return fn(ctx)
 		}).Times(1)
-	ts.fileMock.EXPECT().GetByID(ctx, fileID).Return(file, nil).Times(1)
+	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
 	ts.fileMock.EXPECT().DeleteByID(ctx, fileID).Return(nil).Times(1)
 	ts.storageMock.EXPECT().Delete(ctx, file.GetFullPath()).Return(nil).Times(1)
 	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusCompleted)
@@ -180,7 +180,7 @@ func TestHandle_RemoveStorageFileWithPresets(t *testing.T) {
 		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
 			return fn(ctx)
 		}).Times(1)
-	ts.fileMock.EXPECT().GetByID(ctx, fileID).Return(file, nil).Times(1)
+	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
 	ts.fileMock.EXPECT().DeleteByID(ctx, fileID).Return(nil).Times(1)
 	ts.storageMock.EXPECT().DeleteBatch(ctx, gomock.Any()).
 		DoAndReturn(func(_ context.Context, paths []string) error {
@@ -218,6 +218,10 @@ func TestHandle_RemoveStorageFileWithPresets(t *testing.T) {
 
 func TestHandle_RejectsFileOwnedByDifferentObject(t *testing.T) {
 	ctx, _, ts := NewTestSuite(t)
+	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
+			return fn(ctx)
+		})
 
 	const fileID = int64(123)
 	file := model.File{
@@ -227,7 +231,7 @@ func TestHandle_RejectsFileOwnedByDifferentObject(t *testing.T) {
 		ObjectType: shared.ObjectTypeAdmin,
 		ObjectID:   pointer.To(shared.FileObjectID(9)),
 	}
-	ts.fileMock.EXPECT().GetByID(ctx, fileID).Return(file, nil).Times(1)
+	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
 
 	_, err := ts.useCase.Handle(ctx, deletedfile.Request{
 		FileID:     fileID,
@@ -260,7 +264,7 @@ func TestHandle_RemoveStorageFile(t *testing.T) {
 		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
 			return fn(ctx)
 		}).Times(1)
-	ts.fileMock.EXPECT().GetByID(ctx, fileID).Return(file, nil).Times(1)
+	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
 	ts.fileMock.EXPECT().DeleteByID(ctx, fileID).Return(nil).Times(1)
 	ts.storageMock.EXPECT().Delete(ctx, file.GetFullPath()).Return(ts.errExpect).Times(1)
 	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusFailed)
@@ -310,7 +314,7 @@ func TestHandle_FailedEnqueueAfterJobs(t *testing.T) {
 		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
 			return fn(ctx)
 		}).Times(1)
-	ts.fileMock.EXPECT().GetByID(ctx, fileID).Return(file, nil).Times(1)
+	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
 	ts.fileMock.EXPECT().DeleteByID(ctx, fileID).Return(nil).Times(1)
 	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusFailed)
 	eventFileUpload.Error = ts.errExpect.Error()
@@ -359,7 +363,7 @@ func TestHandle_FailedDeleteByID(t *testing.T) {
 		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
 			return fn(ctx)
 		}).Times(1)
-	ts.fileMock.EXPECT().GetByID(ctx, fileID).Return(file, nil).Times(1)
+	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
 	ts.fileMock.EXPECT().DeleteByID(ctx, fileID).Return(ts.errExpect).Times(1)
 	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusFailed)
 	eventFileUpload.Error = ts.errExpect.Error()
@@ -435,6 +439,10 @@ func TestHandle_FileIDIsEmpty_Error(t *testing.T) {
 
 func TestHandle_GetFileID_Error(t *testing.T) {
 	ctx, _, ts := NewTestSuite(t)
+	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
+			return fn(ctx)
+		})
 
 	// Arrange.
 	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
@@ -450,7 +458,7 @@ func TestHandle_GetFileID_Error(t *testing.T) {
 		FilePath: file.GetFullPath(),
 	}
 
-	ts.fileMock.EXPECT().GetByID(ctx, fileID).Return(file, ts.errExpect).Times(1)
+	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, ts.errExpect).Times(1)
 
 	// Action.
 	resp, err := ts.useCase.Handle(ctx, req)

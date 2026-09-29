@@ -6,9 +6,6 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/sharedtypes"
-	"github.com/assurrussa/goshared/pkg/tests"
-	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"
@@ -19,13 +16,16 @@ import (
 	testshelpers "github.com/assurrussa/gouploads/domain/files/tests"
 	uploadrawfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_raw_file"
 	uploadrawfilemocks "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_raw_file/mocks"
+	eventstreammocks "github.com/assurrussa/gouploads/internal/events/mocks"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestSuite struct {
 	suite.Suite
 
 	uploadServiceMock *uploadrawfilemocks.MockuploadService
-	eventStreamMock   *eventstreammocks.MockEventStream
+	eventStreamMock   *eventstreammocks.MockPublisher
 
 	useCase       *uploadrawfile.UseCase
 	expectedError error
@@ -41,7 +41,7 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 
 		ctrl := gomock.NewController(t)
 		uploadServiceMock := uploadrawfilemocks.NewMockuploadService(ctrl)
-		eventStreamMock := eventstreammocks.NewMockEventStream(ctrl)
+		eventStreamMock := eventstreammocks.NewMockPublisher(ctrl)
 
 		useCase := uploadrawfile.Must(uploadrawfile.NewOptions(
 			uploadServiceMock,

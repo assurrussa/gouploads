@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/tests"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -22,6 +21,7 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/service/uploadservice"
 	uploadservicemocks "github.com/assurrussa/gouploads/domain/files/service/uploadservice/mocks"
 	localfilestorage "github.com/assurrussa/gouploads/infrastructure/storage/files/local"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestFileSuite struct {

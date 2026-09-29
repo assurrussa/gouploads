@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	logger "github.com/assurrussa/gologger"
-	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
-	inmemeventstream "github.com/assurrussa/gowebsocket/eventstream/inmem"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/outbox"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -35,6 +33,7 @@ import (
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/local"
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/s3store"
 	"github.com/assurrussa/gouploads/infrastructure/storage/files/sourceurl"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
 )
 
 func provideFileRepo(db pgsql.Client, tx pgsql.TxManager) (*filerepo.Repo, error) {
@@ -119,6 +118,7 @@ func provideUploadService(
 	lg logger.Logger,
 	storage filestorage.Storage,
 ) (*uploadservice.Service, error) {
+	//nolint:staticcheck // Preserve the unsupported legacy DI provider media default.
 	return uploadservice.New(uploadservice.NewOptions(
 		tx,
 		outboxSvc,
@@ -136,7 +136,7 @@ func provideEventFileAfterProcess(
 	cfg uploadconfig.StorageConfig,
 	tx pgsql.TxManager,
 	repo *filerepo.Repo,
-	eventStream *inmemeventstream.Service,
+	eventStream eventstream.Publisher,
 	lg logger.Logger,
 ) (*eventfileafterprocess.Service, error) {
 	return eventfileafterprocess.New(eventfileafterprocess.NewOptions(
@@ -166,7 +166,7 @@ func provideResizerSettingsCache(
 
 func provideClientResizer(
 	cfg uploadconfig.StorageConfig,
-	client *transporthttp.Client,
+	client *http.Client,
 	lg logger.Logger,
 	settings *rcusettings.CacheService,
 ) (*clientresizer.Service, error) {
@@ -187,7 +187,7 @@ func provideUseCaseDeleteFile(
 	cfg uploadconfig.StorageConfig,
 	tx pgsql.TxManager,
 	repo *filerepo.Repo,
-	eventStream *inmemeventstream.Service,
+	eventStream eventstream.Publisher,
 	lg logger.Logger,
 	storage filestorage.Storage,
 	outboxSvc *outbox.Service,
@@ -207,7 +207,7 @@ func provideUseCaseSendResizeFile(
 	repo *filerepo.Repo,
 	resizer *clientresizer.Service,
 	sourceResolver sourceurl.Resolver,
-	eventStream *inmemeventstream.Service,
+	eventStream eventstream.Publisher,
 	uploadCfg uploadconfig.StorageConfig,
 	lg logger.Logger,
 ) (*sendresizefile.UseCase, error) {
@@ -225,7 +225,7 @@ func provideUseCaseSendResizeFile(
 func provideUseCaseListenResizeFile(
 	repo *filerepo.Repo,
 	outboxSvc *outbox.Service,
-	eventStream *inmemeventstream.Service,
+	eventStream eventstream.Publisher,
 	lg logger.Logger,
 ) (*listenresizefile.UseCase, error) {
 	return listenresizefile.New(listenresizefile.NewOptions(
@@ -241,7 +241,7 @@ func provideUseCaseUploadFile(
 	tx pgsql.TxManager,
 	repo *filerepo.Repo,
 	resizer *clientresizer.Service,
-	eventStream *inmemeventstream.Service,
+	eventStream eventstream.Publisher,
 	lg logger.Logger,
 	storage filestorage.Storage,
 	outboxSvc *outbox.Service,
@@ -271,7 +271,7 @@ func provideUseCaseUploadFile(
 
 func provideUseCaseUploadRawFile(
 	uploadSvc *uploadservice.Service,
-	eventStream *inmemeventstream.Service,
+	eventStream eventstream.Publisher,
 	lg logger.Logger,
 ) (*uploadrawfile.UseCase, error) {
 	return uploadrawfile.New(uploadrawfile.NewOptions(

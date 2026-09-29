@@ -12,9 +12,11 @@ func TestOriginalKeyConfinement(t *testing.T) {
 			t.Fatalf("valid key %q: %v", key, err)
 		}
 	}
-	for _, key := range []string{"", ".", "..", "../a", "/tmp/uploads/a", "https://host/a", "tmp/uploads/../a",
+	for _, key := range []string{
+		"", ".", "..", "../a", "/tmp/uploads/a", "https://host/a", "tmp/uploads/../a",
 		"tmp//uploads/a", "tmp/uploads/./a", "tmp/uploads", "tmp/uploads2/a", "tmp/uploads/a\\b", "tmp/uploads/a\x00b",
-		"media/v1/admin/1/main.pdf"} {
+		"media/v1/admin/1/main.pdf",
+	} {
 		if err := validateOriginalKey(key, prefixes); err == nil {
 			t.Fatalf("unsafe key %q accepted", key)
 		}

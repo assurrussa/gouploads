@@ -24,6 +24,7 @@ func (h *recordingHandler) HandleOriginal(ctx context.Context, id int64) error {
 	h.id = id
 	return h.err
 }
+
 func TestJobValidatesBeforeDispatch(t *testing.T) {
 	h := &recordingHandler{}
 	job, err := finalizeoriginal.New(h)
@@ -37,6 +38,7 @@ func TestJobValidatesBeforeDispatch(t *testing.T) {
 	h.err = sentinel
 	require.ErrorIs(t, job.Handle(t.Context(), `{"fileId":21}`), sentinel)
 }
+
 func TestJobRejectsNilHandler(t *testing.T) {
 	_, err := finalizeoriginal.New(nil)
 	require.Error(t, err)

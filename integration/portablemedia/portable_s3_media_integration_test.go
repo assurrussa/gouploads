@@ -22,8 +22,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	transporthttp "github.com/assurrussa/goshared/pkg/transport/http"
-	inmemeventstream "github.com/assurrussa/gowebsocket/eventstream/inmem"
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -47,6 +45,7 @@ import (
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
 	"github.com/assurrussa/gouploads/host"
 	"github.com/assurrussa/gouploads/hosttest"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
 )
 
 const (
@@ -246,7 +245,7 @@ func runScenario(t *testing.T, tt scenario) {
 	artifactServer := newArtifactServer(t, tt.artifacts, "")
 	defer artifactServer.Close()
 	outbox := &outboxCollector{}
-	events := inmemeventstream.New()
+	events := eventstream.Discard{}
 	resizer := clientresizer.Must(clientresizer.NewOptions(
 		noopTransport{},
 		artifactServer.URL+"/jobs",
@@ -801,8 +800,8 @@ func (c *outboxCollector) TakeAll(name string) []string {
 
 type noopTransport struct{}
 
-func (noopTransport) DoWithRequestAndParse(context.Context, transporthttp.Request, any) error {
-	return nil
+func (noopTransport) Do(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 }
 
 type artifactHTTPServer struct {

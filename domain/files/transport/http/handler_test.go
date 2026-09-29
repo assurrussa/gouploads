@@ -19,9 +19,6 @@ import (
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/pointer"
-	"github.com/assurrussa/goshared/pkg/sharedtypes"
-	"github.com/assurrussa/goshared/pkg/tests"
 	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -33,6 +30,9 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	uploadshandler "github.com/assurrussa/gouploads/domain/files/transport/http"
 	uploadsmocks "github.com/assurrussa/gouploads/domain/files/transport/http/mocks"
+	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	"github.com/assurrussa/gouploads/internal/pointer"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 	"github.com/assurrussa/gouploads/shared/uploadstrategies"
 )
 

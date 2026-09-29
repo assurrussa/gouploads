@@ -6,13 +6,13 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/tests"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"
 
 	cleanerfiles "github.com/assurrussa/gouploads/domain/files/usecases/command/cleaner_files"
 	cleanerfilesmocks "github.com/assurrussa/gouploads/domain/files/usecases/command/cleaner_files/mocks"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 type TestUseCaseSuite struct {

@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/assurrussa/goshared/pkg/tests"
-	eventstreammocks "github.com/assurrussa/gowebsocket/eventstream/mocks"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -21,6 +19,8 @@ import (
 	testsmatcher "github.com/assurrussa/gouploads/domain/files/tests/matcher"
 	sendresizefile "github.com/assurrussa/gouploads/domain/files/usecases/command/send_resize_file"
 	sendresizefilemocks "github.com/assurrussa/gouploads/domain/files/usecases/command/send_resize_file/mocks"
+	eventstreammocks "github.com/assurrussa/gouploads/internal/events/mocks"
+	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 const (
@@ -33,7 +33,7 @@ type TestSuite struct {
 	fileRepositoryMock *sendresizefilemocks.MockfileRepository
 	resizeClientMock   *sendresizefilemocks.MockresizeClient
 	sourceResolverMock *sendresizefilemocks.MocksourceURLResolver
-	eventStreamMock    *eventstreammocks.MockEventStream
+	eventStreamMock    *eventstreammocks.MockPublisher
 
 	imagePipeline config.ImagePipelineConfig
 	videoPipeline config.VideoPipelineConfig
@@ -54,7 +54,7 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 		fileRepositoryMock := sendresizefilemocks.NewMockfileRepository(ctrl)
 		resizeClientMock := sendresizefilemocks.NewMockresizeClient(ctrl)
 		sourceResolverMock := sendresizefilemocks.NewMocksourceURLResolver(ctrl)
-		eventStreamMock := eventstreammocks.NewMockEventStream(ctrl)
+		eventStreamMock := eventstreammocks.NewMockPublisher(ctrl)
 		sourceResolverMock.EXPECT().
 			Resolve(gomock.Any(), gomock.Any()).
 			DoAndReturn(func(_ context.Context, source string) (string, error) { return source, nil }).

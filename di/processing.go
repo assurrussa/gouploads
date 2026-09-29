@@ -2,7 +2,6 @@ package di
 
 import (
 	logger "github.com/assurrussa/gologger"
-	inmemeventstream "github.com/assurrussa/gowebsocket/eventstream/inmem"
 	pgsql "github.com/assurrussa/outbox/backends/pgsql/storage"
 	"github.com/assurrussa/outbox/outbox"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/shared/fileurl"
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	eventstream "github.com/assurrussa/gouploads/internal/events"
 )
 
 const KeyFilesUseCaseFinalizeOriginal = "app.files.usecase.finalize_original"
@@ -44,7 +44,7 @@ func provideUseCaseFinalizeOriginal(
 	repo *filerepo.Repo,
 	lg logger.Logger,
 	storage filestorage.Storage,
-	events *inmemeventstream.Service,
+	events eventstream.Publisher,
 ) (*uploadfile.OriginalUseCase, error) {
 	cfg, err := uploadconfig.NormalizeStorageConfig(cfg)
 	if err != nil {

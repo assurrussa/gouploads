@@ -6,16 +6,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/assurrussa/goshared/pkg/filecaller"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	testshelpers "github.com/assurrussa/gouploads/domain/files/tests"
+	"github.com/assurrussa/gouploads/internal/testsupport"
 )
 
 func TestInitDB(t *testing.T) {
 	ctx := context.Background()
-	dbTestPath := filecaller.FindFileDir("testdata", filecaller.CallerCurrentFile())
+	dbTestPath := testsupport.FindFileDir("testdata", testsupport.CallerCurrentFile())
 	pgsql, db, cleanUp := testshelpers.PrepareDB(
 		ctx,
 		t,

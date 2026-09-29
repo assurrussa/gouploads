@@ -1,7 +1,7 @@
 package config
 
 import (
-	"github.com/assurrussa/goshared/pkg/bytesize"
+	"github.com/assurrussa/gouploads/internal/bytesize"
 )
 
 type ParseSize string
