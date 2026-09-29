@@ -126,7 +126,10 @@ func TestStorage_SavePersistAtomicallyReplacesExistingFile(t *testing.T) {
 	input.Reader = strings.NewReader("second")
 	second, err := storage.SavePersist(ctx, input)
 	require.NoError(t, err)
+	require.Equal(t, "media/v1/post/42/file/main.webp", first.RelativePath)
 	require.Equal(t, first.RelativePath, second.RelativePath)
+	_, legacyErr := os.Stat(filepath.Join(root, "uploads", "media", "v1", "post", "42", "file", "main.webp"))
+	require.ErrorIs(t, legacyErr, os.ErrNotExist)
 
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(second.RelativePath)))
 	require.NoError(t, err)

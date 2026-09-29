@@ -436,7 +436,7 @@ func verifyLocalFinalFiles(
 		require.Equal(t, sha256Hex(artifact.body), preset.ChecksumSHA256)
 		require.True(t, strings.HasPrefix(
 			preset.RelativePath,
-			path.Join("uploads", "media/v1", host.ObjectTypeAdmin.String(), "42", file.Slug)+"/",
+			path.Join("media/v1", host.ObjectTypeAdmin.String(), "42", file.Slug)+"/",
 		))
 		requireLocalFileBody(t, runtime.root, preset.RelativePath, artifact.body)
 

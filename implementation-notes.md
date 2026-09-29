@@ -523,3 +523,8 @@
   dependency probe. Published anonymous root resolution remains blocked by
   repository visibility; no reachable vulnerabilities found by govulncheck.
   No tag, consumer migration or production deployment is part of this change.
+
+
+## Local canonical final keys (2026-09-29)
+
+A goadmin original-only PostgreSQL lifecycle probe exposed local `SavePersist` adding the legacy `uploads/` prefix to an already canonical `media/v1` directory. The S3 adapter preserves the supplied canonical key. Local storage now preserves confined `media/v1` keys too; other directories retain legacy prefix handling. The atomic-replace test asserts the returned canonical key, the physical file contents and the absence of an extra prefixed file. No schema or old-file migration is included.

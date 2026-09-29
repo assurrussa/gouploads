@@ -61,7 +61,13 @@ func (s *Storage) SavePersist(ctx context.Context, input filestorage.SaveFileInp
 		return filestorage.StoredFile{}, fmt.Errorf("local storage: dir: %w", err)
 	}
 
-	input.Dir = filestorage.DirPersistPath(relDir)
+	// Canonical portable media keys already include their public namespace.
+	// Retain the legacy uploads prefix for existing non-canonical callers.
+	if relDir == "media/v1" || strings.HasPrefix(relDir, "media/v1/") {
+		input.Dir = relDir
+	} else {
+		input.Dir = filestorage.DirPersistPath(relDir)
+	}
 
 	return s.saveFile(ctx, input, true)
 }
