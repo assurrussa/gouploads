@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	logger "github.com/assurrussa/gologger"
@@ -21,13 +22,13 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/service/tusupload"
 	"github.com/assurrussa/gouploads/domain/files/service/uploadservice"
 	fileshared "github.com/assurrussa/gouploads/domain/files/shared"
+	"github.com/assurrussa/gouploads/internal/filepolicy"
 	"github.com/assurrussa/gouploads/internal/filesanitize"
 	"github.com/assurrussa/gouploads/shared/uploadstrategies"
 )
 
 //go:generate toolsmocks
 
-// TaskUploader exposes upload operations.
 type TaskUploader interface {
 	UploadBatch(ctx context.Context, req uploadservice.BatchRequest) ([]model.File, error)
 	UploadSingle(ctx context.Context, req uploadservice.SingleRequest) (model.File, error)
@@ -36,19 +37,15 @@ type TaskUploader interface {
 	DeleteFile(ctx context.Context, req uploadservice.DeleteRequest) error
 	GetFile(ctx context.Context, fileID int64) (model.File, error)
 }
-
 type FileRepository interface {
 	GetByID(ctx context.Context, id int64) (model.File, error)
 	List(ctx context.Context, filters filerepo.ListFilters) ([]model.File, int, error)
 }
+type (
+	ContextBuilder func(ctx context.Context, metadata map[string]string) (uploadstrategies.UploadContext, error)
+	URLComposer    func(path string) string
+)
 
-// ContextBuilder constructs the agnostic UploadContext from the fiber context (e.g. extracts UserID).
-type ContextBuilder func(ctx context.Context, metadata map[string]string) (uploadstrategies.UploadContext, error)
-
-// URLComposer transforms a raw file path/URL into a full public URL.
-type URLComposer func(path string) string
-
-// Handler is a generic upload handler.
 type Handler struct {
 	taskUploader   TaskUploader
 	fileRepo       FileRepository
@@ -56,411 +53,428 @@ type Handler struct {
 	logger         logger.Logger
 	contextBuilder ContextBuilder
 	urlComposer    URLComposer
+	strategyMu     sync.RWMutex
 	strategies     map[string]uploadstrategies.Strategy
+	policy         HandlerPolicy
 }
 
-// NewHandler creates a new generic upload handler.
+// NewHandler is the compatibility constructor: the empty context uses the
+// default strategy and object authorization remains host-owned. Unknown named
+// contexts are rejected. New integrations should use NewHandlerWithPolicy,
+// whose zero policy denies missing strategies and missing authorization.
 func NewHandler(
 	taskUploader TaskUploader,
 	fileRepo FileRepository,
 	tusStore tusupload.Store,
-	logger logger.Logger,
+	lg logger.Logger,
 	contextBuilder ContextBuilder,
 	urlComposer URLComposer,
 ) *Handler {
+	return NewHandlerWithPolicy(taskUploader,
+		fileRepo,
+		tusStore,
+		lg,
+		contextBuilder,
+		urlComposer,
+		HandlerPolicy{
+			AllowDefaultStrategy: true,
+			TrustRouteGuards:     true,
+		})
+}
+
+func NewHandlerWithPolicy(
+	taskUploader TaskUploader,
+	fileRepo FileRepository,
+	tusStore tusupload.Store,
+	lg logger.Logger,
+	contextBuilder ContextBuilder,
+	urlComposer URLComposer,
+	policy HandlerPolicy,
+) *Handler {
+	if lg == nil {
+		lg = logger.Discard()
+	}
+	if contextBuilder == nil {
+		contextBuilder = func(context.Context, map[string]string) (uploadstrategies.UploadContext, error) {
+			return uploadstrategies.UploadContext{}, errors.New("upload identity is not configured")
+		}
+	}
+	if urlComposer == nil {
+		urlComposer = func(p string) string { return p }
+	}
 	return &Handler{
 		taskUploader:   taskUploader,
 		fileRepo:       fileRepo,
 		tusStore:       tusStore,
-		logger:         logger,
+		logger:         lg,
 		contextBuilder: contextBuilder,
 		urlComposer:    urlComposer,
 		strategies:     make(map[string]uploadstrategies.Strategy),
+		policy:         policy,
 	}
 }
 
-// RegisterStrategy registers a custom upload strategy.
 func (h *Handler) RegisterStrategy(contextName string, strategy uploadstrategies.Strategy) {
-	h.strategies[strings.ToLower(contextName)] = strategy
+	h.strategyMu.Lock()
+	defer h.strategyMu.Unlock()
+	key := normalizedContext(contextName)
+	if strategy == nil {
+		delete(h.strategies, key)
+		return
+	}
+	h.strategies[key] = strategy
 }
 
-// --- Handlers ---
+func (h *Handler) getStrategy(contextName string) uploadstrategies.Strategy {
+	h.strategyMu.RLock()
+	defer h.strategyMu.RUnlock()
+	return h.strategies[normalizedContext(contextName)]
+}
 
 func (h *Handler) TusOptions(c fiber.Ctx) error {
 	setTusHeaders(c)
 	c.Set("Tus-Version", tusupload.Version)
 	c.Set("Tus-Extension", tusupload.Extension)
 	c.Set("Access-Control-Allow-Methods", "OPTIONS, POST, HEAD, PATCH")
-	c.Set("Access-Control-Allow-Headers", strings.Join([]string{
-		"Tus-Resumable",
-		"Upload-Length",
-		"Upload-Offset",
-		"Upload-Metadata",
-		"Content-Type",
-		"Content-Length",
-		"X-CSRF-Token",
-	}, ", "))
-
+	c.Set("Access-Control-Allow-Headers",
+		"Tus-Resumable, Upload-Length, Upload-Offset, Upload-Metadata, Content-Type, Content-Length, X-CSRF-Token")
+	if store, ok := h.tusStore.(interface{ ChunkSize() int64 }); ok {
+		c.Set("Upload-Chunk-Size", strconv.FormatInt(store.ChunkSize(), 10))
+	}
 	return c.SendStatus(http.StatusNoContent)
 }
-
-func (h *Handler) TusCreate(c fiber.Ctx) error {
-	return h.tusCreate(c, false)
-}
-
-func (h *Handler) TusCreateCMS(c fiber.Ctx) error {
-	return h.tusCreate(c, true)
-}
-
+func (h *Handler) TusCreate(c fiber.Ctx) error    { return h.tusCreate(c, false) }
+func (h *Handler) TusCreateCMS(c fiber.Ctx) error { return h.tusCreate(c, true) }
 func (h *Handler) tusCreate(c fiber.Ctx, cmsOnly bool) error {
 	setTusHeaders(c)
-
 	if !isTusResumable(c) {
 		return c.SendStatus(http.StatusPreconditionFailed)
 	}
-
 	if c.Get("Upload-Defer-Length") != "" {
-		return h.jsonError(c, fiber.StatusBadRequest, "deferred length is not supported")
+		return h.jsonError(c, 400, "deferred length is not supported")
 	}
-
-	uploadLength, err := parseTusLength(c.Get("Upload-Length"))
+	length, err := parseTusLength(c.Get("Upload-Length"))
 	if err != nil {
-		return h.jsonError(c, fiber.StatusBadRequest, "invalid upload length")
+		return h.jsonError(c, 400, "invalid upload length")
 	}
-
 	metadata, err := parseTusMetadata(c.Get("Upload-Metadata"))
 	if err != nil {
-		return h.jsonError(c, fiber.StatusBadRequest, "invalid upload metadata")
+		return h.jsonError(c, 400, "invalid upload metadata")
 	}
-
 	filename := strings.TrimSpace(metadataValue(metadata, "filename", "file_name", "fileName"))
 	if filename == "" {
-		return h.jsonError(c, fiber.StatusBadRequest, "filename is required")
+		return h.jsonError(c, 400, "filename is required")
 	}
-
-	// Strategy Check
-	uCtx, err := h.contextBuilder(c, metadata)
+	actor, err := h.contextBuilder(c, metadata)
 	if err != nil {
-		return h.jsonError(c, fiber.StatusUnauthorized, err.Error())
+		return h.jsonError(c, 401, "upload identity is invalid")
 	}
-
-	contextValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "context")))
-
+	if actor.UserID <= 0 && actor.UserUUID.IsZero() && !h.policy.AllowAnonymousTUS {
+		return h.jsonError(c, 401, "upload actor is required")
+	}
+	contextName := normalizedContext(metadataValue(metadata, "context"))
 	var objectType fileshared.FileObjectType
 	var objectID fileshared.FileObjectID
 	if cmsOnly {
-		if contextValue != "cms" {
-			return h.jsonError(c, fiber.StatusBadRequest, "CMS upload context is required")
+		if contextName != "cms" {
+			return h.jsonError(c, 400, "CMS upload context is required")
 		}
-		if h.getStrategy(contextValue) == nil {
-			return h.jsonError(c, fiber.StatusInternalServerError, "CMS upload strategy is not configured")
+		if h.getStrategy(contextName) == nil {
+			return h.jsonError(c, 500, "CMS upload strategy is not configured")
 		}
 	} else {
 		objectType, objectID, err = h.parseTusObject(metadata)
 		if err != nil {
-			return h.jsonError(c, fiber.StatusBadRequest, err.Error())
+			return h.jsonError(c, 400, err.Error())
 		}
 	}
-
-	fileTypeValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "file_type")))
-	fileType := model.GetFileTypeString(fileTypeValue)
-	skipResize := parseBoolFlag(metadataValue(metadata, "skip_resize"))
-
-	resolution, err := h.resolveUploadStrategy(
-		c,
-		uCtx,
+	if err := h.authorize(c, actor, "upload", requestObject(objectType.String(), objectID.Int64())); err != nil {
+		return h.writeRequestError(c, err)
+	}
+	fileTypeValue := normalizedContext(metadataValue(metadata, "file_type"))
+	skip := parseBoolFlag(metadataValue(metadata, "skip_resize"))
+	resolution, err := h.resolveUploadStrategy(c,
+		actor,
 		objectType,
 		objectID,
-		contextValue,
-		fileType,
-		skipResize,
-		resolveUploadStrategyOptions{
-			checkCanUpload: true,
-		},
-	)
+		contextName,
+		model.GetFileTypeString(fileTypeValue),
+		skip,
+		resolveUploadStrategyOptions{checkCanUpload: true})
 	if err != nil {
-		var resolveErr resolveUploadStrategyError
-		if errors.As(err, &resolveErr) && resolveErr.kind == resolveUploadStrategyErrorForbidden {
-			return h.jsonError(c, fiber.StatusForbidden, resolveErr.Error())
-		}
-		h.logger.ErrorContext(c, "failed to resolve upload strategy", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to process upload")
+		return h.writeStrategyError(c, err)
 	}
-
-	config := resolution.config
-
-	if config.MaxFileSize > 0 && uploadLength > config.MaxFileSize {
-		return h.jsonError(c, fiber.StatusRequestEntityTooLarge, "file is too large")
+	if length > resolution.config.MaxFileSize || length > filepolicy.MaxFileSize {
+		return h.jsonError(c, 413, "file is too large")
 	}
-
 	ext := strings.ToLower(filepath.Ext(filename))
-	if !isAllowedExtension(ext, config.AllowedExtensions) {
-		return h.jsonError(c, fiber.StatusBadRequest, "file extension is not allowed")
+	if !isAllowedExtension(ext, resolution.config.AllowedExtensions) {
+		return h.jsonError(c, 400, "file extension is not allowed")
 	}
-
-	deleteID := parseInt64(metadataValue(metadata, "replace_file_id", "deleteId", "delete_id"))
-
-	fileName := uuid.New().String() + ext
-	sessionMetadata := map[string]string{
-		"file_name":       fileName,
-		"filename":        filename,
-		"context":         contextValue,
-		"file_type":       fileTypeValue,
-		"skip_resize":     strconv.FormatBool(skipResize),
-		"replace_file_id": strconv.FormatInt(deleteID, 10),
+	name := uuid.NewString() + ext
+	sessionMeta := map[string]string{
+		"file_name":   name,
+		"filename":    filename,
+		"context":     contextName,
+		"file_type":   fileTypeValue,
+		"skip_resize": strconv.FormatBool(skip),
+		"replace_file_id": strconv.FormatInt(parseInt64(metadataValue(metadata,
+			"replace_file_id",
+			"deleteId",
+			"delete_id")),
+			10),
 	}
 	if !cmsOnly {
-		sessionMetadata["entity_type"] = objectType.String()
-		sessionMetadata["entity_id"] = objectID.String()
+		sessionMeta["entity_type"] = objectType.String()
+		sessionMeta["entity_id"] = objectID.String()
 	}
-	session, err := h.tusStore.Create(c, tusupload.CreateRequest{
-		UploadLength: uploadLength,
-		OriginalName: filename,
-		FileName:     fileName,
-		Metadata:     sessionMetadata,
-		OwnerID:      uCtx.UserID,
-		OwnerUUID:    uCtx.UserUUID,
-	})
+	session, err := h.tusStore.Create(c,
+		tusupload.CreateRequest{
+			UploadLength: length,
+			OriginalName: filename,
+			FileName:     name,
+			Metadata:     sessionMeta,
+			OwnerID:      actor.UserID,
+			OwnerUUID:    actor.UserUUID,
+		})
 	if err != nil {
-		h.logger.ErrorContext(c, "failed to create tus upload", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to create upload")
+		h.logger.ErrorContext(c, "create tus upload", logger.Error(err))
+		return h.jsonError(c, 500, "failed to create upload")
 	}
-
-	// Derive the resumable URL from the route that handled this request. One
-	// handler can be mounted on generic and CMS-only prefixes concurrently.
-	location := strings.TrimRight(c.Path(), "/") + "/" + session.ID
-	c.Set("Location", location)
-
+	c.Set("Location", strings.TrimRight(c.Path(), "/")+"/"+session.ID)
+	if store, ok := h.tusStore.(interface{ ChunkSize() int64 }); ok {
+		c.Set("Upload-Chunk-Size", strconv.FormatInt(store.ChunkSize(), 10))
+	}
 	return c.SendStatus(http.StatusCreated)
 }
 
 func (h *Handler) TusHead(c fiber.Ctx) error {
 	setTusHeaders(c)
-
 	if !isTusResumable(c) {
 		return c.SendStatus(http.StatusPreconditionFailed)
 	}
-
-	session, err := h.tusStore.Get(c, c.Params("id"))
+	session, err := h.loadTus(c)
 	if err != nil {
-		if errors.Is(err, tusupload.ErrNotFound) {
-			return c.SendStatus(http.StatusNotFound)
-		}
-		h.logger.ErrorContext(c, "failed to load tus upload", logger.Error(err))
-		return c.SendStatus(http.StatusInternalServerError)
+		return h.writeRequestError(c, err)
 	}
-
-	uCtx, _ := h.contextBuilder(c, nil)
-	if !h.isTusOwner(uCtx, session) {
+	actor, err := h.contextBuilder(c, session.Metadata)
+	if err != nil {
+		return h.jsonError(c, 401, "upload identity is invalid")
+	}
+	if !h.isTusOwner(actor, session) {
 		return c.SendStatus(http.StatusForbidden)
 	}
-
+	if err := h.authorize(c, actor, "resume", tusObject(session)); err != nil {
+		return h.writeRequestError(c, err)
+	}
 	c.Set("Upload-Offset", strconv.FormatInt(session.Offset, 10))
 	c.Set("Upload-Length", strconv.FormatInt(session.UploadLength, 10))
-
 	return c.SendStatus(http.StatusOK)
 }
 
-func (h *Handler) TusPatch(c fiber.Ctx) error {
-	return h.tusPatch(c, false)
+func (h *Handler) loadTus(c fiber.Ctx) (tusupload.Session, error) {
+	id := c.Params("id")
+	parsed, err := uuid.Parse(id)
+	if err != nil || parsed == uuid.Nil || parsed.String() != id {
+		return tusupload.Session{}, reject(404, "upload not found")
+	}
+	session, err := h.tusStore.Get(c, id)
+	if err != nil {
+		if errors.Is(err, tusupload.ErrNotFound) {
+			return session, reject(404, "upload not found")
+		}
+		h.logger.ErrorContext(c, "load tus upload", logger.Error(err))
+		return session, reject(500, "failed to load upload")
+	}
+	return session, nil
 }
 
-func (h *Handler) TusPatchCMS(c fiber.Ctx) error {
-	return h.tusPatch(c, true)
+func tusObject(session tusupload.Session) model.File {
+	return requestObject(metadataValue(session.Metadata,
+		"entity_type",
+		"object_type",
+		"objectType"),
+		parseInt64(metadataValue(session.Metadata,
+			"entity_id",
+			"object_id",
+			"objectId")))
 }
-
+func (h *Handler) TusPatch(c fiber.Ctx) error    { return h.tusPatch(c, false) }
+func (h *Handler) TusPatchCMS(c fiber.Ctx) error { return h.tusPatch(c, true) }
 func (h *Handler) tusPatch(c fiber.Ctx, cmsOnly bool) error {
 	setTusHeaders(c)
-
 	if !isTusResumable(c) {
 		return c.SendStatus(http.StatusPreconditionFailed)
 	}
-
 	if !strings.EqualFold(strings.TrimSpace(c.Get("Content-Type")), tusupload.ContentType) {
 		return c.SendStatus(http.StatusUnsupportedMediaType)
 	}
-
 	offset, err := parseTusOffset(c.Get("Upload-Offset"))
 	if err != nil {
-		return h.jsonError(c, fiber.StatusBadRequest, "invalid upload offset")
+		return h.jsonError(c, 400, "invalid upload offset")
 	}
-
-	session, err := h.tusStore.Get(c, c.Params("id"))
+	session, err := h.loadTus(c)
 	if err != nil {
-		if errors.Is(err, tusupload.ErrNotFound) {
-			return c.SendStatus(http.StatusNotFound)
-		}
-		h.logger.ErrorContext(c, "failed to load tus upload", logger.Error(err))
-		return c.SendStatus(http.StatusInternalServerError)
+		return h.writeRequestError(c, err)
 	}
-
-	uCtx, _ := h.contextBuilder(c, nil)
-	if !h.isTusOwner(uCtx, session) {
+	actor, err := h.contextBuilder(c, session.Metadata)
+	if err != nil {
+		return h.jsonError(c, 401, "upload identity is invalid")
+	}
+	if !h.isTusOwner(actor, session) {
 		return c.SendStatus(http.StatusForbidden)
 	}
-
+	if err := h.authorize(c, actor, "resume", tusObject(session)); err != nil {
+		return h.writeRequestError(c, err)
+	}
 	if offset != session.Offset {
 		c.Set("Upload-Offset", strconv.FormatInt(session.Offset, 10))
 		return c.SendStatus(http.StatusConflict)
 	}
-
 	body := c.Body()
-	if session.UploadLength >= 0 && offset+int64(len(body)) > session.UploadLength {
+	if offset > session.UploadLength || int64(len(body)) > session.UploadLength-offset {
 		c.Set("Upload-Offset", strconv.FormatInt(session.Offset, 10))
 		return c.SendStatus(http.StatusRequestEntityTooLarge)
 	}
-
+	// An empty PATCH is a protocol no-op and does not need MIME detection.
+	if len(body) == 0 {
+		c.Set("Upload-Offset", strconv.FormatInt(offset, 10))
+		return c.SendStatus(http.StatusNoContent)
+	}
 	mimeType, err := h.resolveTusPatchMimeType(c, session, body, offset, cmsOnly)
 	if err != nil {
-		return err
+		return h.writeRequestError(c, err)
 	}
-
 	newOffset, err := h.tusStore.Append(c, session.ID, offset, body, mimeType)
 	if err != nil {
 		return h.handleTusAppendError(c, session, err)
 	}
-
 	c.Set("Upload-Offset", strconv.FormatInt(newOffset, 10))
 	return c.SendStatus(http.StatusNoContent)
 }
 
 func (h *Handler) handleTusAppendError(c fiber.Ctx, session tusupload.Session, err error) error {
 	switch {
-	case errors.Is(err, tusupload.ErrOffsetMismatch),
-		errors.Is(err, tusupload.ErrUploadBusy),
-		errors.Is(err, tusupload.ErrFenceLost):
-		currentOffset := session.Offset
+	case errors.Is(err,
+		tusupload.ErrOffsetMismatch),
+		errors.Is(err,
+			tusupload.ErrUploadBusy),
+		errors.Is(err,
+			tusupload.ErrFenceLost),
+		errors.Is(err,
+			tusupload.ErrUploadFinalized):
+		offset := session.Offset
 		if current, getErr := h.tusStore.Get(c, session.ID); getErr == nil {
-			currentOffset = current.Offset
+			offset = current.Offset
 		}
-		c.Set("Upload-Offset", strconv.FormatInt(currentOffset, 10))
+		c.Set("Upload-Offset", strconv.FormatInt(offset, 10))
 		return c.SendStatus(http.StatusConflict)
+	case errors.Is(err, tusupload.ErrNotFound):
+		return c.SendStatus(http.StatusNotFound)
 	case errors.Is(err, tusupload.ErrLengthExceeded):
 		c.Set("Upload-Offset", strconv.FormatInt(session.Offset, 10))
 		return c.SendStatus(http.StatusRequestEntityTooLarge)
 	case errors.Is(err, tusupload.ErrChunkTooSmall):
-		return h.jsonError(c, fiber.StatusBadRequest, "chunk size too small")
+		return h.jsonError(c, 400, "chunk size too small")
 	case errors.Is(err, tusupload.ErrChunkSize):
-		return h.jsonError(c, fiber.StatusBadRequest, "intermediate chunk size must match the server part size")
+		return h.jsonError(c, 400, "chunk size must match the advertised server part size, except for the last chunk")
 	default:
-		h.logger.ErrorContext(c, "failed to append tus upload", logger.Error(err))
+		h.logger.ErrorContext(c, "append tus upload", logger.Error(err))
 		return c.SendStatus(http.StatusInternalServerError)
 	}
 }
 
 func (h *Handler) TusComplete(c fiber.Ctx) error {
 	setTusHeaders(c)
-
 	if !isTusResumable(c) {
 		return c.SendStatus(http.StatusPreconditionFailed)
 	}
-
-	session, err := h.tusStore.Get(c, c.Params("id"))
+	session, err := h.loadTus(c)
 	if err != nil {
-		if errors.Is(err, tusupload.ErrNotFound) {
-			return c.SendStatus(http.StatusNotFound)
-		}
-		h.logger.ErrorContext(c, "failed to load tus upload", logger.Error(err))
-		return c.SendStatus(http.StatusInternalServerError)
+		return h.writeRequestError(c, err)
 	}
-
-	uCtx, err := h.contextBuilder(c, session.Metadata)
+	actor, err := h.contextBuilder(c, session.Metadata)
 	if err != nil {
-		return h.jsonError(c, fiber.StatusUnauthorized, err.Error())
+		return h.jsonError(c, 401, "upload identity is invalid")
 	}
-
-	if !h.isTusOwner(uCtx, session) {
+	if !h.isTusOwner(actor, session) {
 		return c.SendStatus(http.StatusForbidden)
 	}
-
-	if session.UploadLength >= 0 && session.Offset < session.UploadLength {
-		return h.jsonError(c, fiber.StatusConflict, "upload is not complete")
+	if session.Offset != session.UploadLength {
+		return h.jsonError(c, 409, "upload is not complete")
 	}
-
-	metadata := session.Metadata
-	objectType, objectID, err := h.parseTusObject(metadata)
+	objectType, objectID, err := h.parseTusObject(session.Metadata)
 	if err != nil {
-		return h.jsonError(c, fiber.StatusBadRequest, err.Error())
+		return h.jsonError(c, 400, err.Error())
 	}
-
-	contextValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "context")))
-	fileType := model.GetFileTypeString(strings.ToLower(strings.TrimSpace(metadataValue(metadata, "file_type"))))
-	skipResize := parseBoolFlag(metadataValue(metadata, "skip_resize"))
-	deletedID := parseInt64(metadataValue(metadata, "replace_file_id", "deleteId", "delete_id"))
-
-	resolution, err := h.resolveUploadStrategy(
-		c,
-		uCtx,
+	if err := h.authorize(c, actor, "upload", requestObject(objectType.String(), objectID.Int64())); err != nil {
+		return h.writeRequestError(c, err)
+	}
+	resolution, err := h.resolveUploadStrategy(c,
+		actor,
 		objectType,
 		objectID,
-		contextValue,
-		fileType,
-		skipResize,
+		normalizedContext(metadataValue(session.Metadata,
+			"context")),
+		model.GetFileTypeString(normalizedContext(metadataValue(session.Metadata,
+			"file_type"))),
+		parseBoolFlag(metadataValue(session.Metadata,
+			"skip_resize")),
 		resolveUploadStrategyOptions{
+			checkCanUpload:   true,
 			includeAfterJobs: true,
-		},
-	)
+		})
 	if err != nil {
-		var resolveErr resolveUploadStrategyError
-		if errors.As(err, &resolveErr) {
-			if resolveErr.kind == resolveUploadStrategyErrorForbidden {
-				return h.jsonError(c, fiber.StatusForbidden, resolveErr.Error())
-			}
-			h.logger.ErrorContext(c, "failed to get strategy after jobs", logger.Error(err))
-			return h.jsonError(c, fiber.StatusInternalServerError, "failed to process upload")
-		}
-		h.logger.ErrorContext(c, "failed to resolve upload strategy", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to process upload")
+		return h.writeStrategyError(c, err)
 	}
-
-	completeResult, err := h.tusStore.Complete(c, session.ID)
+	managerID, userID, err := h.actorIDs(c, actor)
 	if err != nil {
-		if errors.Is(err, tusupload.ErrOffsetMismatch) {
-			return h.jsonError(c, fiber.StatusConflict, "upload is not complete")
-		}
-		if errors.Is(err, tusupload.ErrUploadBusy) || errors.Is(err, tusupload.ErrFenceLost) {
-			return h.jsonError(c, fiber.StatusConflict, "upload finalization is already in progress")
-		}
-		h.logger.ErrorContext(c, "failed to finalize tus upload", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to finalize upload")
+		return h.writeRequestError(c, err)
 	}
-
+	complete, err := h.tusStore.Complete(c, session.ID)
+	if err != nil {
+		if errors.Is(err,
+			tusupload.ErrOffsetMismatch) || errors.Is(err,
+			tusupload.ErrUploadBusy) || errors.Is(err,
+			tusupload.ErrFenceLost) {
+			return h.jsonError(c, 409, "upload finalization is not ready")
+		}
+		return h.jsonError(c, 500, "failed to finalize upload")
+	}
+	if complete.FinalizationKey == "" {
+		if complete.Reader != nil {
+			_ = complete.Reader.Close()
+		}
+		return h.jsonError(c, 500, "TUS store must provide a durable finalization key")
+	}
 	req := uploadservice.ReaderRequest{
-		UploaderUUID: uCtx.UserUUID,
-		ManagerID:    uCtx.UserID, // Using ID as ManagerID (admin)
-		UserID:       0,           // Assuming user upload is 0 if admin
+		UploaderUUID: actor.UserUUID,
+		ManagerID:    managerID,
+		UserID:       userID,
 		ObjectType:   objectType,
 		ObjectID:     objectID,
-		DeletedID:    fileshared.FileObjectID(deletedID),
-		Config:       resolution.config,
+		DeletedID: fileshared.FileObjectID(parseInt64(metadataValue(session.Metadata,
+			"replace_file_id",
+			"deleteId",
+			"delete_id"))),
+		AfterJobs:       resolution.afterJobs,
+		Config:          resolution.config,
+		FinalizationKey: complete.FinalizationKey,
 	}
-	req.AfterJobs = append(req.AfterJobs, resolution.afterJobs...)
-
-	fileModel, err := h.uploadCompletedTus(c, req, completeResult)
+	file, err := h.uploadCompletedTus(c, req, complete)
 	if err != nil {
-		var clientErr uploadservice.ClientError
-		if errors.As(err, &clientErr) {
-			return h.jsonError(c, fiber.StatusBadRequest, clientErr.Message)
+		if errors.Is(err, model.ErrFinalizationGone) {
+			return h.jsonError(c, 410, "completed upload is no longer available")
 		}
-
-		var valErr uploadservice.ValidationError
-		if errors.As(err, &valErr) {
-			return h.jsonValidationError(c, valErr.Errors)
+		if errors.Is(err, model.ErrFinalizationConflict) {
+			return h.jsonError(c, 409, "upload finalization conflicts with its original binding")
 		}
-
-		h.logger.ErrorContext(c, "failed to finalize tus upload", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to enqueue upload task")
+		h.logger.ErrorContext(c, "finalize tus upload", logger.Error(err))
+		return h.writeRequestError(c, err)
 	}
-
-	response := uploadFileResponse{
-		File: h.mapFile(fileModel),
-	}
-
-	if err := h.tusStore.Delete(c, session.ID); err != nil && !errors.Is(err, tusupload.ErrNotFound) {
-		h.logger.WarnContext(c, "failed to cleanup tus upload", logger.Error(err))
-	}
-
-	return c.Status(http.StatusAccepted).JSON(response)
+	// Keep the ready protocol session until its TTL: retries must return the same
+	// FileID. S3 cleanup consults the durable handoff before deleting any source.
+	return c.Status(http.StatusAccepted).JSON(uploadFileResponse{File: h.mapFile(file)})
 }
 
 func (h *Handler) uploadCompletedTus(
@@ -470,21 +484,18 @@ func (h *Handler) uploadCompletedTus(
 ) (model.File, error) {
 	if complete.Reader != nil {
 		defer complete.Reader.Close()
-
-		return h.taskUploader.UploadReader(c, req, uploadservice.ReaderUploadInput{
-			OriginalName: complete.OriginalName,
-			Size:         complete.Size,
-			Reader:       complete.Reader,
-		})
+		return h.taskUploader.UploadReader(c,
+			req,
+			uploadservice.ReaderUploadInput{
+				OriginalName: complete.OriginalName,
+				Size:         complete.Size,
+				Reader:       complete.Reader,
+			})
 	}
-
 	uploaded, err := uploadedFileFromCompleteResult(complete)
 	if err != nil {
-		h.logger.ErrorContext(c, "failed to map completed tus upload", logger.Error(err))
-
 		return model.File{}, err
 	}
-
 	return h.taskUploader.UploadStored(c, req, uploaded)
 }
 
@@ -493,7 +504,6 @@ func uploadedFileFromCompleteResult(complete tusupload.CompleteResult) (uploadse
 	if err != nil {
 		return uploadservice.UploadedFile{}, fmt.Errorf("normalize completed tus path: %w", err)
 	}
-
 	return uploadservice.UploadedFile{
 		OriginalName: complete.OriginalName,
 		FileName:     path.Base(storagePath),
@@ -510,335 +520,278 @@ func uploadedFileFromCompleteResult(complete tusupload.CompleteResult) (uploadse
 func (h *Handler) Upload(c fiber.Ctx) error {
 	objectType, objectID, err := h.getObjectRequest(c)
 	if err != nil {
-		return h.jsonError(c, fiber.StatusBadRequest, "entity_type is required")
+		return h.jsonError(c, 400, "entity_type is required")
 	}
-
-	deletedID := h.getDeletedIDRequest(c)
-	contextValue := strings.ToLower(strings.TrimSpace(c.FormValue("context")))
-	fileType := model.GetFileTypeString(strings.ToLower(strings.TrimSpace(c.FormValue("file_type"))))
-	skipResizer := parseBoolFlag(c.FormValue("skip_resize"))
-
+	if objectID <= 0 {
+		return h.jsonError(c, 400, "entity_id is required")
+	}
+	contextName := normalizedContext(c.FormValue("context"))
+	fileType := model.GetFileTypeString(normalizedContext(c.FormValue("file_type")))
 	metadata := map[string]string{
 		"entity_type": objectType.String(),
 		"entity_id":   objectID.String(),
-		"context":     contextValue,
+		"context":     contextName,
 		"file_type":   c.FormValue("file_type"),
 	}
-
-	uCtx, err := h.contextBuilder(c, metadata)
+	actor, err := h.contextBuilder(c, metadata)
 	if err != nil {
-		return h.jsonError(c, fiber.StatusUnauthorized, err.Error())
+		return h.jsonError(c, 401, "upload identity is invalid")
 	}
-
-	if objectID <= 0 {
-		return h.jsonError(c, fiber.StatusBadRequest, "entity_id is required")
+	if err := h.authorize(c, actor, "upload", requestObject(objectType.String(), objectID.Int64())); err != nil {
+		return h.writeRequestError(c, err)
 	}
-
-	resolution, err := h.resolveUploadStrategy(
-		c,
-		uCtx,
+	resolution, err := h.resolveUploadStrategy(c,
+		actor,
 		objectType,
 		objectID,
-		contextValue,
+		contextName,
 		fileType,
-		skipResizer,
+		parseBoolFlag(c.FormValue("skip_resize")),
 		resolveUploadStrategyOptions{
 			checkCanUpload:   true,
 			includeAfterJobs: true,
-		},
-	)
+		})
 	if err != nil {
-		var resolveErr resolveUploadStrategyError
-		if errors.As(err, &resolveErr) {
-			if resolveErr.kind == resolveUploadStrategyErrorForbidden {
-				return h.jsonError(c, fiber.StatusForbidden, resolveErr.Error())
-			}
-			h.logger.ErrorContext(c, "failed to get strategy after jobs", logger.Error(err))
-			return h.jsonError(c, fiber.StatusInternalServerError, "failed to process upload")
-		}
-		h.logger.ErrorContext(c, "failed to resolve upload strategy", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to process upload")
+		return h.writeStrategyError(c, err)
 	}
-
-	singleReq := uploadservice.SingleRequest{
-		UploaderUUID: uCtx.UserUUID,
-		ManagerID:    uCtx.UserID,
-		UserID:       0,
+	managerID, userID, err := h.actorIDs(c, actor)
+	if err != nil {
+		return h.writeRequestError(c, err)
+	}
+	req := uploadservice.SingleRequest{
+		UploaderUUID: actor.UserUUID,
+		ManagerID:    managerID,
+		UserID:       userID,
 		ObjectType:   objectType,
 		ObjectID:     objectID,
-		DeletedID:    fileshared.FileObjectID(deletedID),
-		Config:       resolution.config,
+		DeletedID:    fileshared.FileObjectID(h.getDeletedIDRequest(c)),
 		AfterJobs:    resolution.afterJobs,
+		Config:       resolution.config,
 	}
-
-	if fileHeader, err := c.FormFile("file"); err == nil && fileHeader != nil {
-		singleReq.FileHeader = fileHeader
-		return h.uploadSingleFile(c, singleReq)
+	if header, getErr := c.FormFile("file"); getErr == nil && header != nil {
+		req.FileHeader = header
+		return h.uploadSingleFile(c, req)
 	}
-
 	form, err := c.MultipartForm()
 	if err != nil {
-		return h.jsonErrorWithDetail(c, fiber.StatusBadRequest, "invalid multipart payload", err)
+		return h.jsonErrorWithDetail(c, 400, "invalid multipart payload", err)
 	}
-
-	fileHeaders := form.File["files"]
-	if len(fileHeaders) == 0 {
-		return h.jsonError(c, fiber.StatusBadRequest, "file is required")
+	headers := form.File["files"]
+	if len(headers) == 0 {
+		return h.jsonError(c, 400, "file is required")
 	}
-
-	batchReq := uploadservice.BatchRequest{
-		UploaderUUID: uCtx.UserUUID,
-		ManagerID:    uCtx.UserID,
-		UserID:       0,
-		FileHeaders:  fileHeaders,
-		ObjectType:   objectType,
-		ObjectID:     objectID,
-		DeletedID:    fileshared.FileObjectID(deletedID),
-		Config:       resolution.config,
-		AfterJobs:    resolution.afterJobs,
-	}
-
-	files, err := h.taskUploader.UploadBatch(c, batchReq)
+	files, err := h.taskUploader.UploadBatch(c,
+		uploadservice.BatchRequest{
+			UploaderUUID: req.UploaderUUID,
+			ManagerID:    req.ManagerID,
+			UserID:       req.UserID,
+			FileHeaders:  headers,
+			ObjectType:   req.ObjectType,
+			ObjectID:     req.ObjectID,
+			DeletedID:    req.DeletedID,
+			AfterJobs:    req.AfterJobs,
+			Config:       req.Config,
+		})
 	if err != nil {
-		switch {
-		case errors.Is(err, uploadservice.ErrNoFiles):
-			return h.jsonError(c, fiber.StatusBadRequest, "file is required")
-		default:
-			var valErr uploadservice.ValidationError
-			if errors.As(err, &valErr) {
-				return h.jsonValidationError(c, valErr.Errors)
-			}
-
-			h.logger.ErrorContext(c, "failed to upload batch", logger.Error(err))
-			return h.jsonError(c, fiber.StatusInternalServerError, "failed to enqueue upload task")
+		var batchErr *uploadservice.BatchError
+		if errors.As(err, &batchErr) && len(files) > 0 {
+			// Accepted files must remain visible to callers even when a later item
+			// fails. The successful prefix has already been committed to the outbox.
+			return c.Status(http.StatusMultiStatus).JSON(uploadListResponse{
+				Files:       h.mapFiles(files),
+				FailedIndex: &batchErr.FailedIndex,
+				Error:       publicUploadError(batchErr.Err),
+			})
 		}
+		if errors.Is(err, uploadservice.ErrNoFiles) {
+			return h.jsonError(c, 400, "file is required")
+		}
+		return h.writeRequestError(c, err)
 	}
+	return c.Status(http.StatusAccepted).JSON(uploadListResponse{Files: h.mapFiles(files)})
+}
 
-	response := uploadListResponse{
-		Files: h.mapFiles(files),
+func publicUploadError(err error) string {
+	var clientErr uploadservice.ClientError
+	if errors.As(err, &clientErr) {
+		return clientErr.Message
 	}
-
-	return c.Status(http.StatusAccepted).JSON(response)
+	return "file was not accepted"
 }
 
 func (h *Handler) uploadSingleFile(c fiber.Ctx, req uploadservice.SingleRequest) error {
-	fileModel, err := h.taskUploader.UploadSingle(c, req)
+	file, err := h.taskUploader.UploadSingle(c, req)
 	if err != nil {
-		var clientErr uploadservice.ClientError
-		if errors.As(err, &clientErr) {
-			return h.jsonError(c, fiber.StatusBadRequest, clientErr.Message)
-		}
-
-		var valErr uploadservice.ValidationError
-		if errors.As(err, &valErr) {
-			return h.jsonValidationError(c, valErr.Errors)
-		}
-
-		h.logger.ErrorContext(c, "failed to upload file", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to enqueue upload task")
+		h.logger.ErrorContext(c, "upload file", logger.Error(err))
+		return h.writeRequestError(c, err)
 	}
-
-	response := uploadFileResponse{
-		File: h.mapFile(fileModel),
-	}
-
-	return c.Status(http.StatusAccepted).JSON(response)
+	return c.Status(http.StatusAccepted).JSON(uploadFileResponse{File: h.mapFile(file)})
 }
 
-// ListFiles returns files linked to entity.
 func (h *Handler) ListFiles(c fiber.Ctx) error {
 	objectType := fileshared.FileObjectType(c.Query("entity_type"))
-	if err := objectType.Validate(); err != nil {
-		return h.jsonError(c, fiber.StatusBadRequest, "entity_type is required")
+	if objectType.Validate() != nil {
+		return h.jsonError(c, 400, "entity_type is required")
 	}
-
-	entityID, err := strconv.ParseInt(c.Query("entity_id"), 10, 64)
-	if err != nil || entityID <= 0 {
-		return h.jsonError(c, fiber.StatusBadRequest, "entity_id is required")
+	objectID, err := strconv.ParseInt(c.Query("entity_id"), 10, 64)
+	if err != nil || objectID <= 0 {
+		return h.jsonError(c, 400, "entity_id is required")
 	}
-
-	limit := int64(50)
-	if v := c.Query("limit"); v != "" {
-		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed > 0 {
-			limit = parsed
+	actor, err := h.contextBuilder(c,
+		map[string]string{
+			"entity_type": objectType.String(),
+			"entity_id": strconv.FormatInt(objectID,
+				10),
+		})
+	if err != nil {
+		return h.jsonError(c, 401, "upload identity is invalid")
+	}
+	if err := h.authorize(c, actor, "list", requestObject(objectType.String(), objectID)); err != nil {
+		return h.writeRequestError(c, err)
+	}
+	limit, offset := 50, 0
+	if raw := c.Query("limit"); raw != "" {
+		value, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || value <= 0 {
+			return h.jsonError(c, 400, "invalid limit")
 		}
+		limit = min(value, filerepo.MaxListLimit)
 	}
-
-	offset := int64(0)
-	if v := c.Query("offset"); v != "" {
-		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed >= 0 {
-			offset = parsed
+	if raw := c.Query("offset"); raw != "" {
+		value, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || value < 0 {
+			return h.jsonError(c, 400, "invalid offset")
 		}
+		offset = value
 	}
-
 	filters := filerepo.ListFilters{
 		ObjectType: objectType.String(),
-		ObjectID:   entityID,
-		Limit:      int(limit),
-		Offset:     int(offset),
+		ObjectID:   objectID,
+		Limit:      limit,
+		Offset:     offset,
+		SkipTotal:  true,
 	}
-
-	if ft := strings.ToLower(c.Query("file_type")); ft != "" {
-		filters.FileType = model.GetFileTypeString(ft).String()
+	if raw := normalizedContext(c.Query("file_type")); raw != "" {
+		if model.GetFileTypeString(raw) == model.FileTypeUnknown {
+			return h.jsonError(c, 400, "invalid file type")
+		}
+		filters.FileType = raw
 	}
-
 	files, _, err := h.fileRepo.List(c, filters)
 	if err != nil {
-		h.logger.ErrorContext(c, "failed to list files", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to list files")
+		h.logger.ErrorContext(c, "list files", logger.Error(err))
+		return h.jsonError(c, 500, "failed to list files")
 	}
-
-	items := make([]fileResponse, 0, len(files))
-	for i := range files {
-		items = append(items, *h.mapFile(files[i]))
+	items := h.mapFiles(files)
+	if items == nil {
+		items = []fileResponse{}
 	}
-
-	return c.JSON(listResponse{
-		Files:    items,
-		EntityID: entityID,
-	})
+	return c.JSON(listResponse{Files: items, EntityID: objectID})
 }
 
-// GetFile returns upload task status or file details.
 func (h *Handler) GetFile(c fiber.Ctx) error {
-	fileIDStr := c.Params("id")
-	fileID, err := strconv.ParseInt(fileIDStr, 10, 64)
+	fileID, err := strconv.ParseInt(c.Params("id"), 10, 64)
 	if err != nil || fileID <= 0 {
-		return h.jsonError(c, fiber.StatusBadRequest, "invalid task id")
+		return h.jsonError(c, 400, "invalid task id")
 	}
-
-	fileModel, err := h.taskUploader.GetFile(c, fileID)
+	actor, err := h.contextBuilder(c, nil)
 	if err != nil {
-		if errors.Is(err, uploadservice.ErrTaskNotFound) {
-			return h.jsonError(c, fiber.StatusNotFound, "task not found")
+		return h.jsonError(c, 401, "upload identity is invalid")
+	}
+	file, err := h.taskUploader.GetFile(c, fileID)
+	if err != nil {
+		if errors.Is(err, uploadservice.ErrTaskNotFound) || errors.Is(err, uploadservice.ErrFileNotFound) {
+			return h.jsonError(c, 404, "task not found")
 		}
-
-		h.logger.ErrorContext(c, "failed to fetch upload task", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to load task")
+		return h.jsonError(c, 500, "failed to load task")
 	}
-
-	response := uploadFileResponse{
-		File: h.mapFile(fileModel),
+	if err := h.authorize(c, actor, "read", file); err != nil {
+		return h.writeRequestError(c, err)
 	}
-
-	return c.JSON(response)
+	return c.JSON(uploadFileResponse{File: h.mapFile(file)})
 }
 
-// DeleteFile deletes a file.
 func (h *Handler) DeleteFile(c fiber.Ctx) error {
 	fileID, err := h.parseFileID(c)
 	if err != nil {
-		return h.jsonError(c, fiber.StatusBadRequest, err.Error())
+		return h.jsonError(c, 400, err.Error())
 	}
-
 	if !h.isConfirmed(c) {
-		return h.jsonError(c, fiber.StatusBadRequest, "confirmation required")
+		return h.jsonError(c, 400, "confirmation required")
 	}
-
+	actor, err := h.contextBuilder(c, nil)
+	if err != nil {
+		return h.jsonError(c, 401, "upload identity is invalid")
+	}
 	file, err := h.fileRepo.GetByID(c, fileID)
 	if err != nil {
-		h.logger.ErrorContext(c, "failed to load file", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to load file")
+		return h.jsonError(c, 500, "failed to load file")
 	}
 	if file.ID == 0 {
-		return h.jsonError(c, fiber.StatusNotFound, "file not found")
+		return h.jsonError(c, 404, "file not found")
 	}
-
-	// Context might be needed for permission check or user tracking
-	uCtx, err := h.contextBuilder(c, nil)
-	if err != nil {
-		return h.jsonError(c, fiber.StatusUnauthorized, err.Error())
+	if err := h.authorize(c, actor, "delete", file); err != nil {
+		return h.writeRequestError(c, err)
 	}
-
-	if err := h.taskUploader.DeleteFile(c, uploadservice.DeleteRequest{
-		UserRequestID: uCtx.UserUUID,
-		FileID:        fileID,
-	}); err != nil {
-		h.logger.ErrorContext(c, "failed to enqueue delete", logger.Error(err))
-		return h.jsonError(c, fiber.StatusInternalServerError, "failed to enqueue delete task")
+	if err := h.taskUploader.DeleteFile(c, uploadservice.DeleteRequest{UserRequestID: actor.UserUUID, FileID: fileID}); err != nil {
+		h.logger.ErrorContext(c, "delete file", logger.Error(err))
+		return h.jsonError(c, 500, "failed to enqueue delete task")
 	}
-
-	return c.Status(http.StatusAccepted).JSON(deleteResponse{
-		Status:   deleteStatusPending,
-		ID:       file.ID,
-		EntityID: file.ObjectID.Int64(),
-	})
+	return c.Status(http.StatusAccepted).JSON(deleteResponse{Status: deleteStatusPending, ID: file.ID, EntityID: fileObjectID(file)})
 }
-
-func (h *Handler) getStrategy(contextName string) uploadstrategies.Strategy {
-	if h.strategies == nil {
-		return nil
-	}
-	return h.strategies[strings.ToLower(contextName)]
-}
-
-// Helpers
 
 func setTusHeaders(c fiber.Ctx) {
 	c.Set("Tus-Resumable", tusupload.Version)
-	c.Set("Access-Control-Expose-Headers", tusupload.ExposeHeaders)
+	c.Set("Access-Control-Expose-Headers", tusupload.ExposeHeaders+", Upload-Chunk-Size")
+	c.Set("Cache-Control", "no-store")
 }
 
 func isTusResumable(c fiber.Ctx) bool {
 	return strings.TrimSpace(c.Get("Tus-Resumable")) == tusupload.Version
 }
 
-func (h *Handler) isTusOwner(uCtx uploadstrategies.UploadContext, session tusupload.Session) bool {
-	return session.OwnerID == 0 || session.OwnerID == uCtx.UserID
+func (h *Handler) isTusOwner(actor uploadstrategies.UploadContext, session tusupload.Session) bool {
+	if !session.OwnerUUID.IsZero() {
+		return !actor.UserUUID.IsZero() && session.OwnerUUID == actor.UserUUID
+	}
+	if session.OwnerID > 0 {
+		return actor.UserID > 0 && session.OwnerID == actor.UserID
+	}
+	return h.policy.AllowAnonymousTUS
 }
 
 func (h *Handler) parseFileID(c fiber.Ctx) (int64, error) {
-	if idStr := c.Params("id"); idStr != "" {
-		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
-			if id > 0 {
-				return id, nil
-			}
-			return 0, errors.New("invalid file id")
-		}
-		return 0, errors.New("invalid file id")
+	raw := c.Params("id")
+	if raw == "" {
+		raw = c.FormValue("fileId")
 	}
-
-	idStr := c.FormValue("fileId")
-	if idStr == "" {
+	if raw == "" {
 		return 0, errors.New("file id is required")
 	}
-	if id, err := strconv.ParseInt(idStr, 10, 64); err == nil && id > 0 {
-		return id, nil
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, errors.New("invalid file id")
 	}
-	return 0, errors.New("invalid file id")
+	return id, nil
 }
 
 func (h *Handler) isConfirmed(c fiber.Ctx) bool {
-	if strings.EqualFold(c.Query("confirm"), "true") {
-		return true
-	}
-	if strings.EqualFold(c.FormValue("confirm"), "true") {
-		return true
-	}
-
-	return false
+	return strings.EqualFold(c.Query("confirm"), "true") || strings.EqualFold(c.FormValue("confirm"), "true")
 }
 
-func (h *Handler) resolveConfig(
-	objectType fileshared.FileObjectType,
+func (h *Handler) resolveConfig(objectType fileshared.FileObjectType,
 	objectID fileshared.FileObjectID,
 	_ string,
 	fileType model.FileType,
 ) *uploadservice.FileUploadConfig {
-	// Fallback logic if no strategy is found
 	config := uploadservice.DefaultFileUploadConfig(objectType.String(), objectID.String())
-
-	//nolint:exhaustive // defaults
+	//nolint:exhaustive // Other file kinds retain the explicit default allowlist.
 	switch fileType {
 	case model.FileTypeVideo:
-		config.MaxFileSize = 50 * 1024 * 1024 // 50MB
+		config.MaxFileSize = 50 * 1024 * 1024
 		config.AllowedExtensions = []string{".mp4", ".webm"}
-		config.AllowedMimeTypes = map[string][]string{
-			".mp4":  {"video/mp4"},
-			".webm": {"video/webm"},
-		}
+		config.AllowedMimeTypes = map[string][]string{".mp4": {"video/mp4"}, ".webm": {"video/webm"}}
 	case model.FileTypeImage:
-		config.MaxFileSize = 10 * 1024 * 1024 // 10MB
 		config.AllowedExtensions = []string{".jpg", ".jpeg", ".png", ".gif", ".webp"}
 		config.AllowedMimeTypes = map[string][]string{
 			".jpg":  {"image/jpeg"},
@@ -848,16 +801,13 @@ func (h *Handler) resolveConfig(
 			".webp": {"image/webp"},
 		}
 	}
-
 	return config
 }
 
-type resolveUploadStrategyOptions struct {
-	checkCanUpload   bool
-	includeAfterJobs bool
-}
-
-type resolveUploadStrategyErrorKind string
+type (
+	resolveUploadStrategyOptions   struct{ checkCanUpload, includeAfterJobs bool }
+	resolveUploadStrategyErrorKind string
+)
 
 const (
 	resolveUploadStrategyErrorForbidden resolveUploadStrategyErrorKind = "forbidden"
@@ -869,13 +819,8 @@ type resolveUploadStrategyError struct {
 	err  error
 }
 
-func (e resolveUploadStrategyError) Error() string {
-	return e.err.Error()
-}
-
-func (e resolveUploadStrategyError) Unwrap() error {
-	return e.err
-}
+func (e resolveUploadStrategyError) Error() string { return e.err.Error() }
+func (e resolveUploadStrategyError) Unwrap() error { return e.err }
 
 type resolveUploadStrategyResult struct {
 	config    *uploadservice.FileUploadConfig
@@ -884,160 +829,140 @@ type resolveUploadStrategyResult struct {
 
 func (h *Handler) resolveUploadStrategy(
 	c fiber.Ctx,
-	uCtx uploadstrategies.UploadContext,
+	actor uploadstrategies.UploadContext,
 	objectType fileshared.FileObjectType,
 	objectID fileshared.FileObjectID,
 	contextValue string,
 	fileType model.FileType,
 	skipResize bool,
-	opts resolveUploadStrategyOptions,
+	options resolveUploadStrategyOptions,
 ) (resolveUploadStrategyResult, error) {
-	strategy := h.getStrategy(contextValue)
-
-	if strategy != nil && opts.checkCanUpload {
-		if err := strategy.CanUpload(c, uCtx); err != nil {
-			return resolveUploadStrategyResult{}, resolveUploadStrategyError{
-				kind: resolveUploadStrategyErrorForbidden,
-				err:  err,
+	name := normalizedContext(contextValue)
+	strategy := h.getStrategy(name)
+	if strategy == nil && (name != "" || !h.policy.AllowDefaultStrategy) {
+		return resolveUploadStrategyResult{},
+			resolveUploadStrategyError{
+				resolveUploadStrategyErrorForbidden,
+				errors.New("upload context is not configured"),
 			}
+	}
+	if strategy != nil && options.checkCanUpload {
+		if err := strategy.CanUpload(c, actor); err != nil {
+			return resolveUploadStrategyResult{}, resolveUploadStrategyError{resolveUploadStrategyErrorForbidden, err}
 		}
 	}
-
 	var config *uploadservice.FileUploadConfig
-	var afterJobs []fileshared.FileEventAfterJob
-
-	if strategy != nil {
-		config = strategy.GetConfig(c, uCtx)
-		if opts.includeAfterJobs {
-			jobs, err := strategy.GetAfterJobs(c, uCtx)
-			if err != nil {
-				return resolveUploadStrategyResult{}, resolveUploadStrategyError{
-					kind: resolveUploadStrategyErrorInternal,
-					err:  err,
-				}
-			}
-			afterJobs = jobs
-		}
+	var jobs []fileshared.FileEventAfterJob
+	if strategy == nil {
+		config = h.resolveConfig(objectType, objectID, name, fileType)
 	} else {
-		config = h.resolveConfig(objectType, objectID, contextValue, fileType)
+		config = strategy.GetConfig(c, actor)
+		if options.includeAfterJobs {
+			var err error
+			jobs, err = strategy.GetAfterJobs(c, actor)
+			if err != nil {
+				return resolveUploadStrategyResult{}, resolveUploadStrategyError{resolveUploadStrategyErrorInternal, err}
+			}
+		}
 	}
 	if config == nil {
-		return resolveUploadStrategyResult{}, resolveUploadStrategyError{
-			kind: resolveUploadStrategyErrorInternal,
-			err:  fmt.Errorf("upload strategy %q returned nil config", contextValue),
-		}
+		return resolveUploadStrategyResult{},
+			resolveUploadStrategyError{
+				resolveUploadStrategyErrorInternal,
+				fmt.Errorf("upload strategy %q returned nil config",
+					name),
+			}
 	}
-
+	if config.MaxFileSize < 0 {
+		return resolveUploadStrategyResult{},
+			resolveUploadStrategyError{
+				resolveUploadStrategyErrorInternal,
+				errors.New("upload size limit must not be negative"),
+			}
+	}
+	config = uploadservice.ResolveFileUploadConfig(config)
 	if skipResize {
 		config.SkipResizer = true
 	}
-
-	return resolveUploadStrategyResult{
-		config:    config,
-		afterJobs: afterJobs,
-	}, nil
+	return resolveUploadStrategyResult{config: config, afterJobs: append([]fileshared.FileEventAfterJob(nil), jobs...)}, nil
 }
 
-// --- Request Parsing ---
+func (h *Handler) writeStrategyError(c fiber.Ctx, err error) error {
+	var strategyErr resolveUploadStrategyError
+	if errors.As(err, &strategyErr) && strategyErr.kind == resolveUploadStrategyErrorForbidden {
+		return h.jsonError(c, 403, strategyErr.Error())
+	}
+	h.logger.ErrorContext(c, "resolve upload strategy", logger.Error(err))
+	return h.jsonError(c, 500, "failed to process upload")
+}
 
 func (h *Handler) getObjectRequest(c fiber.Ctx) (fileshared.FileObjectType, fileshared.FileObjectID, error) {
-	objectTypeValue := c.FormValue("objectType")
+	raw := c.FormValue("objectType")
 	if value := c.FormValue("entity_type"); value != "" {
-		objectTypeValue = value
+		raw = value
 	}
-
-	objectType := fileshared.FileObjectType(objectTypeValue)
-	if err := objectType.Validate(); err != nil {
-		return objectType, 0, err
+	kind := fileshared.FileObjectType(raw)
+	if err := kind.Validate(); err != nil {
+		return kind, 0, err
 	}
-
-	objectIDStr := c.FormValue("objectId")
+	raw = c.FormValue("objectId")
 	if value := c.FormValue("entity_id"); value != "" {
-		objectIDStr = value
+		raw = value
 	}
-
-	var objectID fileshared.FileObjectID
-	if objectIDStr != "" {
-		if id, err := strconv.ParseInt(objectIDStr, 10, 64); err == nil {
-			objectID = fileshared.FileObjectID(id)
-		}
-	}
-
-	return objectType, objectID, nil
+	return kind, fileshared.FileObjectID(parseInt64(raw)), nil
 }
 
 func (h *Handler) getDeletedIDRequest(c fiber.Ctx) int64 {
-	deleteIDStr := c.FormValue("deleteId")
-	if v := c.FormValue("replace_file_id"); v != "" {
-		deleteIDStr = v
+	raw := c.FormValue("deleteId")
+	if value := c.FormValue("replace_file_id"); value != "" {
+		raw = value
 	}
-
-	var objectID int64
-	if deleteIDStr != "" {
-		if id, err := strconv.ParseInt(deleteIDStr, 10, 64); err == nil {
-			objectID = id
-		}
-	}
-
-	return objectID
+	return parseInt64(raw)
 }
 
 func parseBoolFlag(value string) bool {
-	if value == "" {
-		return false
-	}
-
-	normalized := strings.TrimSpace(strings.ToLower(value))
-	switch normalized {
+	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "true", "1", "yes", "y", "on":
 		return true
-	case "false", "0", "no", "n", "off":
-		return false
 	default:
-		flag, err := strconv.ParseBool(normalized)
-		return err == nil && flag
+		return false
 	}
 }
 
-func parseTusLength(value string) (int64, error) {
-	if strings.TrimSpace(value) == "" {
-		return 0, errors.New("missing Upload-Length")
-	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || parsed < 0 {
+func parseTusLength(raw string) (int64, error) {
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
 		return 0, errors.New("invalid Upload-Length")
 	}
-	return parsed, nil
+	return value, nil
 }
 
-func parseTusOffset(value string) (int64, error) {
-	if strings.TrimSpace(value) == "" {
-		return 0, errors.New("missing Upload-Offset")
-	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || parsed < 0 {
+func parseTusOffset(raw string) (int64, error) {
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
 		return 0, errors.New("invalid Upload-Offset")
 	}
-	return parsed, nil
+	return value, nil
 }
 
 func parseTusMetadata(raw string) (map[string]string, error) {
-	result := make(map[string]string)
-	if strings.TrimSpace(raw) == "" {
-		return result, nil
+	if len(raw) > 16*1024 {
+		return nil, errors.New("upload metadata exceeds 16 KiB")
 	}
-
-	pairs := strings.Split(raw, ",")
-	for _, pair := range pairs {
+	result := make(map[string]string)
+	for _, pair := range strings.Split(raw, ",") {
 		pair = strings.TrimSpace(pair)
 		if pair == "" {
 			continue
 		}
 		parts := strings.SplitN(pair, " ", 2)
-		if len(parts) == 0 || parts[0] == "" {
-			continue
+		key := parts[0]
+		if _, exists := result[key]; exists {
+			return nil, fmt.Errorf("duplicate upload metadata key %q", key)
 		}
-		key := strings.TrimSpace(parts[0])
+		if len(result) >= 64 {
+			return nil, errors.New("too many upload metadata fields")
+		}
 		if len(parts) == 1 {
 			result[key] = ""
 			continue
@@ -1048,13 +973,12 @@ func parseTusMetadata(raw string) (map[string]string, error) {
 		}
 		result[key] = string(decoded)
 	}
-
 	return result, nil
 }
 
 func metadataValue(metadata map[string]string, keys ...string) string {
 	for _, key := range keys {
-		if value, ok := metadata[key]; ok && strings.TrimSpace(value) != "" {
+		if value := metadata[key]; strings.TrimSpace(value) != "" {
 			return value
 		}
 	}
@@ -1062,23 +986,19 @@ func metadataValue(metadata map[string]string, keys ...string) string {
 }
 
 func (h *Handler) parseTusObject(metadata map[string]string) (fileshared.FileObjectType, fileshared.FileObjectID, error) {
-	rawType := metadataValue(metadata, "entity_type", "object_type", "objectType")
-	objectType := fileshared.FileObjectType(rawType)
-	if err := objectType.Validate(); err != nil {
-		return objectType, 0, errors.New("entity_type is required")
+	kind := fileshared.FileObjectType(metadataValue(metadata, "entity_type", "object_type", "objectType"))
+	if kind.Validate() != nil {
+		return kind, 0, errors.New("entity_type is required")
 	}
-
-	rawID := metadataValue(metadata, "entity_id", "object_id", "objectId")
-	if rawID == "" {
-		return objectType, 0, errors.New("entity_id is required")
+	raw := metadataValue(metadata, "entity_id", "object_id", "objectId")
+	if raw == "" {
+		return kind, 0, errors.New("entity_id is required")
 	}
-
-	parsedID, err := strconv.ParseInt(rawID, 10, 64)
-	if err != nil || parsedID <= 0 {
-		return objectType, 0, errors.New("invalid entity_id")
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return kind, 0, errors.New("invalid entity_id")
 	}
-
-	return objectType, fileshared.FileObjectID(parsedID), nil
+	return kind, fileshared.FileObjectID(id), nil
 }
 
 func (h *Handler) resolveTusPatchMimeType(
@@ -1088,120 +1008,148 @@ func (h *Handler) resolveTusPatchMimeType(
 	offset int64,
 	cmsOnly bool,
 ) (string, error) {
-	if offset != 0 {
-		return "", nil
-	}
-
-	metadata := session.Metadata
-	filename := strings.TrimSpace(metadataValue(metadata, "filename", "file_name", "fileName"))
-	ext := strings.ToLower(filepath.Ext(filename))
-
-	var objectType fileshared.FileObjectType
-	var objectID fileshared.FileObjectID
+	contextValue := normalizedContext(metadataValue(session.Metadata, "context"))
+	var kind fileshared.FileObjectType
+	var id fileshared.FileObjectID
 	var err error
-	contextValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "context")))
 	if cmsOnly {
 		if contextValue != "cms" || h.getStrategy(contextValue) == nil {
-			return "", h.jsonError(c, fiber.StatusInternalServerError, "CMS upload strategy is not configured")
+			return "", reject(403, "CMS upload context is not configured")
 		}
 	} else {
-		objectType, objectID, err = h.parseTusObject(metadata)
+		kind, id, err = h.parseTusObject(session.Metadata)
 		if err != nil {
-			return "", h.jsonError(c, fiber.StatusBadRequest, err.Error())
+			return "", reject(400, err.Error())
 		}
 	}
-
-	fileTypeValue := strings.ToLower(strings.TrimSpace(metadataValue(metadata, "file_type")))
-	fileType := model.GetFileTypeString(fileTypeValue)
-	skipResize := parseBoolFlag(metadataValue(metadata, "skip_resize"))
-
-	uCtx, _ := h.contextBuilder(c, metadata)
-	resolution, err := h.resolveUploadStrategy(
-		c,
-		uCtx,
-		objectType,
-		objectID,
-		contextValue,
-		fileType,
-		skipResize,
-		resolveUploadStrategyOptions{},
-	)
+	actor, err := h.contextBuilder(c, session.Metadata)
 	if err != nil {
-		h.logger.ErrorContext(c, "failed to resolve upload strategy", logger.Error(err))
-		return "", h.jsonError(c, fiber.StatusInternalServerError, "failed to process upload")
+		return "", reject(401, "upload identity is invalid")
 	}
-
-	config := resolution.config
-	if config == nil {
-		return "", h.jsonError(c, fiber.StatusInternalServerError, "failed to process upload")
+	resolution, err := h.resolveUploadStrategy(c,
+		actor,
+		kind,
+		id,
+		contextValue,
+		model.GetFileTypeString(normalizedContext(metadataValue(session.Metadata,
+			"file_type"))),
+		parseBoolFlag(metadataValue(session.Metadata,
+			"skip_resize")),
+		resolveUploadStrategyOptions{checkCanUpload: true})
+	if err != nil {
+		var strategyErr resolveUploadStrategyError
+		if errors.As(err, &strategyErr) && strategyErr.kind == resolveUploadStrategyErrorForbidden {
+			return "", reject(403, "upload is no longer permitted")
+		}
+		return "", reject(500, "failed to process upload")
 	}
-
-	sniff := body
+	if session.UploadLength > resolution.config.MaxFileSize || session.UploadLength > filepolicy.MaxFileSize {
+		return "", reject(http.StatusRequestEntityTooLarge, "file is too large")
+	}
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(metadataValue(session.Metadata, "filename", "file_name", "fileName"))))
+	if session.MimeType != "" {
+		if !isAllowedMimeType(ext, session.MimeType, resolution.config.AllowedMimeTypes) {
+			return "", reject(400, "file mime type is not allowed")
+		}
+		return "", nil
+	}
+	prefixReader, canReadPrefix := h.tusStore.(interface {
+		ReadPrefix(ctx context.Context, id string, offset int64) ([]byte, error)
+	})
+	if offset != 0 && !canReadPrefix {
+		return "", nil
+	}
+	var sniff []byte
+	if offset > 0 {
+		sniff, err = prefixReader.ReadPrefix(c, session.ID, offset)
+		if err != nil {
+			return "", reject(409, "upload offset changed")
+		}
+	}
 	if len(sniff) > tusupload.SniffLen {
 		sniff = sniff[:tusupload.SniffLen]
 	}
+	sniff = append(sniff, body[:min(len(body), tusupload.SniffLen-len(sniff))]...)
 	mimeType := http.DetectContentType(sniff)
-	if !isAllowedMimeType(ext, mimeType, config.AllowedMimeTypes) {
-		return "", h.jsonError(c, fiber.StatusBadRequest, "file mime type is not allowed")
+	if !isAllowedMimeType(ext, mimeType, resolution.config.AllowedMimeTypes) {
+		if canReadPrefix && offset+int64(len(body)) < session.UploadLength &&
+			hasIncompleteMIMEHeader(sniff, resolution.config.AllowedMimeTypes[ext]) {
+			return "", nil // Still private and unapproved; inspect the next PATCH.
+		}
+		return "", reject(400, "file mime type is not allowed")
 	}
-
 	return mimeType, nil
 }
 
-func parseInt64(value string) int64 {
-	if strings.TrimSpace(value) == "" {
-		return 0
+func hasIncompleteMIMEHeader(sniff []byte, allowed []string) bool {
+	for _, candidate := range allowed {
+		if filepolicy.IncompleteMIMEHeader(sniff, candidate) {
+			return true
+		}
 	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
+	return false
+}
+
+func parseInt64(raw string) int64 {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 	if err != nil {
 		return 0
 	}
-	return parsed
+	return value
 }
 
 func isAllowedExtension(ext string, allowed []string) bool {
 	ext = strings.ToLower(strings.TrimSpace(ext))
-	if ext == "" || len(allowed) == 0 {
-		return true
-	}
-
-	for _, item := range allowed {
-		if strings.ToLower(strings.TrimSpace(item)) == ext {
-			return true
-		}
-	}
-
-	return false
-}
-
-func isAllowedMimeType(ext string, mime string, allowed map[string][]string) bool {
-	ext = strings.ToLower(strings.TrimSpace(ext))
-	mime = strings.ToLower(strings.TrimSpace(mime))
-	if idx := strings.Index(mime, ";"); idx >= 0 {
-		mime = strings.TrimSpace(mime[:idx])
+	if ext == "" {
+		return false
 	}
 	if len(allowed) == 0 {
 		return true
 	}
-	allowedMimes, ok := allowed[ext]
-	if !ok || len(allowedMimes) == 0 {
-		return false
-	}
-	for _, item := range allowedMimes {
-		if strings.ToLower(strings.TrimSpace(item)) == mime {
+	for _, value := range allowed {
+		candidate := strings.ToLower(strings.TrimSpace(value))
+		if !strings.HasPrefix(candidate, ".") {
+			candidate = "." + candidate
+		}
+		if candidate == ext {
 			return true
 		}
 	}
 	return false
 }
 
-// --- Response Mapping ---
+func isAllowedMimeType(ext, contentType string, allowed map[string][]string) bool {
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	contentType = strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+	if contentType == "" {
+		return false
+	}
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, candidate := range allowed[ext] {
+		candidate = strings.ToLower(strings.TrimSpace(strings.SplitN(candidate, ";", 2)[0]))
+		if candidate == contentType {
+			return true
+		}
+		if strings.HasSuffix(candidate, "/*") && strings.HasPrefix(contentType, strings.TrimSuffix(candidate, "*")) {
+			return true
+		}
+	}
+	return false
+}
+
+func fileObjectID(file model.File) int64 {
+	if file.ObjectID == nil {
+		return 0
+	}
+	return file.ObjectID.Int64()
+}
 
 func (h *Handler) mapFiles(files []model.File) []fileResponse {
 	if len(files) == 0 {
 		return nil
 	}
-
 	result := make([]fileResponse, 0, len(files))
 	for _, file := range files {
 		result = append(result, *h.mapFile(file))
@@ -1209,61 +1157,54 @@ func (h *Handler) mapFiles(files []model.File) []fileResponse {
 	return result
 }
 
-func (h *Handler) mapFile(model model.File) *fileResponse {
-	status := model.GetData().Uploader.Status.String()
+func (h *Handler) mapFile(file model.File) *fileResponse {
+	status := file.GetData().Uploader.Status.String()
 	if status == "" {
 		status = fileshared.FileUploadTaskStatusCompleted.String()
 	}
-
-	url := ""
-	publicURL := ""
-	thumbnailURL := ""
-	fullPath := ""
-	folderPath := ""
+	url, publicURL, thumbnail, fullPath, folderPath := "", "", "", "", ""
 	if status == fileshared.FileUploadTaskStatusCompleted.String() {
-		publicURL = h.urlComposer(model.GetPublicURL())
+		publicURL = h.urlComposer(file.GetPublicURL())
 		url = publicURL
-		if model.URL != "" {
-			url = h.urlComposer(model.URL)
+		if file.URL != "" {
+			url = h.urlComposer(file.URL)
 		}
-		thumbnailURL = model.PreferredPreviewPath()
-		if thumbnailURL != "" {
-			thumbnailURL = h.urlComposer(thumbnailURL)
+		thumbnail = file.PreferredPreviewPath()
+		if thumbnail != "" {
+			thumbnail = h.urlComposer(thumbnail)
 		}
-		fullPath = model.GetFullPath()
-		folderPath = model.FolderPath
+		fullPath = file.GetFullPath()
+		folderPath = file.FolderPath
 	}
-
 	return &fileResponse{
-		ID:           model.ID,
-		EntityID:     model.ObjectID.Int64(),
-		Filename:     model.FileName,
-		OriginalName: model.OriginalFileName,
-		FileType:     model.FileType.String(),
-		MimeType:     model.MimeType,
-		Size:         model.Size,
+		ID:           file.ID,
+		EntityID:     fileObjectID(file),
+		Filename:     file.FileName,
+		OriginalName: file.OriginalFileName,
+		FileType:     file.FileType.String(),
+		MimeType:     file.MimeType,
+		Size:         file.Size,
 		URL:          url,
 		PublicURL:    publicURL,
-		ThumbnailURL: thumbnailURL,
+		ThumbnailURL: thumbnail,
 		FullPath:     fullPath,
 		FolderPath:   folderPath,
-		SortOrder:    model.Position,
+		SortOrder:    file.Position,
 		Status:       status,
-		IsPrimary:    model.IsPrimary,
-		Width:        model.GetWidth(),
-		Height:       model.GetHeight(),
-		CreatedAt:    pointerTime(model.CreatedAt),
-		UpdatedAt:    pointerTime(model.UpdatedAt),
-		Data:         buildFileDataResponse(model),
+		IsPrimary:    file.IsPrimary,
+		Width:        file.GetWidth(),
+		Height:       file.GetHeight(),
+		CreatedAt:    pointerTime(file.CreatedAt),
+		UpdatedAt:    pointerTime(file.UpdatedAt),
+		Data:         buildFileDataResponse(file),
 	}
 }
 
-func pointerTime(t time.Time) *time.Time {
-	if t.IsZero() {
+func pointerTime(value time.Time) *time.Time {
+	if value.IsZero() {
 		return nil
 	}
-	tt := t
-	return &tt
+	return &value
 }
 
 func buildFileDataResponse(file model.File) *fileDataResponse {
@@ -1271,28 +1212,15 @@ func buildFileDataResponse(file model.File) *fileDataResponse {
 	if data == nil {
 		return nil
 	}
-
-	resp := &fileDataResponse{
-		Width:  data.Width,
-		Height: data.Height,
+	response := &fileDataResponse{Width: data.Width, Height: data.Height, Alt: data.Alt}
+	if data.Provider.Driver != "" {
+		response.Provider = &fileProviderResponse{Driver: data.Provider.Driver}
 	}
-
-	if data.Alt != "" {
-		resp.Alt = data.Alt
-	}
-
-	if driver := data.Provider.Driver; driver != "" {
-		resp.Provider = &fileProviderResponse{Driver: driver}
-	}
-
-	return resp
+	return response
 }
 
 func (h *Handler) jsonError(c fiber.Ctx, status int, message string) error {
-	return c.Status(status).JSON(errorResponse{
-		Status: "error",
-		Error:  message,
-	})
+	return c.Status(status).JSON(errorResponse{Status: "error", Error: message})
 }
 
 func (h *Handler) jsonErrorWithDetail(c fiber.Ctx, status int, message string, err error) error {
@@ -1302,23 +1230,18 @@ func (h *Handler) jsonErrorWithDetail(c fiber.Ctx, status int, message string, e
 	return h.jsonError(c, status, message)
 }
 
-func (h *Handler) jsonValidationError(c fiber.Ctx, errors map[string]string) error {
-	return c.Status(fiber.StatusBadRequest).JSON(validationResponse{
-		Status: "error",
-		Errors: errors,
-	})
+func (h *Handler) jsonValidationError(c fiber.Ctx, validationErrors map[string]string) error {
+	return c.Status(http.StatusBadRequest).JSON(validationResponse{Status: "error", Errors: validationErrors})
 }
-
-// --- DTOs ---
 
 type uploadListResponse struct {
-	Files []fileResponse `json:"files,omitempty"`
+	Files       []fileResponse `json:"files,omitempty"`
+	FailedIndex *int           `json:"failedIndex,omitempty"`
+	Error       string         `json:"error,omitempty"`
 }
-
 type uploadFileResponse struct {
 	File *fileResponse `json:"file,omitempty"`
 }
-
 type fileResponse struct {
 	ID           int64             `json:"id"`
 	EntityID     int64             `json:"entityId"`
@@ -1341,39 +1264,31 @@ type fileResponse struct {
 	UpdatedAt    *time.Time        `json:"updatedAt,omitempty"`
 	Data         *fileDataResponse `json:"data,omitempty"`
 }
-
 type fileDataResponse struct {
 	Provider *fileProviderResponse `json:"provider,omitempty"`
 	Width    int                   `json:"width,omitempty"`
 	Height   int                   `json:"height,omitempty"`
 	Alt      string                `json:"alt,omitempty"`
 }
-
 type fileProviderResponse struct {
 	Driver string `json:"driver,omitempty"`
 }
-
 type listResponse struct {
 	Files    []fileResponse `json:"files"`
 	EntityID int64          `json:"entityId"`
 }
-
 type deleteResponse struct {
 	Status   string `json:"status"`
 	ID       int64  `json:"id"`
 	EntityID int64  `json:"entityId"`
 }
-
 type errorResponse struct {
 	Status string `json:"status"`
 	Error  string `json:"error"`
 }
-
 type validationResponse struct {
 	Status string            `json:"status"`
 	Errors map[string]string `json:"errors"`
 }
 
-const (
-	deleteStatusPending = "pending"
-)
+const deleteStatusPending = "pending"

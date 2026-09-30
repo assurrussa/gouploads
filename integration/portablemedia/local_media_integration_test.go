@@ -370,8 +370,15 @@ func completeLocalTusUpload(
 	}
 	require.NoError(t, json.Unmarshal(responseBody, &payload))
 	require.Positive(t, payload.File.ID)
-	_, err = runtime.tusStore.Get(ctx, sessionID)
-	require.ErrorIs(t, err, host.ErrTusNotFound)
+	retained, err := runtime.tusStore.Get(ctx, sessionID)
+	require.NoError(t, err)
+	require.Equal(t, "ready", string(retained.Status))
+	retryResponse, retryBody := sendFiberRequest(t, ctx, runtime.httpApp, http.MethodPost,
+		location+"/complete", nil, map[string]string{"Tus-Resumable": "1.0.0"})
+	require.Equal(t, http.StatusAccepted, retryResponse.StatusCode, "retry response: %s", retryBody)
+	firstID := payload.File.ID
+	require.NoError(t, json.Unmarshal(retryBody, &payload))
+	require.Equal(t, firstID, payload.File.ID)
 	return payload.File.ID
 }
 

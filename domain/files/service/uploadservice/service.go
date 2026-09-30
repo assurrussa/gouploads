@@ -17,6 +17,7 @@ import (
 	finalizeoriginal "github.com/assurrussa/gouploads/domain/files/outbox/finalize_original"
 	sendresizefilejob "github.com/assurrussa/gouploads/domain/files/outbox/send_resize_file"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	"github.com/assurrussa/gouploads/internal/filepolicy"
 	"github.com/assurrussa/gouploads/internal/filesanitize"
 	"github.com/assurrussa/gouploads/internal/pointer"
 )
@@ -34,10 +35,7 @@ type Options struct {
 }
 
 func getDefaultOptions() Options {
-	return Options{
-		dirPrefix:     shared.FolderPrefixPathPersist,
-		dirTempPrefix: shared.FolderPrefixPathTemp,
-	}
+	return Options{dirPrefix: shared.FolderPrefixPathPersist, dirTempPrefix: shared.FolderPrefixPathTemp}
 }
 
 type Service struct {
@@ -55,16 +53,13 @@ func Must(opts Options) *Service {
 	return service
 }
 
-// New preserves the historical deep-package constructor for existing consumers.
+// New preserves the historical deep-package constructor.
 //
-// Deprecated: use NewWithProcessing or the supported host facade. An empty mode
-// in NewWithProcessing defaults to originals; this legacy constructor uses media.
+// Deprecated: use NewWithProcessing or the supported host facade.
 func New(opts Options) (*Service, error) {
 	return NewWithProcessing(opts, uploadconfig.ProcessingMediaResizer)
 }
 
-// NewWithProcessing selects the pipeline once at construction, not from
-// untrusted request metadata. The zero mode means original_only.
 func NewWithProcessing(opts Options, mode uploadconfig.ProcessingMode) (*Service, error) {
 	resolved, err := mode.Resolve()
 	if err != nil {
@@ -73,56 +68,38 @@ func NewWithProcessing(opts Options, mode uploadconfig.ProcessingMode) (*Service
 	if err := opts.Validate(); err != nil {
 		return nil, fmt.Errorf("validate options: %w", err)
 	}
-
-	defaultPrefix := strings.Split(strings.Trim(opts.dirPrefix.String(), "/"), "/")
-	prefix, err := filesanitize.SanitizeSegments(defaultPrefix)
+	prefix, err := filesanitize.SanitizeSegments(strings.Split(strings.Trim(opts.dirPrefix.String(), "/"), "/"))
 	if err != nil {
 		return nil, fmt.Errorf("sanitize persist dir prefix: %w", err)
 	}
-
-	defaultTempPrefix := strings.Split(strings.Trim(opts.dirTempPrefix.String(), "/"), "/")
-	prefixTemp, err := filesanitize.SanitizeSegments(defaultTempPrefix)
+	temp, err := filesanitize.SanitizeSegments(strings.Split(strings.Trim(opts.dirTempPrefix.String(), "/"), "/"))
 	if err != nil {
 		return nil, fmt.Errorf("sanitize temp dir prefix: %w", err)
 	}
-
-	if len(opts.validators) > 0 {
-		opts.validators = append([]UploadValidator(nil), opts.validators...)
-	}
-
-	return &Service{
-		Options:           opts,
-		listDirPrefix:     prefix,
-		listDirTempPrefix: prefixTemp,
-		processingMode:    resolved,
-	}, nil
+	opts.validators = append([]UploadValidator(nil), opts.validators...)
+	return &Service{Options: opts, listDirPrefix: prefix, listDirTempPrefix: temp, processingMode: resolved}, nil
 }
 
+// UploadBatch is intentionally non-atomic. On failure it returns the successful
+// prefix and a BatchError; callers must not blindly retry that prefix.
 func (s *Service) UploadBatch(ctx context.Context, req BatchRequest) ([]model.File, error) {
 	if len(req.FileHeaders) == 0 {
 		return nil, ErrNoFiles
 	}
-
 	data := make([]model.File, 0, len(req.FileHeaders))
-	for idx, file := range req.FileHeaders {
-		res, err := s.UploadSingle(ctx, SingleRequest{
-			UploaderUUID: req.UploaderUUID,
-			ManagerID:    req.ManagerID,
-			UserID:       req.UserID,
-			FileHeader:   file,
-			ObjectType:   req.ObjectType,
-			ObjectID:     req.ObjectID,
-			DeletedID:    req.DeletedID,
-			AfterJobs:    req.AfterJobs,
-			Config:       req.Config,
+	for index, header := range req.FileHeaders {
+		file, err := s.UploadSingle(ctx, SingleRequest{
+			UploaderUUID: req.UploaderUUID, ManagerID: req.ManagerID, UserID: req.UserID, FileHeader: header,
+			ObjectType: req.ObjectType, ObjectID: req.ObjectID, DeletedID: req.DeletedID, AfterJobs: req.AfterJobs, Config: req.Config,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("upload file [%d idx]: %w", idx, err)
+			if len(data) == 0 {
+				data = nil
+			}
+			return data, &BatchError{FailedIndex: index, Err: err}
 		}
-
-		data = append(data, res)
+		data = append(data, file)
 	}
-
 	return data, nil
 }
 
@@ -133,208 +110,147 @@ func (s *Service) UploadSingle(ctx context.Context, req SingleRequest) (model.Fi
 	if err := s.validateReplacement(ctx, req.ObjectType, req.ObjectID, req.DeletedID); err != nil {
 		return model.File{}, err
 	}
-
-	uploadConfig, err := s.prepareConfig(req)
+	cfg, err := s.prepareConfig(req)
 	if err != nil {
 		return model.File{}, fmt.Errorf("prepare upload config: %w", err)
 	}
-
-	uploadedFile, err := s.ProcessSingleFileUpload(ctx, req.FileHeader, uploadConfig)
-	if err != nil {
-		var uErr *uploadError
-		if errors.As(err, &uErr) {
-			return model.File{}, ClientError{Message: uErr.Error()}
-		}
-		return model.File{}, fmt.Errorf("process single file upload: %w", err)
-	}
-
-	userUploader, err := s.buildUploader(req)
+	uploader, err := s.buildUploader(req)
 	if err != nil {
 		return model.File{}, fmt.Errorf("build uploader: %w", err)
 	}
-	var fileResult model.File
-	err = s.txManager.RunInTx(ctx, func(ctx context.Context) error {
-		fileModel, err := s.uploadFile(ctx, req, uploadedFile, userUploader, uploadConfig)
-		if err != nil {
-			return err
-		}
-		fileResult = fileModel
-		return nil
-	})
+	uploaded, err := s.ProcessSingleFileUpload(ctx, req.FileHeader, cfg)
 	if err != nil {
-		return model.File{}, fmt.Errorf("enqueue upload task: %w", err)
+		return model.File{}, uploadClientError(err)
 	}
-
-	return fileResult, nil
+	return s.persistUpload(ctx, req, uploaded, uploader, cfg)
 }
 
-// UploadReader handles uploads where file content is provided via a reader (e.g. TUS).
 func (s *Service) UploadReader(ctx context.Context, req ReaderRequest, input ReaderUploadInput) (model.File, error) {
+	if req.FinalizationKey != "" {
+		return s.withFinalization(ctx, req, input.OriginalName, input.Size, false, func(ctx context.Context) (model.File, error) {
+			req.FinalizationKey = ""
+			return s.UploadReader(ctx, req, input)
+		})
+	}
 	if err := req.Validate(); err != nil {
 		return model.File{}, fmt.Errorf("validate request: %w", err)
 	}
 	if err := s.validateReplacement(ctx, req.ObjectType, req.ObjectID, req.DeletedID); err != nil {
 		return model.File{}, err
 	}
-
-	uploadConfig, err := s.prepareConfig(SingleRequest{
-		ObjectType: req.ObjectType,
-		ObjectID:   req.ObjectID,
-		Config:     req.Config,
-	})
+	single := singleReaderRequest(req)
+	cfg, err := s.prepareConfig(single)
 	if err != nil {
 		return model.File{}, fmt.Errorf("prepare upload config: %w", err)
 	}
-
-	uploadedFile, err := s.ProcessReaderUpload(ctx, input, uploadConfig)
-	if err != nil {
-		var uErr *uploadError
-		if errors.As(err, &uErr) {
-			return model.File{}, ClientError{Message: uErr.Error()}
-		}
-		return model.File{}, fmt.Errorf("process reader upload: %w", err)
-	}
-
-	singleReq := SingleRequest{
-		UploaderUUID: req.UploaderUUID,
-		ManagerID:    req.ManagerID,
-		UserID:       req.UserID,
-		ObjectType:   req.ObjectType,
-		ObjectID:     req.ObjectID,
-		DeletedID:    req.DeletedID,
-		AfterJobs:    req.AfterJobs,
-		Config:       req.Config,
-	}
-
-	userUploader, err := s.buildUploader(singleReq)
+	uploader, err := s.buildUploader(single)
 	if err != nil {
 		return model.File{}, fmt.Errorf("build uploader: %w", err)
 	}
-
-	var fileResult model.File
-	err = s.txManager.RunInTx(ctx, func(ctx context.Context) error {
-		fileModel, err := s.uploadFile(ctx, singleReq, uploadedFile, userUploader, uploadConfig)
-		if err != nil {
-			return err
-		}
-		fileResult = fileModel
-		return nil
-	})
+	uploaded, err := s.ProcessReaderUpload(ctx, input, cfg)
 	if err != nil {
-		return model.File{}, fmt.Errorf("enqueue upload task: %w", err)
+		return model.File{}, uploadClientError(err)
 	}
-
-	return fileResult, nil
+	return s.persistUpload(ctx, single, uploaded, uploader, cfg)
 }
 
-// UploadStored handles uploads where data is already stored in temp storage (e.g. S3 multipart).
 func (s *Service) UploadStored(ctx context.Context, req ReaderRequest, uploaded UploadedFile) (model.File, error) {
+	if req.FinalizationKey != "" {
+		return s.withFinalization(ctx, req, uploaded.OriginalName, uploaded.Size, true, func(ctx context.Context) (model.File, error) {
+			req.FinalizationKey = ""
+			return s.UploadStored(ctx, req, uploaded)
+		})
+	}
 	if err := req.Validate(); err != nil {
 		return model.File{}, fmt.Errorf("validate request: %w", err)
 	}
 	if err := s.validateReplacement(ctx, req.ObjectType, req.ObjectID, req.DeletedID); err != nil {
 		return model.File{}, err
 	}
-
-	if strings.TrimSpace(uploaded.FileName) == "" || strings.TrimSpace(uploaded.OriginalName) == "" {
-		return model.File{}, errors.New("invalid uploaded file metadata")
-	}
-
-	if uploaded.FileType == model.FileTypeUnknown {
-		fileType, err := model.GetFileTypeFromMimeType(uploaded.MimeType)
-		if err != nil {
-			return model.File{}, fmt.Errorf("detect file type: %w", err)
-		}
-		uploaded.FileType = fileType
-	}
-
-	if uploaded.FolderPath == "" {
-		uploaded.FolderPath = filesanitize.EnsureRelativeDir(uploaded.Path)
-	}
-
-	uploadConfig, err := s.prepareConfig(SingleRequest{
-		ObjectType: req.ObjectType,
-		ObjectID:   req.ObjectID,
-		Config:     req.Config,
-	})
+	single := singleReaderRequest(req)
+	cfg, err := s.prepareConfig(single)
 	if err != nil {
 		return model.File{}, fmt.Errorf("prepare upload config: %w", err)
 	}
-
-	singleReq := SingleRequest{
-		UploaderUUID: req.UploaderUUID,
-		ManagerID:    req.ManagerID,
-		UserID:       req.UserID,
-		ObjectType:   req.ObjectType,
-		ObjectID:     req.ObjectID,
-		DeletedID:    req.DeletedID,
-		AfterJobs:    req.AfterJobs,
-		Config:       req.Config,
+	if err := s.validateStoredUpload(ctx, &uploaded, cfg); err != nil {
+		return model.File{}, uploadClientError(err)
 	}
-
-	userUploader, err := s.buildUploader(singleReq)
+	uploader, err := s.buildUploader(single)
 	if err != nil {
 		return model.File{}, fmt.Errorf("build uploader: %w", err)
 	}
+	return s.persistUpload(ctx, single, uploaded, uploader, cfg)
+}
 
-	var fileResult model.File
-	err = s.txManager.RunInTx(ctx, func(ctx context.Context) error {
-		fileModel, err := s.uploadFile(ctx, singleReq, uploaded, userUploader, uploadConfig)
-		if err != nil {
-			return err
-		}
-		fileResult = fileModel
-		return nil
+func singleReaderRequest(req ReaderRequest) SingleRequest {
+	return SingleRequest{
+		UploaderUUID: req.UploaderUUID, ManagerID: req.ManagerID, UserID: req.UserID,
+		ObjectType: req.ObjectType, ObjectID: req.ObjectID, DeletedID: req.DeletedID, AfterJobs: req.AfterJobs, Config: req.Config,
+	}
+}
+
+func uploadClientError(err error) error {
+	var validation *uploadError
+	if errors.As(err, &validation) {
+		return ClientError{Message: validation.Error()}
+	}
+	return err
+}
+
+func (s *Service) persistUpload(
+	ctx context.Context,
+	req SingleRequest,
+	uploaded UploadedFile,
+	uploader shared.FileUploader,
+	cfg *FileUploadConfig,
+) (model.File, error) {
+	var result model.File
+	err := s.txManager.RunInTx(ctx, func(ctx context.Context) error {
+		var err error
+		result, err = s.uploadFile(ctx, req, uploaded, uploader, cfg)
+		return err
 	})
 	if err != nil {
+		// An ambiguous commit must not destroy a source a committed job may need.
 		return model.File{}, fmt.Errorf("enqueue upload task: %w", err)
 	}
-
-	return fileResult, nil
+	return result, nil
 }
 
 func (s *Service) DeleteFile(ctx context.Context, req DeleteRequest) error {
 	if req.FileID <= 0 {
 		return fmt.Errorf("invalid file id: %d", req.FileID)
 	}
-
 	if req.UserRequestID.IsZero() {
 		return errors.New("invalid user request id")
 	}
-
 	file, err := s.fileRepo.GetByID(ctx, req.FileID)
 	if err != nil {
 		return fmt.Errorf("get file by id: %w", err)
 	}
-
 	if file.ID == 0 {
 		return nil
 	}
-
-	payloadObj := deletedfilejob.NewPayload(file.ID, req.UserRequestID, file.GetFullPath(), req.AfterJobs...)
-	payload, err := deletedfilejob.MarshalPayload(payloadObj)
+	payload, err := deletedfilejob.MarshalPayload(deletedfilejob.NewPayload(file.ID,
+		req.UserRequestID,
+		file.GetFullPath(),
+		req.AfterJobs...))
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
 	}
-
 	if _, err := s.outbox.Put(ctx, deletedfilejob.JobName, payload, time.Now()); err != nil {
 		return fmt.Errorf("put outbox: %w", err)
 	}
-
 	return nil
 }
 
 func (s *Service) SetPrimary(ctx context.Context, req SetPrimaryRequest) error {
-	if req.FileID <= 0 {
-		return fmt.Errorf("invalid file id: %d", req.FileID)
-	}
-	if req.ObjectID <= 0 {
-		return fmt.Errorf("invalid object id: %d", req.ObjectID)
+	if req.FileID <= 0 || req.ObjectID <= 0 {
+		return errors.New("positive file and object IDs are required")
 	}
 	if err := req.ObjectType.Validate(); err != nil {
 		return fmt.Errorf("validate object type: %w", err)
 	}
-
 	file, err := s.fileRepo.GetByID(ctx, req.FileID)
 	if err != nil {
 		return fmt.Errorf("get file by id: %w", err)
@@ -342,219 +258,180 @@ func (s *Service) SetPrimary(ctx context.Context, req SetPrimaryRequest) error {
 	if file.ID == 0 {
 		return ErrFileNotFound
 	}
-
+	if file.ObjectID == nil || file.ObjectType != req.ObjectType || file.ObjectID.Int64() != req.ObjectID {
+		return model.ErrObjectBindingMismatch
+	}
 	return s.txManager.RunInTx(ctx, func(ctx context.Context) error {
 		if err := s.fileRepo.ClearPrimary(ctx, req.ObjectType.String(), req.ObjectID, req.FileID); err != nil {
 			return fmt.Errorf("clear primary: %w", err)
 		}
-
 		if err := s.fileRepo.SetPrimary(ctx, req.FileID, req.ObjectType.String(), req.ObjectID); err != nil {
 			return fmt.Errorf("set primary: %w", err)
 		}
-
 		return nil
 	})
 }
 
-func (s *Service) GetFile(ctx context.Context, fileID int64) (model.File, error) {
-	if fileID <= 0 {
+func (s *Service) GetFile(ctx context.Context, id int64) (model.File, error) {
+	if id <= 0 {
 		return model.File{}, ErrFileNotFound
 	}
-
-	file, err := s.fileRepo.GetByID(ctx, fileID)
+	file, err := s.fileRepo.GetByID(ctx, id)
 	if err != nil {
 		return model.File{}, fmt.Errorf("get file by id: %w", err)
 	}
-
 	if file.ID == 0 {
 		return model.File{}, ErrFileNotFound
 	}
-
 	return file, nil
 }
 
 func (s *Service) prepareConfig(req SingleRequest) (*FileUploadConfig, error) {
+	if req.Config != nil && req.Config.MaxFileSize < 0 {
+		return nil, errors.New("upload size limit must not be negative")
+	}
+	cfg := s.mergeConfig(req.Config)
 	if s.processingMode != uploadconfig.ProcessingMediaResizer {
 		if req.ObjectID <= 0 {
 			return nil, ClientError{Message: "original upload requires a positive object id"}
 		}
 		if err := req.ObjectType.Validate(); err != nil {
-			return nil, fmt.Errorf("validate original upload object type: %w", err)
+			return nil, fmt.Errorf("validate original object type: %w", err)
+		}
+		if err := filepolicy.ValidateOriginalConfig(cfg.MaxFileSize, cfg.AllowedExtensions, cfg.AllowedMimeTypes); err != nil {
+			return nil, err
 		}
 	}
-	var cfg FileUploadConfig
-	if req.Config != nil {
-		cfg = *req.Config
-		cfg.AllowedExtensions = append([]string(nil), cfg.AllowedExtensions...)
-		cfg.AllowedMimeTypes = cloneMimeMap(cfg.AllowedMimeTypes)
-	} else {
-		cfg = *DefaultFileUploadConfig()
-	}
-
-	prefix := slices.Clone(s.listDirTempPrefix)
-	prefixDir, err := s.uploadDir(prefix, req.ObjectType.String(), req.ObjectID.String())
+	prefixDir, err := s.uploadDir(slices.Clone(s.listDirTempPrefix), req.ObjectType.String(), req.ObjectID.String())
 	if err != nil {
 		return nil, err
 	}
 	cfg.UploadDir = prefixDir
-
-	return &cfg, nil
+	return cfg, nil
 }
 
-func (s *Service) uploadDir(prefix []string, objectType string, objectID string) (string, error) {
-	segments := append([]string{}, prefix...)
+func (s *Service) uploadDir(prefix []string, objectType, objectID string) (string, error) {
+	segments := append([]string(nil), prefix...)
 	if value := strings.TrimSpace(objectType); value != "" {
 		segments = append(segments, value)
 	}
-	if raw := strings.TrimSpace(objectID); raw != "" {
-		segments = append(segments, raw)
+	if value := strings.TrimSpace(objectID); value != "" {
+		segments = append(segments, value)
 	}
 	segments = append(segments, uuid.NewString())
-
 	return filesanitize.BuildSafePath(segments...)
 }
 
 func (s *Service) uploadFile(
 	ctx context.Context,
 	req SingleRequest,
-	uploadedFile UploadedFile,
-	userUploader shared.FileUploader,
-	config *FileUploadConfig,
+	uploaded UploadedFile,
+	uploader shared.FileUploader,
+	cfg *FileUploadConfig,
 ) (model.File, error) {
 	now := time.Now()
-	fileModel := model.File{
-		ManagerID:        pointer.To(req.ManagerID),
-		UserID:           pointer.To(req.UserID),
-		ObjectType:       req.ObjectType,
-		ObjectID:         pointer.To(req.ObjectID),
-		FolderPath:       uploadedFile.FolderPath,
-		URL:              uploadedFile.URL,
-		FileName:         uploadedFile.FileName,
-		OriginalFileName: uploadedFile.OriginalName,
-		MimeType:         uploadedFile.MimeType,
-		Size:             uploadedFile.Size,
-		FileType:         uploadedFile.FileType,
-		Slug:             uuid.New().String(),
-		IsPrimary:        false,
-		Moderate:         shared.FileModerateStatusDefault,
-		Position:         0,
-		Data: &model.FileData{
-			Width:    uploadedFile.Width,
-			Height:   uploadedFile.Height,
-			Uploader: userUploader,
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
+	file := model.File{
+		ManagerID:  pointer.To(req.ManagerID),
+		UserID:     pointer.To(req.UserID),
+		ObjectType: req.ObjectType,
+		ObjectID:   pointer.To(req.ObjectID),
 
-	fileID, err := s.fileRepo.Create(ctx, fileModel)
+		FolderPath: uploaded.FolderPath, URL: uploaded.URL, FileName: uploaded.FileName, OriginalFileName: uploaded.OriginalName,
+		MimeType: uploaded.MimeType, Size: uploaded.Size, FileType: uploaded.FileType, Slug: uuid.NewString(),
+		Moderate: shared.FileModerateStatusDefault,
+		Data: &model.FileData{
+			Width:    uploaded.Width,
+			Height:   uploaded.Height,
+			Uploader: uploader,
+		},
+
+		CreatedAt: now, UpdatedAt: now,
+	}
+	id, err := s.fileRepo.Create(ctx, file)
 	if err != nil {
 		return model.File{}, fmt.Errorf("create upload task: %w", err)
 	}
-	fileModel.ID = fileID
-
+	file.ID = id
 	if s.processingMode != uploadconfig.ProcessingMediaResizer {
-		payload, err := finalizeoriginal.MarshalPayload(finalizeoriginal.Payload{FileID: fileID})
+		payload, err := finalizeoriginal.MarshalPayload(finalizeoriginal.Payload{FileID: id})
 		if err != nil {
 			return model.File{}, err
 		}
 		if _, err := s.outbox.Put(ctx, finalizeoriginal.JobName, payload, now); err != nil {
 			return model.File{}, fmt.Errorf("put original finalization job: %w", err)
 		}
-		return fileModel, nil
+		return file, nil
 	}
-
-	skipResizeVideo := config != nil && config.SkipResizer
-
-	filePath := s.composeSourceURL(uploadedFile)
-
-	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
-		fileID,
-		filePath,
-		skipResizeVideo,
-	))
+	skip := cfg != nil && cfg.SkipResizer
+	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(id, s.composeSourceURL(uploaded), skip))
 	if err != nil {
 		return model.File{}, fmt.Errorf("marshal payload: %w", err)
 	}
-
-	if _, err = s.outbox.Put(ctx, sendresizefilejob.JobName, payload, now); err != nil {
+	if _, err := s.outbox.Put(ctx, sendresizefilejob.JobName, payload, now); err != nil {
 		return model.File{}, fmt.Errorf("put outbox job: %w", err)
 	}
-
-	return fileModel, nil
+	return file, nil
 }
 
 func (s *Service) buildUploader(req SingleRequest) (shared.FileUploader, error) {
-	userUUIDUploader := req.UploaderUUID
-	userIDUploader := req.UserID
-	userTypeUploader := shared.UserTypeUser
+	id, kind := req.UserID, shared.UserTypeUser
 	if req.ManagerID > 0 {
-		userIDUploader = req.ManagerID
-		userTypeUploader = shared.UserTypeAdmin
+		id, kind = req.ManagerID, shared.UserTypeAdmin
 	}
+	afterJobs := append([]shared.FileEventAfterJob(nil), req.AfterJobs...)
 	if req.DeletedID > 0 {
-		deletedPayload := deletedfilejob.NewOwnedPayload(
-			req.DeletedID.Int64(),
-			userUUIDUploader,
+		payload, err := deletedfilejob.MarshalPayload(deletedfilejob.NewOwnedPayload(req.DeletedID.Int64(),
+			req.UploaderUUID,
 			req.ObjectType,
 			req.ObjectID,
-			"",
-		)
-		deletedPayloadBytes, err := deletedfilejob.MarshalPayload(deletedPayload)
+			""))
 		if err != nil {
 			return shared.FileUploader{}, fmt.Errorf("marshal payload: %w", err)
 		}
-		afterJob := shared.NewFileEventAfterJobsWithPayload(deletedfilejob.JobName, userUUIDUploader, deletedPayloadBytes)
-		req.AfterJobs = append(req.AfterJobs, afterJob...)
+		afterJobs = append(afterJobs, shared.NewFileEventAfterJobsWithPayload(deletedfilejob.JobName, req.UploaderUUID, payload)...)
 	}
-
 	return shared.FileUploader{
-		UserUUID:  userUUIDUploader,
-		UserID:    userIDUploader,
-		Type:      userTypeUploader,
+		UserUUID:  req.UploaderUUID,
+		UserID:    id,
+		Type:      kind,
 		Status:    shared.FileUploadTaskStatusQueued,
-		AfterJobs: req.AfterJobs,
+		AfterJobs: afterJobs,
 	}, nil
 }
 
 func (s *Service) validateReplacement(
 	ctx context.Context,
 	objectType shared.FileObjectType,
-	objectID shared.FileObjectID,
+	objectID,
 	deletedID shared.FileObjectID,
 ) error {
 	if deletedID <= 0 {
 		return nil
 	}
-
-	replaced, err := s.fileRepo.GetByID(ctx, deletedID.Int64())
+	file, err := s.fileRepo.GetByID(ctx, deletedID.Int64())
 	if err != nil {
 		return fmt.Errorf("get replacement file %d: %w", deletedID, err)
 	}
-	if replaced.ID == 0 || replaced.ObjectID == nil ||
-		replaced.ObjectType != objectType || *replaced.ObjectID != objectID {
+	if file.ID == 0 || file.ObjectID == nil || file.ObjectType != objectType || *file.ObjectID != objectID {
 		return ClientError{Message: "replacement file does not belong to the upload object"}
 	}
-
 	return nil
 }
 
-func (s *Service) composeSourceURL(uploadedFile UploadedFile) string {
-	if path := strings.TrimSpace(uploadedFile.Path); path != "" {
-		return path
+func (s *Service) composeSourceURL(file UploadedFile) string {
+	if value := strings.TrimSpace(file.Path); value != "" {
+		return value
 	}
-
-	return uploadedFile.URL
+	return file.URL
 }
 
 func cloneMimeMap(src map[string][]string) map[string][]string {
 	if len(src) == 0 {
 		return nil
 	}
-
-	clone := make(map[string][]string, len(src))
+	result := make(map[string][]string, len(src))
 	for key, values := range src {
-		clone[strings.ToLower(key)] = append([]string(nil), values...)
+		result[strings.ToLower(strings.TrimSpace(key))] = append([]string(nil), values...)
 	}
-	return clone
+	return result
 }

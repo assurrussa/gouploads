@@ -118,14 +118,13 @@ func provideUploadService(
 	lg logger.Logger,
 	storage filestorage.Storage,
 ) (*uploadservice.Service, error) {
-	//nolint:staticcheck // Preserve the unsupported legacy DI provider media default.
-	return uploadservice.New(uploadservice.NewOptions(
+	return uploadservice.NewWithProcessing(uploadservice.NewOptions(
 		tx,
 		outboxSvc,
 		repo,
 		lg.WithNamed("task_uploader"),
 		storage,
-	))
+	), uploadconfig.ProcessingMediaResizer)
 }
 
 func provideTaskUploader(svc *uploadservice.Service) uploadhttp.TaskUploader {

@@ -3,928 +3,433 @@ package uploadservice_test
 import (
 	"context"
 	"errors"
+	"io"
 	"mime/multipart"
+	"path"
 	"testing"
+	"time"
 
 	logger "github.com/assurrussa/gologger"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/mock/gomock"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	deletedfile "github.com/assurrussa/gouploads/domain/files/outbox/deleted_file"
-	sendresizefilejob "github.com/assurrussa/gouploads/domain/files/outbox/send_resize_file"
+	sendresize "github.com/assurrussa/gouploads/domain/files/outbox/send_resize_file"
 	"github.com/assurrussa/gouploads/domain/files/service/uploadservice"
 	uploadservicemocks "github.com/assurrussa/gouploads/domain/files/service/uploadservice/mocks"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	testshelpers "github.com/assurrussa/gouploads/domain/files/tests"
-	testsmatcher "github.com/assurrussa/gouploads/domain/files/tests/matcher"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
-	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	"github.com/assurrussa/gouploads/internal/identity"
 	"github.com/assurrussa/gouploads/internal/pointer"
 	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
-const (
-	fileName = "example.png"
-)
+const fileName = "example.png"
 
 type TestSuite struct {
 	suite.Suite
-
 	ctrl               *gomock.Controller
 	mockFileRepository *uploadservicemocks.MockfileRepository
 	mockOutboxPutter   *uploadservicemocks.MockoutboxPutter
 	mockTransactor     *uploadservicemocks.Mocktransactor
 	mockFileStorage    *uploadservicemocks.MockfileStorage
-
-	svc *uploadservice.Service
+	svc                *uploadservice.Service
 }
 
 func NewTestRepoSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite) {
 	t.Helper()
 	return tests.NewSuite[*TestSuite](t, func(t *testing.T, _ context.Context) *TestSuite {
 		t.Helper()
-
 		ctrl := gomock.NewController(t)
-		mockFileRepository := uploadservicemocks.NewMockfileRepository(ctrl)
-		mockOutboxPutter := uploadservicemocks.NewMockoutboxPutter(ctrl)
-		mockTransactor := uploadservicemocks.NewMocktransactor(ctrl)
-		mockFileStorage := uploadservicemocks.NewMockfileStorage(ctrl)
-
-		svc := uploadservice.Must(uploadservice.NewOptions(
-			mockTransactor,
-			mockOutboxPutter,
-			mockFileRepository,
-			logger.Discard(),
-			mockFileStorage,
-		))
-
+		repo := uploadservicemocks.NewMockfileRepository(ctrl)
+		outbox := uploadservicemocks.NewMockoutboxPutter(ctrl)
+		tx := uploadservicemocks.NewMocktransactor(ctrl)
+		storage := uploadservicemocks.NewMockfileStorage(ctrl)
+		svc := uploadservice.Must(uploadservice.NewOptions(tx, outbox, repo, logger.Discard(), storage))
 		return &TestSuite{
 			ctrl:               ctrl,
-			mockFileRepository: mockFileRepository,
-			mockOutboxPutter:   mockOutboxPutter,
-			mockTransactor:     mockTransactor,
-			mockFileStorage:    mockFileStorage,
+			mockFileRepository: repo,
+			mockOutboxPutter:   outbox,
+			mockTransactor:     tx,
+			mockFileStorage:    storage,
 			svc:                svc,
 		}
 	})
 }
 
 func Test_Init(t *testing.T) {
-	assert.Panics(t, func() {
-		uploadservice.Must(uploadservice.NewOptions(
-			nil,
-			nil,
-			nil,
-			nil,
-			nil,
-		))
+	require.Panics(t, func() { uploadservice.Must(uploadservice.NewOptions(nil, nil, nil, nil, nil)) })
+}
+
+func uploadRequest(t *testing.T) uploadservice.SingleRequest {
+	t.Helper()
+	return uploadservice.SingleRequest{
+		UploaderUUID: identity.NewUserID(),
+		ManagerID:    12,
+		UserID:       3,
+		FileHeader: testshelpers.MakeFileHeaderImage(t,
+			"photo",
+			fileName,
+			"image/png"),
+		ObjectType: shared.ObjectTypeAdmin,
+		ObjectID:   12,
+	}
+}
+
+func executeTx(ts *TestSuite) {
+	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(),
+		gomock.Any()).DoAndReturn(func(ctx context.Context,
+		fn func(context.Context) error,
+	) error {
+		return fn(ctx)
 	})
 }
 
-func TestService_UploadBatch_Success(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	fileHeader := testshelpers.MakeFileHeaderImage(t, "photo", fileName, "image/png")
-	fileModel := testshelpers.CreateFile(t)
-	fileModel.OriginalFileName = fileName
-	fileID := fileModel.ID
-	fileModel.ID = 0
-	fileModel.Size = 80
-
-	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
-		})
-	body, err := fileHeader.Open()
-	ts.Require().NoError(err)
-
-	input := filestorage.SaveFileInput{
-		Dir:      "uploads/admin/12",
-		FileName: fileModel.OriginalFileName,
-		Size:     fileHeader.Size,
-		MimeType: fileModel.MimeType,
-		Reader:   body,
-	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload batch 1", input)).
-		Return(filestorage.StoredFile{
-			RelativePath: "uploads/admin/12/example.png",
-			URL:          fileModel.URL,
-			Size:         fileModel.Size,
-			MimeType:     fileModel.MimeType,
-		}, nil).Times(1)
-
-	ts.mockFileRepository.EXPECT().
-		Create(gomock.Any(), testsmatcher.NewFileShortMatcher("upload batch success", fileModel)).
-		Return(fileID, nil).Times(1)
-
-	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
-		fileID,
-		"uploads/admin/12/example.png",
-		false,
-	))
-	ts.Require().NoError(err)
-	ts.mockOutboxPutter.EXPECT().Put(gomock.Any(), sendresizefilejob.JobName, payload, gomock.Any()).Times(1)
-
-	uuid := fileModel.GetData().Uploader.UserUUID
-	req := uploadservice.BatchRequest{
-		FileHeaders:  []*multipart.FileHeader{fileHeader},
-		UploaderUUID: uuid,
-		ManagerID:    *fileModel.ManagerID,
-		UserID:       *fileModel.UserID,
-		ObjectType:   fileModel.ObjectType,
-		ObjectID:     *fileModel.ObjectID,
-		AfterJobs: shared.NewFileEventAfterJobs(
-			"model_avatar_bind", uuid, map[string]any{"adminId": uuid},
-		),
-		Config: &uploadservice.FileUploadConfig{
-			AllowedExtensions: []string{".png"},
-			AllowedMimeTypes: map[string][]string{
-				".png": {"image/png"},
-				".txt": {"text/plain"},
-			},
-		},
-	}
-	files, err := ts.svc.UploadBatch(ctx, req)
-	ts.Require().NoError(err)
-	ts.Len(files, 1)
-	ts.Equal(fileID, files[0].ID)
-	ts.Equal("queued", files[0].GetData().Uploader.Status.String())
-	ts.NotEmpty(files[0].URL)
-	ts.Contains(files[0].FileName, ".png")
-	ts.Contains(files[0].URL, "/uploads/admin/12")
+func stageUpload(t *testing.T, ts *TestSuite, source *string) {
+	t.Helper()
+	ts.mockFileStorage.EXPECT().SaveTemp(gomock.Any(),
+		gomock.Any()).DoAndReturn(func(_ context.Context,
+		input filestorage.SaveFileInput) (filestorage.StoredFile,
+		error,
+	) {
+		body, err := io.ReadAll(input.Reader)
+		require.NoError(t, err)
+		*source = path.Join(input.Dir, input.FileName)
+		return filestorage.StoredFile{RelativePath: *source, Size: int64(len(body)), MimeType: input.MimeType, URL: "/" + *source}, nil
+	})
 }
 
-func TestService_UploadBatch_RelativeSourceKey(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	fileHeader := testshelpers.MakeFileHeaderImage(t, "photo", fileName, "image/png")
-	fileModel := testshelpers.CreateFile(t)
-	fileModel.OriginalFileName = fileName
-	fileID := fileModel.ID
-	fileModel.ID = 0
-	fileModel.Size = 80
-
-	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
-		})
-	body, err := fileHeader.Open()
-	ts.Require().NoError(err)
-
-	input := filestorage.SaveFileInput{
-		Dir:      "uploads/admin/12",
-		FileName: fileModel.OriginalFileName,
-		Size:     fileHeader.Size,
-		MimeType: fileModel.MimeType,
-		Reader:   body,
+func TestServiceMediaUploadContracts(t *testing.T) {
+	for _, batch := range []bool{false, true} {
+		for _, skip := range []bool{false, true} {
+			t.Run(string(rune('a'+btoi(batch)*2+btoi(skip))), func(t *testing.T) {
+				ctx, cancel, ts := NewTestRepoSuite(t)
+				defer cancel()
+				req := uploadRequest(t)
+				req.Config = &uploadservice.FileUploadConfig{SkipResizer: skip}
+				req.AfterJobs = shared.NewFileEventAfterJobs("avatar_bind", req.UploaderUUID, map[string]any{"object": 12})
+				var source string
+				stageUpload(t, ts, &source)
+				executeTx(ts)
+				ts.mockFileRepository.EXPECT().Create(gomock.Any(),
+					gomock.Any()).DoAndReturn(func(_ context.Context,
+					file model.File) (int64,
+					error,
+				) {
+					require.Equal(t, req.ObjectType, file.ObjectType)
+					require.Equal(t, req.ObjectID, *file.ObjectID)
+					require.Equal(t, req.ManagerID, *file.ManagerID)
+					require.Equal(t, model.FileTypeImage, file.FileType)
+					require.Equal(t, shared.FileUploadTaskStatusQueued, file.GetData().Uploader.Status)
+					require.Equal(t, req.AfterJobs, file.GetData().Uploader.AfterJobs)
+					require.Equal(t, source, file.GetFullPath())
+					return int64(21), nil
+				})
+				ts.mockOutboxPutter.EXPECT().Put(gomock.Any(),
+					sendresize.JobName,
+					gomock.Any(),
+					gomock.Any()).DoAndReturn(func(_ context.Context,
+					_ string,
+					payload string,
+					_ time.Time) (outboxtypes.JobID,
+					error,
+				) {
+					expected, err := sendresize.MarshalPayload(sendresize.NewPayload(21, source, skip))
+					require.NoError(t, err)
+					require.JSONEq(t, expected, payload)
+					return outboxtypes.NewJobID(), nil
+				})
+				var file model.File
+				var err error
+				if batch {
+					var files []model.File
+					files,
+						err = ts.svc.UploadBatch(ctx,
+						uploadservice.BatchRequest{
+							UploaderUUID: req.UploaderUUID,
+							ManagerID:    req.ManagerID,
+							UserID:       req.UserID,
+							FileHeaders:  []*multipart.FileHeader{req.FileHeader},
+							ObjectType:   req.ObjectType,
+							ObjectID:     req.ObjectID,
+							AfterJobs:    req.AfterJobs,
+							Config:       req.Config,
+						})
+					require.NoError(t, err)
+					require.Len(t, files, 1)
+					file = files[0]
+				} else {
+					file, err = ts.svc.UploadSingle(ctx, req)
+				}
+				require.NoError(t, err)
+				require.Equal(t, int64(21), file.ID)
+				require.Equal(t, fileName, file.OriginalFileName)
+				require.Equal(t, source, file.GetFullPath())
+			})
+		}
 	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload batch internal host", input)).
-		Return(filestorage.StoredFile{
-			RelativePath: "uploads/admin/12/example.png",
-			URL:          fileModel.URL,
-			Size:         fileModel.Size,
-			MimeType:     fileModel.MimeType,
-		}, nil).Times(1)
-
-	ts.mockFileRepository.EXPECT().
-		Create(gomock.Any(), testsmatcher.NewFileShortMatcher("upload batch internal host", fileModel)).
-		Return(fileID, nil).Times(1)
-
-	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
-		fileID,
-		"uploads/admin/12/example.png",
-		false,
-	))
-	ts.Require().NoError(err)
-	ts.mockOutboxPutter.EXPECT().Put(gomock.Any(), sendresizefilejob.JobName, payload, gomock.Any()).Times(1)
-
-	req := uploadservice.BatchRequest{
-		FileHeaders:  []*multipart.FileHeader{fileHeader},
-		UploaderUUID: fileModel.GetData().Uploader.UserUUID,
-		ManagerID:    *fileModel.ManagerID,
-		UserID:       *fileModel.UserID,
-		ObjectType:   fileModel.ObjectType,
-		ObjectID:     *fileModel.ObjectID,
-	}
-
-	files, err := ts.svc.UploadBatch(ctx, req)
-	ts.Require().NoError(err)
-	ts.Len(files, 1)
-	ts.Equal(fileID, files[0].ID)
-	ts.Equal("queued", files[0].GetData().Uploader.Status.String())
-	ts.Equal(fileModel.URL, files[0].URL)
 }
 
-func TestService_UploadBatch_DefaultConfigApplied(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	fileHeader := testshelpers.MakeFileHeaderImage(t, "photos", "cover.png", "image/png")
-	fileModel := testshelpers.CreateFile(t)
-	fileModel.OriginalFileName = "cover.png"
-	fileID := fileModel.ID
-	fileModel.ID = 0
-	fileModel.Size = 80
-	fileModel.ObjectType = shared.ObjectTypeExercise
-	fileModel.ObjectID = nil
-	fileModel.ManagerID = pointer.To(int64(1))
-	fileModel.UserID = pointer.To(int64(3))
-
-	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
-		})
-	body, err := fileHeader.Open()
-	ts.Require().NoError(err)
-
-	input := filestorage.SaveFileInput{
-		Dir:      "uploads/admin/12",
-		FileName: fileModel.OriginalFileName,
-		Size:     fileHeader.Size,
-		MimeType: fileModel.MimeType,
-		Reader:   body,
+func btoi(v bool) int {
+	if v {
+		return 1
 	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload batch 2", input)).
-		Return(filestorage.StoredFile{
-			RelativePath: "uploads/admin/12/cover.png",
-			URL:          fileModel.URL,
-			Size:         fileModel.Size,
-			MimeType:     fileModel.MimeType,
-		}, nil).Times(1)
-
-	ts.mockFileRepository.EXPECT().
-		Create(gomock.Any(), testsmatcher.NewFileShortMatcher("upload batch default config", fileModel)).
-		Return(fileID, nil).Times(1)
-
-	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
-		fileID,
-		"uploads/admin/12/cover.png",
-		false,
-	))
-	ts.Require().NoError(err)
-	ts.mockOutboxPutter.EXPECT().Put(gomock.Any(), sendresizefilejob.JobName, payload, gomock.Any()).Times(1)
-
-	uuid := fileModel.GetData().Uploader.UserUUID
-	req := uploadservice.BatchRequest{
-		FileHeaders:  []*multipart.FileHeader{fileHeader},
-		UploaderUUID: fileModel.GetData().Uploader.UserUUID,
-		ManagerID:    *fileModel.ManagerID,
-		UserID:       *fileModel.UserID,
-		ObjectType:   fileModel.ObjectType,
-		AfterJobs: shared.NewFileEventAfterJobs(
-			"model_avatar_bind", uuid, map[string]any{"adminId": uuid},
-		),
-	}
-	files, err := ts.svc.UploadBatch(ctx, req)
-	ts.Require().NoError(err)
-	ts.Len(files, 1)
-	ts.Equal(fileID, files[0].ID)
-	ts.Equal("queued", files[0].GetData().Uploader.Status.String())
-	ts.NotEmpty(files[0].URL)
-	ts.Contains(files[0].FileName, ".png")
-	ts.Contains(files[0].URL, "/uploads/admin/12")
+	return 0
 }
 
-func TestService_UploadBatch_ValidationError(t *testing.T) {
+func TestServiceReplacementOwnershipAndAfterJobs(t *testing.T) {
 	ctx, cancel, ts := NewTestRepoSuite(t)
 	defer cancel()
-
-	testID := sharedtypes.NewUserID()
-	fileHeader := testshelpers.MakeFileHeader(t, "photos", "cover.txt", "batch content", "text/plain")
-
-	req := uploadservice.BatchRequest{
-		FileHeaders:  []*multipart.FileHeader{fileHeader},
-		UploaderUUID: testID,
-		ManagerID:    1,
-		UserID:       3,
-		ObjectType:   shared.ObjectTypeExercise,
-		AfterJobs:    shared.NewFileEventAfterJobs("model_avatar_bind", testID, map[string]any{"testId": 1}),
-		Config: &uploadservice.FileUploadConfig{
-			AllowedExtensions: []string{".png"},
-		},
-	}
-	tasks, err := ts.svc.UploadBatch(ctx, req)
-	ts.Require().Error(err)
-	ts.Require().Nil(tasks)
-	var valErr uploadservice.ClientError
-	ts.Require().ErrorAs(err, &valErr)
-
-	// No transactional operations should be performed on validation failure.
-}
-
-func TestService_UploadBatch_NoFiles(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	req := uploadservice.BatchRequest{
-		FileHeaders: []*multipart.FileHeader{},
-		ManagerID:   1,
-		UserID:      3,
-		ObjectType:  shared.ObjectTypeExercise,
-		ObjectID:    shared.FileObjectID(12344),
-		DeletedID:   shared.FileObjectID(12343),
-		Config: &uploadservice.FileUploadConfig{
-			AllowedExtensions: []string{".txt"},
-			AllowedMimeTypes: map[string][]string{
-				".txt": {"text/plain"},
-			},
-		},
-	}
-	tasks, err := ts.svc.UploadBatch(ctx, req)
-	ts.Require().ErrorIs(err, uploadservice.ErrNoFiles)
-	ts.Nil(tasks)
-}
-
-func TestService_UploadBatch_RunInTxError(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	fileHeader := testshelpers.MakeFileHeader(t, "photos", "cover.txt", "batch content", "text/plain")
-	fileModel := testshelpers.CreateFile(t)
-
-	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).Return(assert.AnError)
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, gomock.Any()).
-		Return(filestorage.StoredFile{
-			RelativePath: "uploads/admin/12/example.png",
-			URL:          fileModel.URL,
-			Size:         fileModel.Size,
-			MimeType:     fileModel.MimeType,
-		}, nil).Times(1)
-
-	req := uploadservice.BatchRequest{
-		FileHeaders:  []*multipart.FileHeader{fileHeader},
-		UploaderUUID: fileModel.GetData().Uploader.UserUUID,
-		ManagerID:    1,
-		UserID:       3,
-		ObjectType:   shared.ObjectTypeExercise,
-		ObjectID:     shared.FileObjectID(12344),
-		Config: &uploadservice.FileUploadConfig{
-			AllowedExtensions: []string{".txt"},
-			AllowedMimeTypes: map[string][]string{
-				".txt": {"text/plain"},
-			},
-		},
-	}
-	_, err := ts.svc.UploadBatch(ctx, req)
-	ts.Require().ErrorIs(err, assert.AnError)
-}
-
-func TestService_UploadSingle_Success(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	fileHeader := testshelpers.MakeFileHeaderImage(t, "photo", fileName, "image/png")
-	fileModel := testshelpers.CreateFile(t)
-	fileModel.OriginalFileName = fileName
-	fileID := fileModel.ID
-	fileModel.ID = 0
-	fileModel.Size = 80
-	replacedFile := testshelpers.CreateFile(t)
-	replacedFile.ID = 12343
-	replacedFile.ObjectType = fileModel.ObjectType
-	replacedFile.ObjectID = pointer.To(*fileModel.ObjectID)
-	ts.mockFileRepository.EXPECT().GetByID(ctx, replacedFile.ID).Return(replacedFile, nil).Times(1)
-
-	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
-		})
-	body, err := fileHeader.Open()
-	ts.Require().NoError(err)
-
-	input := filestorage.SaveFileInput{
-		Dir:      "uploads/admin/12",
-		FileName: fileModel.OriginalFileName,
-		Size:     fileHeader.Size,
-		MimeType: fileModel.MimeType,
-		Reader:   body,
-	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload single", input)).
-		Return(filestorage.StoredFile{
-			RelativePath: "uploads/admin/12/example.png",
-			URL:          fileModel.URL,
-			Size:         fileModel.Size,
-			MimeType:     fileModel.MimeType,
-		}, nil).Times(1)
-
-	ts.mockFileRepository.EXPECT().
-		Create(gomock.Any(), testsmatcher.NewFileShortMatcher("upload single success", fileModel)).
-		DoAndReturn(func(_ context.Context, created model.File) (int64, error) {
-			afterJobs := created.GetData().Uploader.AfterJobs
-			ts.Require().Len(afterJobs, 2)
-			payload, payloadErr := deletedfile.UnmarshalPayload(afterJobs[1].Payload)
-			ts.Require().NoError(payloadErr)
-			ts.Equal(replacedFile.ID, payload.FileID)
-			ts.Equal(fileModel.ObjectType, payload.ObjectType)
-			ts.Equal(*fileModel.ObjectID, payload.ObjectID)
-			return fileID, nil
-		}).Times(1)
-
-	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
-		fileID,
-		"uploads/admin/12/example.png",
-		false,
-	))
-	ts.Require().NoError(err)
-	ts.mockOutboxPutter.EXPECT().Put(gomock.Any(), sendresizefilejob.JobName, payload, gomock.Any()).Times(1)
-
-	uuid := fileModel.GetData().Uploader.UserUUID
-	req := uploadservice.SingleRequest{
-		FileHeader:   fileHeader,
-		UploaderUUID: uuid,
-		ManagerID:    *fileModel.ManagerID,
-		UserID:       *fileModel.UserID,
-		ObjectType:   fileModel.ObjectType,
-		ObjectID:     *fileModel.ObjectID,
-		DeletedID:    shared.FileObjectID(12343),
-		AfterJobs: shared.NewFileEventAfterJobs(
-			"model_avatar_bind", uuid, map[string]any{"adminId": uuid},
-		),
-		Config: &uploadservice.FileUploadConfig{
-			AllowedExtensions: []string{".png"},
-			AllowedMimeTypes: map[string][]string{
-				".png": {"image/png"},
-				".txt": {"text/plain"},
-			},
-		},
-	}
-	file, err := ts.svc.UploadSingle(ctx, req)
-	ts.Require().NoError(err)
-	ts.Require().NotNil(file)
-	ts.Equal(fileID, file.ID)
-	ts.Equal("queued", file.GetData().Uploader.Status.String())
-	ts.NotEmpty(file.URL)
-	ts.Contains(file.FileName, ".png")
-	ts.Contains(file.URL, "/uploads/admin/12")
-}
-
-func TestService_UploadSingle_SkipResizer(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	fileHeader := testshelpers.MakeFileHeaderImage(t, "photo", fileName, "image/png")
-	fileModel := testshelpers.CreateFile(t)
-	fileModel.OriginalFileName = fileName
-	fileID := fileModel.ID
-	fileModel.ID = 0
-	fileModel.Size = 80
-
-	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
-		})
-	body, err := fileHeader.Open()
-	ts.Require().NoError(err)
-
-	input := filestorage.SaveFileInput{
-		Dir:      "uploads/admin/12",
-		FileName: fileModel.OriginalFileName,
-		Size:     fileHeader.Size,
-		MimeType: fileModel.MimeType,
-		Reader:   body,
-	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload skip resizer", input)).
-		Return(filestorage.StoredFile{
-			RelativePath: "uploads/admin/12/example.png",
-			URL:          fileModel.URL,
-			Size:         fileModel.Size,
-			MimeType:     fileModel.MimeType,
-		}, nil).Times(1)
-
-	ts.mockFileRepository.EXPECT().
-		Create(gomock.Any(), testsmatcher.NewFileShortMatcher("upload single skip resizer", fileModel)).
-		Return(fileID, nil).Times(1)
-
-	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
-		fileID,
-		"uploads/admin/12/example.png",
-		true,
-	))
-	ts.Require().NoError(err)
-	ts.mockOutboxPutter.EXPECT().
-		Put(gomock.Any(), sendresizefilejob.JobName, payload, gomock.Any()).
-		Return(outboxtypes.NewJobID(), nil).Times(1)
-
-	uuid := fileModel.GetData().Uploader.UserUUID
-	req := uploadservice.SingleRequest{
-		FileHeader:   fileHeader,
-		UploaderUUID: uuid,
-		ManagerID:    *fileModel.ManagerID,
-		UserID:       *fileModel.UserID,
-		ObjectType:   fileModel.ObjectType,
-		ObjectID:     *fileModel.ObjectID,
-		AfterJobs: shared.NewFileEventAfterJobs(
-			"model_avatar_bind", uuid, map[string]any{"adminId": uuid},
-		),
-		Config: &uploadservice.FileUploadConfig{
-			AllowedExtensions: []string{".png"},
-			AllowedMimeTypes: map[string][]string{
-				".png": {"image/png"},
-			},
-			SkipResizer: true,
-		},
-	}
-
-	file, err := ts.svc.UploadSingle(ctx, req)
-	ts.Require().NoError(err)
-	ts.Equal(fileID, file.ID)
-	ts.Equal("queued", file.GetData().Uploader.Status.String())
-}
-
-func TestService_UploadSingle_ClientError(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	fileHeader := testshelpers.MakeFileHeader(t, "avatar", "avatar.txt", "single content", "text/plain")
-
-	req := uploadservice.SingleRequest{
-		FileHeader:   fileHeader,
-		UploaderUUID: sharedtypes.NewUserID(),
-		ManagerID:    1,
-		UserID:       3,
-		ObjectType:   shared.ObjectTypeExercise,
-		ObjectID:     shared.FileObjectID(12344),
-		Config: &uploadservice.FileUploadConfig{
-			AllowedExtensions: []string{".png"},
-			AllowedMimeTypes: map[string][]string{
-				".png": {"image/png"},
-			},
-		},
-	}
+	req := uploadRequest(t)
+	req.DeletedID = 9
+	req.AfterJobs = shared.NewFileEventAfterJobs("bind", req.UploaderUUID)
+	old := model.File{ID: 9, ObjectType: req.ObjectType, ObjectID: pointer.To(req.ObjectID)}
+	ts.mockFileRepository.EXPECT().GetByID(ctx, int64(9)).Return(old, nil)
+	var source string
+	stageUpload(t, ts, &source)
+	executeTx(ts)
+	ts.mockFileRepository.EXPECT().Create(gomock.Any(),
+		gomock.Any()).DoAndReturn(func(_ context.Context,
+		file model.File) (int64,
+		error,
+	) {
+		jobs := file.GetData().Uploader.AfterJobs
+		require.Len(t, jobs, 2)
+		pl, err := deletedfile.UnmarshalPayload(jobs[1].Payload)
+		require.NoError(t, err)
+		require.Equal(t, int64(9), pl.FileID)
+		require.Equal(t, req.ObjectType, pl.ObjectType)
+		require.Equal(t, req.ObjectID, pl.ObjectID)
+		return int64(21), nil
+	})
+	ts.mockOutboxPutter.EXPECT().Put(gomock.Any(),
+		sendresize.JobName,
+		gomock.Any(),
+		gomock.Any()).Return(outboxtypes.NewJobID(),
+		nil)
 	_, err := ts.svc.UploadSingle(ctx, req)
-	ts.Require().Error(err)
-	var clientErr uploadservice.ClientError
-	ts.Require().ErrorAs(err, &clientErr)
+	require.NoError(t, err)
+	require.Len(t, req.AfterJobs, 1, "request-owned slice must not be mutated")
 }
 
 func TestService_UploadStoredRejectsReplacementFromDifferentObject(t *testing.T) {
 	ctx, cancel, ts := NewTestRepoSuite(t)
 	defer cancel()
-
-	const deletedID = int64(17)
-	replaced := testshelpers.CreateFile(t)
-	replaced.ID = deletedID
-	replaced.ObjectType = shared.ObjectTypeAdmin
-	replaced.ObjectID = pointer.To(shared.FileObjectID(99))
-	ts.mockFileRepository.EXPECT().GetByID(ctx, deletedID).Return(replaced, nil).Times(1)
-
-	_, err := ts.svc.UploadStored(ctx, uploadservice.ReaderRequest{
-		UploaderUUID: sharedtypes.NewUserID(),
-		ManagerID:    3,
-		ObjectType:   shared.ObjectTypeAdmin,
-		ObjectID:     shared.FileObjectID(3),
-		DeletedID:    shared.FileObjectID(deletedID),
-	}, uploadservice.UploadedFile{
-		OriginalName: "client.webp",
-		FileName:     "source.webp",
-		Path:         "staging/v1/tus/session/source.webp",
-		FolderPath:   "staging/v1/tus/session",
-		MimeType:     "image/webp",
-	})
-	ts.Require().Error(err)
-	var clientErr uploadservice.ClientError
-	ts.Require().ErrorAs(err, &clientErr)
-	ts.Equal("replacement file does not belong to the upload object", clientErr.Message)
-}
-
-func TestService_UploadSingle_EnqueueError(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	fileHeader := testshelpers.MakeFileHeaderImage(t, "photo", fileName, "image/png")
-	fileModel := testshelpers.CreateFile(t)
-	fileModel.OriginalFileName = fileName
-	fileModel.ID = 0
-	fileModel.Size = 80
-
-	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
-		})
-	body, err := fileHeader.Open()
-	ts.Require().NoError(err)
-
-	input := filestorage.SaveFileInput{
-		Dir:      "uploads/admin/12",
-		FileName: fileModel.OriginalFileName,
-		Size:     fileHeader.Size,
-		MimeType: fileModel.MimeType,
-		Reader:   body,
-	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload single enqueue error", input)).
-		Return(filestorage.StoredFile{
-			RelativePath: "uploads/admin/12/example.png",
-			URL:          fileModel.URL,
-			Size:         fileModel.Size,
-			MimeType:     fileModel.MimeType,
-		}, nil).Times(1)
-
-	ts.mockFileRepository.EXPECT().
-		Create(gomock.Any(), testsmatcher.NewFileShortMatcher("upload single enqueue error", fileModel)).
-		Return(int64(0), assert.AnError).Times(1)
-
-	uuid := fileModel.GetData().Uploader.UserUUID
-	req := uploadservice.SingleRequest{
-		FileHeader:   fileHeader,
-		UploaderUUID: fileModel.GetData().Uploader.UserUUID,
-		ManagerID:    *fileModel.ManagerID,
-		UserID:       *fileModel.UserID,
-		ObjectType:   fileModel.ObjectType,
-		ObjectID:     *fileModel.ObjectID,
-		AfterJobs: shared.NewFileEventAfterJobs(
-			"model_avatar_bind", uuid, map[string]any{"adminId": uuid},
-		),
-		Config: &uploadservice.FileUploadConfig{
-			AllowedExtensions: []string{".png"},
-			AllowedMimeTypes: map[string][]string{
-				".png": {"image/png"},
-				".txt": {"text/plain"},
-			},
-		},
-	}
-	_, err = ts.svc.UploadSingle(ctx, req)
-	ts.Require().Error(err)
-	ts.Require().Contains(err.Error(), "create upload task")
-}
-
-func TestService_UploadSingle_OutboxError(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	fileHeader := testshelpers.MakeFileHeaderImage(t, "photo", fileName, "image/png")
-	fileModel := testshelpers.CreateFile(t)
-	fileModel.OriginalFileName = fileName
-	fileID := fileModel.ID
-	fileModel.ID = 0
-	fileModel.Size = 80
-
-	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
-		})
-	body, err := fileHeader.Open()
-	ts.Require().NoError(err)
-
-	input := filestorage.SaveFileInput{
-		Dir:      "uploads/admin/12",
-		FileName: fileModel.OriginalFileName,
-		Size:     fileHeader.Size,
-		MimeType: fileModel.MimeType,
-		Reader:   body,
-	}
-	ts.mockFileStorage.EXPECT().SaveTemp(ctx, testsmatcher.NewS3Matcher("s3 upload single outbox error", input)).
-		Return(filestorage.StoredFile{
-			RelativePath: "uploads/admin/12/example.png",
-			URL:          fileModel.URL,
-			Size:         fileModel.Size,
-			MimeType:     fileModel.MimeType,
-		}, nil).Times(1)
-
-	ts.mockFileRepository.EXPECT().
-		Create(gomock.Any(), testsmatcher.NewFileShortMatcher("upload single outbox error", fileModel)).
-		Return(fileID, nil).Times(1)
-
-	payload, err := sendresizefilejob.MarshalPayload(sendresizefilejob.NewPayload(
-		fileID,
-		"uploads/admin/12/example.png",
-		false,
-	))
-	ts.Require().NoError(err)
-	ts.mockOutboxPutter.EXPECT().Put(gomock.Any(), sendresizefilejob.JobName, payload, gomock.Any()).
-		Return(outboxtypes.JobIDNil, assert.AnError).Times(1)
-
-	uuid := fileModel.GetData().Uploader.UserUUID
-	req := uploadservice.SingleRequest{
-		FileHeader:   fileHeader,
-		UploaderUUID: fileModel.GetData().Uploader.UserUUID,
-		ManagerID:    *fileModel.ManagerID,
-		UserID:       *fileModel.UserID,
-		ObjectType:   fileModel.ObjectType,
-		ObjectID:     *fileModel.ObjectID,
-		AfterJobs: shared.NewFileEventAfterJobs(
-			"model_avatar_bind", uuid, map[string]any{"adminId": uuid},
-		),
-		Config: &uploadservice.FileUploadConfig{
-			AllowedExtensions: []string{".png"},
-			AllowedMimeTypes: map[string][]string{
-				".png": {"image/png"},
-				".txt": {"text/plain"},
-			},
-		},
-	}
-	_, err = ts.svc.UploadSingle(ctx, req)
-	ts.Require().Error(err)
-	ts.Require().Contains(err.Error(), "put outbox job")
-}
-
-func TestService_DeleteFile_Success(t *testing.T) {
-	ctx, _, ts := NewTestRepoSuite(t)
-	fileID := int64(123)
-	userID := sharedtypes.NewUserID()
-	file := model.File{
-		ID:               fileID,
-		FileName:         "photo.png",
-		OriginalFileName: "photo.png",
-		URL:              "/upload_file/photo.png",
-		MimeType:         "image/png",
-		Size:             512,
-		Data:             &model.FileData{Width: 100, Height: 200},
-	}
-	ts.mockFileRepository.EXPECT().GetByID(ctx, fileID).
-		Return(file, nil).Times(1)
-
-	payload, err := deletedfile.MarshalPayload(deletedfile.NewPayload(fileID, userID, file.GetFullPath()))
-	ts.Require().NoError(err)
-
-	ts.mockOutboxPutter.EXPECT().Put(gomock.Any(), deletedfile.JobName, payload, gomock.Any()).Times(1)
-
-	err = ts.svc.DeleteFile(ctx, uploadservice.DeleteRequest{
-		FileID:        fileID,
-		UserRequestID: userID,
-	})
-	ts.Require().NoError(err)
-}
-
-func TestService_DeleteFile_AfterJobs(t *testing.T) {
-	ctx, _, ts := NewTestRepoSuite(t)
-	fileID := int64(321)
-	userID := sharedtypes.NewUserID()
-	objectID := shared.FileObjectID(77)
-	file := model.File{
-		ID:               fileID,
-		FileName:         "avatar.png",
-		OriginalFileName: "avatar.png",
-		URL:              "/upload_file/admin/avatar.png",
-		MimeType:         "image/png",
-		Size:             1024,
-		ObjectType:       shared.ObjectTypeAdmin,
-		ObjectID:         pointer.To(objectID),
-	}
-
-	ts.mockFileRepository.EXPECT().GetByID(ctx, fileID).
-		Return(file, nil).Times(1)
-
-	eventPayloads := shared.NewFileEventAfterJobs("test_job_name", userID, map[string]any{
-		"objectId": objectID,
-	})
-	deletedPayload, err := deletedfile.MarshalPayload(deletedfile.NewPayload(
-		fileID, userID, file.GetFullPath(), eventPayloads...,
-	))
-	ts.Require().NoError(err)
-
-	gomock.InOrder(
-		ts.mockOutboxPutter.EXPECT().Put(gomock.Any(), deletedfile.JobName, deletedPayload, gomock.Any()).Times(1),
-	)
-
-	err = ts.svc.DeleteFile(ctx, uploadservice.DeleteRequest{
-		FileID:        fileID,
-		UserRequestID: userID,
-		AfterJobs:     eventPayloads,
-	})
-	ts.Require().NoError(err)
-}
-
-func TestService_DeleteFile_ErrorPut(t *testing.T) {
-	ctx, _, ts := NewTestRepoSuite(t)
-
-	errExpect := errors.New("error expected")
-
-	fileID := int64(123)
-	userID := sharedtypes.NewUserID()
-	file := model.File{
-		ID:               fileID,
-		FileName:         "photo.png",
-		OriginalFileName: "photo.png",
-		URL:              "/upload_file/photo.png",
-		MimeType:         "image/png",
-		Size:             512,
-		Data:             &model.FileData{Width: 100, Height: 200},
-	}
-	ts.mockFileRepository.EXPECT().GetByID(ctx, fileID).
-		Return(file, nil).Times(1)
-
-	payload, err := deletedfile.MarshalPayload(deletedfile.NewPayload(fileID, userID, file.GetFullPath()))
-	ts.Require().NoError(err)
-
-	ts.mockOutboxPutter.EXPECT().Put(gomock.Any(), deletedfile.JobName, payload, gomock.Any()).
-		Return(outboxtypes.JobIDNil, errExpect).Times(1)
-
-	err = ts.svc.DeleteFile(ctx, uploadservice.DeleteRequest{
-		FileID:        fileID,
-		UserRequestID: userID,
-	})
-	ts.Require().ErrorIs(err, errExpect)
-}
-
-func TestService_DeleteFile_ErrorGetByID(t *testing.T) {
-	ctx, _, ts := NewTestRepoSuite(t)
-
-	errExpect := errors.New("error expected")
-
-	fileID := int64(123)
-	userID := sharedtypes.NewUserID()
-	ts.mockFileRepository.EXPECT().GetByID(ctx, fileID).Return(model.File{}, errExpect).Times(1)
-
-	err := ts.svc.DeleteFile(ctx, uploadservice.DeleteRequest{
-		FileID:        fileID,
-		UserRequestID: userID,
-	})
-	ts.Require().ErrorIs(err, errExpect)
-}
-
-func TestService_DeleteFile_ErrorGetByIDFileIDEmpty(t *testing.T) {
-	ctx, _, ts := NewTestRepoSuite(t)
-
-	fileID := int64(123)
-	userID := sharedtypes.NewUserID()
-	ts.mockFileRepository.EXPECT().GetByID(ctx, fileID).Return(model.File{ID: 0}, nil).Times(1)
-
-	err := ts.svc.DeleteFile(ctx, uploadservice.DeleteRequest{
-		FileID:        fileID,
-		UserRequestID: userID,
-	})
-	ts.Require().NoError(err)
-}
-
-func TestService_DeleteFile_ErrorReq(t *testing.T) {
-	ctx, _, ts := NewTestRepoSuite(t)
-
-	fileID := int64(123)
-	userID := sharedtypes.NewUserID()
-
-	err := ts.svc.DeleteFile(ctx, uploadservice.DeleteRequest{
-		FileID:        -1,
-		UserRequestID: userID,
-	})
-	ts.Require().Error(err)
-
-	err = ts.svc.DeleteFile(ctx, uploadservice.DeleteRequest{
-		FileID:        0,
-		UserRequestID: userID,
-	})
-	ts.Require().Error(err)
-
-	err = ts.svc.DeleteFile(ctx, uploadservice.DeleteRequest{
-		FileID:        fileID,
-		UserRequestID: sharedtypes.UserIDNil,
-	})
-	ts.Require().Error(err)
-}
-
-func TestService_SetPrimary_Success(t *testing.T) {
-	ctx, cancel, ts := NewTestRepoSuite(t)
-	defer cancel()
-
-	fileID := int64(77)
-	objectID := int64(901)
-	fileModel := model.File{
-		ID:         fileID,
+	ts.mockFileRepository.EXPECT().GetByID(ctx,
+		int64(17)).Return(model.File{
+		ID:         17,
 		ObjectType: shared.ObjectTypeAdmin,
-		ObjectID:   pointer.To(shared.FileObjectID(33)),
-		FileName:   "avatar.png",
-	}
-
-	ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
+		ObjectID:   pointer.To(shared.FileObjectID(99)),
+	},
+		nil)
+	_, err := ts.svc.UploadStored(ctx,
+		uploadservice.ReaderRequest{
+			UploaderUUID: identity.NewUserID(),
+			ManagerID:    3,
+			ObjectType:   shared.ObjectTypeAdmin,
+			ObjectID:     3,
+			DeletedID:    17,
 		},
-	)
-
-	ts.mockFileRepository.EXPECT().GetByID(gomock.Any(), fileID).Return(fileModel, nil)
-	ts.mockFileRepository.EXPECT().
-		ClearPrimary(gomock.Any(), shared.ObjectTypeExercise.String(), objectID, fileID).
-		Return(nil)
-
-	ts.mockFileRepository.EXPECT().
-		SetPrimary(gomock.Any(), fileID, shared.ObjectTypeExercise.String(), objectID).
-		Return(nil)
-
-	err := ts.svc.SetPrimary(ctx, uploadservice.SetPrimaryRequest{
-		FileID:     fileID,
-		ObjectType: shared.ObjectTypeExercise,
-		ObjectID:   objectID,
-	})
-	ts.Require().NoError(err)
+		uploadservice.UploadedFile{
+			OriginalName: "source.png",
+			FileName:     "source.png",
+			Path:         "tmp/uploads/source.png",
+			MimeType:     "image/png",
+		})
+	var clientErr uploadservice.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	require.Equal(t, "replacement file does not belong to the upload object", clientErr.Message)
 }
 
-func TestService_SetPrimary_FileNotFound(t *testing.T) {
+func TestServiceUploadFailures(t *testing.T) {
+	failure := errors.New("injected failure")
+	for _, phase := range []string{"validation", "transaction", "create", "outbox"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel, ts := NewTestRepoSuite(t)
+			defer cancel()
+			req := uploadRequest(t)
+			switch phase {
+			case "validation":
+				req.FileHeader = testshelpers.MakeFileHeader(t, "photo", "denied.txt", "text", "text/plain")
+			case "transaction":
+				var source string
+				stageUpload(t, ts, &source)
+				ts.mockTransactor.EXPECT().RunInTx(gomock.Any(), gomock.Any()).Return(failure)
+			case "create", "outbox":
+				var source string
+				stageUpload(t, ts, &source)
+				executeTx(ts)
+				if phase == "create" {
+					ts.mockFileRepository.EXPECT().Create(gomock.Any(), gomock.Any()).Return(int64(0), failure)
+				} else {
+					ts.mockFileRepository.EXPECT().Create(gomock.Any(), gomock.Any()).Return(int64(21), nil)
+					ts.mockOutboxPutter.EXPECT().Put(gomock.Any(),
+						sendresize.JobName,
+						gomock.Any(),
+						gomock.Any()).Return(outboxtypes.JobIDNil,
+						failure)
+				}
+			}
+			_, err := ts.svc.UploadSingle(ctx, req)
+			if phase == "validation" {
+				var clientErr uploadservice.ClientError
+				require.ErrorAs(t, err, &clientErr)
+			} else {
+				require.ErrorIs(t, err, failure)
+			}
+			// No storage.Delete expectation: an uncertain commit must retain its source.
+		})
+	}
+}
+
+func TestServiceBatchPartialResults(t *testing.T) {
 	ctx, cancel, ts := NewTestRepoSuite(t)
 	defer cancel()
+	req := uploadRequest(t)
+	var source string
+	stageUpload(t, ts, &source)
+	executeTx(ts)
+	ts.mockFileRepository.EXPECT().Create(gomock.Any(), gomock.Any()).Return(int64(21), nil)
+	ts.mockOutboxPutter.EXPECT().Put(gomock.Any(),
+		sendresize.JobName,
+		gomock.Any(),
+		gomock.Any()).Return(outboxtypes.NewJobID(),
+		nil)
+	denied := testshelpers.MakeFileHeader(t, "photo", "denied.txt", "text", "text/plain")
+	files, err := ts.svc.UploadBatch(ctx,
+		uploadservice.BatchRequest{
+			UploaderUUID: req.UploaderUUID,
+			ManagerID:    req.ManagerID,
+			ObjectType:   req.ObjectType,
+			ObjectID:     req.ObjectID,
+			FileHeaders: []*multipart.FileHeader{
+				req.FileHeader,
+				denied,
+			},
+		})
+	require.Len(t, files, 1)
+	require.Equal(t, int64(21), files[0].ID)
+	var batchErr *uploadservice.BatchError
+	require.ErrorAs(t, err, &batchErr)
+	require.Equal(t, 1, batchErr.FailedIndex)
+	var clientErr uploadservice.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	files, err = ts.svc.UploadBatch(ctx, uploadservice.BatchRequest{})
+	require.Nil(t, files)
+	require.ErrorIs(t, err, uploadservice.ErrNoFiles)
+}
 
-	fileID := int64(88)
-	objectID := int64(55)
+func TestServiceDeleteContracts(t *testing.T) {
+	failure := errors.New("injected failure")
+	for _, phase := range []string{
+		"success",
+		"afterjobs",
+		"missing",
+		"read failure",
+		"outbox failure",
+		"invalid id",
+		"missing actor",
+	} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel, ts := NewTestRepoSuite(t)
+			defer cancel()
+			owner := identity.NewUserID()
+			req := uploadservice.DeleteRequest{FileID: 123, UserRequestID: owner}
+			file := model.File{ID: 123, FileName: "source.png", FolderPath: "uploads/admin/12"}
+			switch phase {
+			case "invalid id":
+				req.FileID = 0
+			case "missing actor":
+				req.UserRequestID = identity.UserIDNil
+			default:
+				if phase == "missing" {
+					file = model.File{}
+				}
+				var readErr error
+				if phase == "read failure" {
+					readErr = failure
+				}
+				ts.mockFileRepository.EXPECT().GetByID(ctx, int64(123)).Return(file, readErr)
+				if phase != "missing" && phase != "read failure" {
+					if phase == "afterjobs" {
+						req.AfterJobs = shared.NewFileEventAfterJobs("deleted_bind", owner)
+					}
+					expected, err := deletedfile.MarshalPayload(deletedfile.NewPayload(file.ID, owner, file.GetFullPath(), req.AfterJobs...))
+					require.NoError(t, err)
+					var putErr error
+					if phase == "outbox failure" {
+						putErr = failure
+					}
+					ts.mockOutboxPutter.EXPECT().Put(gomock.Any(),
+						deletedfile.JobName,
+						expected,
+						gomock.Any()).Return(outboxtypes.NewJobID(),
+						putErr)
+				}
+			}
+			err := ts.svc.DeleteFile(ctx, req)
+			switch phase {
+			case "success", "afterjobs", "missing":
+				require.NoError(t, err)
+			case "read failure", "outbox failure":
+				require.ErrorIs(t, err, failure)
+			default:
+				require.Error(t, err)
+			}
+		})
+	}
+}
 
-	ts.mockFileRepository.EXPECT().GetByID(gomock.Any(), fileID).Return(model.File{}, nil)
+func TestServicePrimaryRequiresExistingBinding(t *testing.T) {
+	for _, phase := range []string{"success", "wrong object", "missing"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel, ts := NewTestRepoSuite(t)
+			defer cancel()
+			file := model.File{ID: 77, ObjectType: shared.ObjectTypeExercise, ObjectID: pointer.To(shared.FileObjectID(901))}
+			switch phase {
+			case "wrong object":
+				file.ObjectID = pointer.To(shared.FileObjectID(33))
+			case "missing":
+				file = model.File{}
+			}
+			ts.mockFileRepository.EXPECT().GetByID(ctx, int64(77)).Return(file, nil)
+			if phase == "success" {
+				executeTx(ts)
+				gomock.InOrder(ts.mockFileRepository.EXPECT().ClearPrimary(gomock.Any(),
+					"exercise",
+					int64(901),
+					int64(77)).Return(nil),
+					ts.mockFileRepository.EXPECT().SetPrimary(gomock.Any(),
+						int64(77),
+						"exercise",
+						int64(901)).Return(nil))
+			}
+			err := ts.svc.SetPrimary(ctx,
+				uploadservice.SetPrimaryRequest{
+					FileID:     77,
+					ObjectType: shared.ObjectTypeExercise,
+					ObjectID:   901,
+				})
+			switch phase {
+			case "success":
+				require.NoError(t, err)
+			case "wrong object":
+				require.ErrorIs(t, err, model.ErrObjectBindingMismatch)
+			default:
+				require.ErrorIs(t, err, uploadservice.ErrFileNotFound)
+			}
+		})
+	}
+}
 
-	err := ts.svc.SetPrimary(ctx, uploadservice.SetPrimaryRequest{
-		FileID:     fileID,
-		ObjectType: shared.ObjectTypeExercise,
-		ObjectID:   objectID,
-	})
-	ts.Require().ErrorIs(err, uploadservice.ErrFileNotFound)
+func TestServiceBatchErrorUnwrap(t *testing.T) {
+	original := uploadservice.ClientError{Message: "denied"}
+	err := &uploadservice.BatchError{FailedIndex: 2, Err: original}
+	var clientErr uploadservice.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	require.Equal(t, original.Message, clientErr.Message)
 }

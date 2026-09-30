@@ -24,45 +24,21 @@ import (
 
 type s3Client interface {
 	CreateMultipartUpload(
-		ctx context.Context,
-		input *s3.CreateMultipartUploadInput,
-		optFns ...func(*s3.Options),
+		ctx context.Context, input *s3.CreateMultipartUploadInput, options ...func(*s3.Options),
 	) (*s3.CreateMultipartUploadOutput, error)
 	AbortMultipartUpload(
-		ctx context.Context,
-		input *s3.AbortMultipartUploadInput,
-		optFns ...func(*s3.Options),
+		ctx context.Context, input *s3.AbortMultipartUploadInput, options ...func(*s3.Options),
 	) (*s3.AbortMultipartUploadOutput, error)
-	UploadPart(
-		ctx context.Context,
-		input *s3.UploadPartInput,
-		optFns ...func(*s3.Options),
-	) (*s3.UploadPartOutput, error)
-	ListParts(
-		ctx context.Context,
-		input *s3.ListPartsInput,
-		optFns ...func(*s3.Options),
-	) (*s3.ListPartsOutput, error)
+	UploadPart(ctx context.Context, input *s3.UploadPartInput, options ...func(*s3.Options)) (*s3.UploadPartOutput, error)
+	ListParts(ctx context.Context, input *s3.ListPartsInput, options ...func(*s3.Options)) (*s3.ListPartsOutput, error)
 	ListMultipartUploads(
-		ctx context.Context,
-		input *s3.ListMultipartUploadsInput,
-		optFns ...func(*s3.Options),
+		ctx context.Context, input *s3.ListMultipartUploadsInput, options ...func(*s3.Options),
 	) (*s3.ListMultipartUploadsOutput, error)
 	CompleteMultipartUpload(
-		ctx context.Context,
-		input *s3.CompleteMultipartUploadInput,
-		optFns ...func(*s3.Options),
+		ctx context.Context, input *s3.CompleteMultipartUploadInput, options ...func(*s3.Options),
 	) (*s3.CompleteMultipartUploadOutput, error)
-	HeadObject(
-		ctx context.Context,
-		input *s3.HeadObjectInput,
-		optFns ...func(*s3.Options),
-	) (*s3.HeadObjectOutput, error)
-	DeleteObject(
-		ctx context.Context,
-		input *s3.DeleteObjectInput,
-		optFns ...func(*s3.Options),
-	) (*s3.DeleteObjectOutput, error)
+	HeadObject(ctx context.Context, input *s3.HeadObjectInput, options ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	DeleteObject(ctx context.Context, input *s3.DeleteObjectInput, options ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 }
 
 type S3StoreConfig struct {
@@ -85,23 +61,15 @@ type S3Store struct {
 	cfg    S3StoreConfig
 }
 
-func NewS3Store(
-	client s3Client,
-	domain s3store.DomainHost,
-	repo sessionRepository,
-	cfg S3StoreConfig,
-) (*S3Store, error) {
-	if client == nil {
-		return nil, errors.New("tus s3 store: client is required")
-	}
-	if repo == nil {
-		return nil, errors.New("tus s3 store: durable session repository is required")
-	}
-	if cfg.PartSize <= 0 {
-		cfg.PartSize = s3store.MinPartSize
+func NewS3Store(client s3Client, domain s3store.DomainHost, repo sessionRepository, cfg S3StoreConfig) (*S3Store, error) {
+	if client == nil || repo == nil {
+		return nil, errors.New("tus s3 store: client and durable repository are required")
 	}
 	if cfg.PartSize < s3store.MinPartSize {
 		cfg.PartSize = s3store.MinPartSize
+	}
+	if cfg.PartSize > 5<<30 {
+		return nil, errors.New("S3 part size exceeds 5 GiB")
 	}
 	if strings.TrimSpace(cfg.Prefix) == "" {
 		cfg.Prefix = defaultS3StorePrefix
@@ -112,38 +80,29 @@ func NewS3Store(
 	if cfg.LeaseTTL <= 0 {
 		cfg.LeaseTTL = defaultLeaseTTL
 	}
-
-	return &S3Store{
-		client: client,
-		domain: domain,
-		repo:   repo,
-		cfg:    cfg,
-	}, nil
+	return &S3Store{client: client, domain: domain, repo: repo, cfg: cfg}, nil
 }
 
-func (s *S3Store) Create(ctx context.Context, req CreateRequest) (Session, error) {
-	if req.UploadLength < 0 {
-		return Session{}, fmt.Errorf("invalid upload length: %d", req.UploadLength)
-	}
-	if strings.TrimSpace(req.OriginalName) == "" {
-		return Session{}, errors.New("original name is required")
-	}
-	if strings.TrimSpace(req.FileName) == "" {
-		return Session{}, errors.New("file name is required")
-	}
+// ChunkSize advertises the bounded S3 multipart profile to HTTP integrations.
+// Intermediate PATCH bodies must match it; only the final body may be shorter.
+func (s *S3Store) ChunkSize() int64 { return s.cfg.PartSize }
 
+func (s *S3Store) Create(ctx context.Context, req CreateRequest) (Session, error) {
+	parts := req.UploadLength / s.cfg.PartSize
+	if req.UploadLength < 0 || parts > 10000 || (parts == 10000 && req.UploadLength%s.cfg.PartSize != 0) {
+		return Session{}, errors.New("upload length exceeds the S3 multipart profile")
+	}
+	if strings.TrimSpace(req.OriginalName) == "" || strings.TrimSpace(req.FileName) == "" {
+		return Session{}, errors.New("original name and file name are required")
+	}
 	id := uuidString()
 	key, err := buildKey(s.cfg.Prefix, id, req.FileName)
 	if err != nil {
 		return Session{}, err
 	}
-
 	mpu, err := s.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-		Bucket:            aws.String(s.domain.StagingBucket()),
-		Key:               aws.String(key),
-		ChecksumAlgorithm: awss3types.ChecksumAlgorithmSha256,
-		CacheControl:      aws.String("private,no-store"),
-		ContentType:       aws.String("application/octet-stream"),
+		Bucket: aws.String(s.domain.StagingBucket()), Key: aws.String(key), ChecksumAlgorithm: awss3types.ChecksumAlgorithmSha256,
+		CacheControl: aws.String("private,no-store"), ContentType: aws.String("application/octet-stream"),
 	})
 	if err != nil {
 		return Session{}, fmt.Errorf("create multipart upload: %w", err)
@@ -152,7 +111,6 @@ func (s *S3Store) Create(ctx context.Context, req CreateRequest) (Session, error
 	if uploadID == "" {
 		return Session{}, errors.New("create multipart upload: empty upload id")
 	}
-
 	now := time.Now().UTC()
 	session := s3Session{
 		Session: Session{
@@ -170,44 +128,41 @@ func (s *S3Store) Create(ctx context.Context, req CreateRequest) (Session, error
 			Quarantined:     true,
 			FinalizationKey: uuid.NewString(),
 		},
-		UploadID:  uploadID,
-		Parts:     make(map[int32]durablePart),
-		ExpiresAt: now.Add(s.cfg.TTL),
+		UploadID: uploadID, Parts: make(map[int32]durablePart), ExpiresAt: now.Add(s.cfg.TTL),
 	}
-
 	if err := s.repo.Create(ctx, session); err != nil {
-		_, _ = s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultLeaseTTL)
+		defer cancel()
+		_, _ = s.client.AbortMultipartUpload(cleanupCtx, &s3.AbortMultipartUploadInput{
 			Bucket:   aws.String(s.domain.StagingBucket()),
 			Key:      aws.String(key),
 			UploadId: aws.String(uploadID),
 		})
 		return Session{}, err
 	}
-
 	return session.Session, nil
 }
 
 func (s *S3Store) Get(ctx context.Context, id string) (Session, error) {
+	if !validSessionID(id) {
+		return Session{}, ErrNotFound
+	}
 	session, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return Session{}, err
 	}
-
+	if session.Status == StatusCleaning {
+		return Session{}, ErrNotFound
+	}
 	return session.Session, nil
 }
 
-func (s *S3Store) Append(
-	ctx context.Context,
-	id string,
-	offset int64,
-	chunk []byte,
-	mimeType string,
-) (int64, error) {
+func (s *S3Store) Append(ctx context.Context, id string, offset int64, chunk []byte, mimeType string) (int64, error) {
 	current, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return 0, err
 	}
-	if offset != current.Offset {
+	if offset < 0 || offset != current.Offset {
 		return current.Offset, ErrOffsetMismatch
 	}
 	if current.Status != StatusActive {
@@ -219,55 +174,33 @@ func (s *S3Store) Append(
 	if len(chunk) == 0 {
 		return current.Offset, ErrChunkTooSmall
 	}
-	newOffset := offset + int64(len(chunk))
-	if newOffset > current.UploadLength {
+	if offset > current.UploadLength || int64(len(chunk)) > current.UploadLength-offset {
 		return current.Offset, ErrLengthExceeded
 	}
-	isLast := newOffset == current.UploadLength
-	if !isLast && int64(len(chunk)) < s.cfg.PartSize {
+	newOffset := offset + int64(len(chunk))
+	last := newOffset == current.UploadLength
+	if !last && int64(len(chunk)) < s.cfg.PartSize {
 		return current.Offset, ErrChunkTooSmall
 	}
-	if !isLast && int64(len(chunk)) != s.cfg.PartSize {
+	if int64(len(chunk)) > s.cfg.PartSize || (!last && int64(len(chunk)) != s.cfg.PartSize) {
 		return current.Offset, ErrChunkSize
 	}
-	if offset%s.cfg.PartSize != 0 && offset != 0 {
+	if offset%s.cfg.PartSize != 0 {
 		return current.Offset, ErrOffsetMismatch
 	}
-
-	owner := uuid.NewString()
-	session, claim, err := s.repo.ClaimAppend(
-		ctx,
-		id,
-		offset,
-		owner,
-		s.cfg.LeaseTTL,
-		s.cfg.TTL,
-	)
+	session, claim, err := s.repo.ClaimAppend(ctx, id, offset, uuid.NewString(), s.cfg.LeaseTTL, s.cfg.TTL)
 	if err != nil {
 		return current.Offset, err
 	}
-
-	partNumber := int32(offset/s.cfg.PartSize + 1)
-	checksum := checksumSHA256(chunk)
-	part, err := s.reconcileOrUploadPart(ctx, session, partNumber, chunk, checksum)
+	part, err := s.reconcileOrUploadPart(ctx, session, int32(offset/s.cfg.PartSize+1), chunk, checksumSHA256(chunk))
 	if err != nil {
 		_ = s.repo.Release(ctx, id, claim)
 		return session.Offset, err
 	}
-
-	updated, err := s.repo.CommitPart(
-		ctx,
-		id,
-		claim,
-		offset,
-		part,
-		strings.TrimSpace(mimeType),
-		s.cfg.TTL,
-	)
+	updated, err := s.repo.CommitPart(ctx, id, claim, offset, part, strings.TrimSpace(mimeType), s.cfg.TTL)
 	if err != nil {
 		return session.Offset, err
 	}
-
 	return updated.Offset, nil
 }
 
@@ -277,20 +210,21 @@ func (s *S3Store) Complete(ctx context.Context, id string) (CompleteResult, erro
 		return CompleteResult{}, err
 	}
 	if current.Status == StatusReady {
+		if refresher, ok := s.repo.(readySessionRefresher); ok {
+			current, err = refresher.TouchReady(ctx, id, s.cfg.TTL)
+			if err != nil {
+				return CompleteResult{}, err
+			}
+		}
 		return s.completeResult(current), nil
+	}
+	if current.Status == StatusCleaning {
+		return CompleteResult{}, ErrUploadBusy
 	}
 	if current.Offset != current.UploadLength {
 		return CompleteResult{}, ErrOffsetMismatch
 	}
-
-	owner := uuid.NewString()
-	session, claim, err := s.repo.ClaimFinalize(
-		ctx,
-		id,
-		owner,
-		s.cfg.LeaseTTL,
-		s.cfg.TTL,
-	)
+	session, claim, err := s.repo.ClaimFinalize(ctx, id, uuid.NewString(), s.cfg.LeaseTTL, s.cfg.TTL)
 	if err != nil {
 		if errors.Is(err, ErrUploadFinalized) {
 			ready, getErr := s.repo.Get(ctx, id)
@@ -301,7 +235,6 @@ func (s *S3Store) Complete(ctx context.Context, id string) (CompleteResult, erro
 		}
 		return CompleteResult{}, err
 	}
-
 	parts, listErr := s.listRemoteParts(ctx, session)
 	if listErr != nil {
 		completed, headErr := s.objectMatchesSession(ctx, session)
@@ -309,9 +242,9 @@ func (s *S3Store) Complete(ctx context.Context, id string) (CompleteResult, erro
 			_ = s.repo.Release(ctx, id, claim)
 			return CompleteResult{}, fmt.Errorf("list multipart parts: %w", listErr)
 		}
-		ready, commitErr := s.repo.CommitFinalize(ctx, id, claim)
-		if commitErr != nil {
-			return CompleteResult{}, commitErr
+		ready, err := s.repo.CommitFinalize(ctx, id, claim)
+		if err != nil {
+			return CompleteResult{}, err
 		}
 		return s.completeResult(ready), nil
 	}
@@ -319,7 +252,6 @@ func (s *S3Store) Complete(ctx context.Context, id string) (CompleteResult, erro
 		_ = s.repo.Release(ctx, id, claim)
 		return CompleteResult{}, err
 	}
-
 	completedParts := make([]awss3types.CompletedPart, 0, len(parts))
 	for _, part := range parts {
 		completedParts = append(completedParts, awss3types.CompletedPart{
@@ -329,12 +261,8 @@ func (s *S3Store) Complete(ctx context.Context, id string) (CompleteResult, erro
 		})
 	}
 	_, completeErr := s.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
-		Bucket:   aws.String(s.domain.StagingBucket()),
-		Key:      aws.String(session.Path),
-		UploadId: aws.String(session.UploadID),
-		MultipartUpload: &awss3types.CompletedMultipartUpload{
-			Parts: completedParts,
-		},
+		Bucket: aws.String(s.domain.StagingBucket()), Key: aws.String(session.Path), UploadId: aws.String(session.UploadID),
+		MultipartUpload: &awss3types.CompletedMultipartUpload{Parts: completedParts},
 	})
 	if completeErr != nil {
 		completed, headErr := s.objectMatchesSession(ctx, session)
@@ -343,7 +271,6 @@ func (s *S3Store) Complete(ctx context.Context, id string) (CompleteResult, erro
 			return CompleteResult{}, fmt.Errorf("complete multipart upload: %w", completeErr)
 		}
 	}
-
 	ready, err := s.repo.CommitFinalize(ctx, id, claim)
 	if err != nil {
 		return CompleteResult{}, err
@@ -351,194 +278,50 @@ func (s *S3Store) Complete(ctx context.Context, id string) (CompleteResult, erro
 	return s.completeResult(ready), nil
 }
 
-func (s *S3Store) Delete(ctx context.Context, id string) error {
-	return s.deleteSession(ctx, id, false)
-}
-
-func (s *S3Store) deleteSession(ctx context.Context, id string, deleteReadyObject bool) error {
-	session, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return err
-	}
-	if session.Status != StatusReady && session.UploadID != "" {
-		if _, err := s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-			Bucket:   aws.String(s.domain.StagingBucket()),
-			Key:      aws.String(session.Path),
-			UploadId: aws.String(session.UploadID),
-		}); err != nil && !isNoSuchUpload(err) {
-			return fmt.Errorf("abort multipart upload: %w", err)
-		}
-	}
-	if deleteReadyObject {
-		if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
-			Bucket: aws.String(s.domain.StagingBucket()),
-			Key:    aws.String(session.Path),
-		}); err != nil {
-			return fmt.Errorf("delete staging object: %w", err)
-		}
-	}
-
-	return s.repo.Delete(ctx, id)
-}
-
-func isNoSuchUpload(err error) bool {
-	var noSuchUpload *awss3types.NoSuchUpload
-	return errors.As(err, &noSuchUpload)
-}
-
-func (s *S3Store) Cleanup(ctx context.Context, before time.Time) (int, error) {
-	if before.IsZero() {
-		return 0, errors.New("cleanup threshold is required")
-	}
-
-	const batchSize = 100
-	// Durable sessions already carry expires_at = last_activity + TTL. The
-	// host cleanup contract passes an activity threshold (now - TTL), so move
-	// that threshold forward once before comparing it with expires_at. Without
-	// this conversion a ready/abandoned session waits for two full TTL periods.
-	sessionExpiryBefore := before.Add(s.cfg.TTL)
-	removed := 0
-	for {
-		ids, err := s.repo.ListExpired(ctx, sessionExpiryBefore, batchSize)
-		if err != nil {
-			return removed, err
-		}
-		if len(ids) == 0 {
-			break
-		}
-		for _, id := range ids {
-			if err := ctx.Err(); err != nil {
-				return removed, err
-			}
-			if err := s.deleteSession(ctx, id, true); err != nil && !errors.Is(err, ErrNotFound) {
-				return removed, err
-			}
-			removed++
-		}
-		if len(ids) < batchSize {
-			break
-		}
-	}
-
-	orphans, err := s.cleanupOrphanMultipartUploads(ctx, before)
-	if err != nil {
-		return removed, err
-	}
-	return removed + orphans, nil
-}
-
-func (s *S3Store) cleanupOrphanMultipartUploads(ctx context.Context, before time.Time) (int, error) {
-	removed := 0
-	var keyMarker *string
-	var uploadIDMarker *string
-	for {
-		result, err := s.client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
-			Bucket:         aws.String(s.domain.StagingBucket()),
-			Prefix:         aws.String(strings.Trim(s.cfg.Prefix, "/") + "/"),
-			KeyMarker:      keyMarker,
-			UploadIdMarker: uploadIDMarker,
-		})
-		if err != nil {
-			return removed, fmt.Errorf("list orphan multipart uploads: %w", err)
-		}
-		for _, upload := range result.Uploads {
-			if err := ctx.Err(); err != nil {
-				return removed, err
-			}
-			if upload.Initiated == nil || !upload.Initiated.Before(before) {
-				continue
-			}
-			objectPath := aws.ToString(upload.Key)
-			uploadID := aws.ToString(upload.UploadId)
-			exists, err := s.repo.HasMultipart(ctx, objectPath, uploadID)
-			if err != nil {
-				return removed, err
-			}
-			if exists {
-				continue
-			}
-			if _, err := s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-				Bucket:   aws.String(s.domain.StagingBucket()),
-				Key:      aws.String(objectPath),
-				UploadId: aws.String(uploadID),
-			}); err != nil {
-				return removed, fmt.Errorf("abort orphan multipart upload: %w", err)
-			}
-			removed++
-		}
-		if !aws.ToBool(result.IsTruncated) {
-			return removed, nil
-		}
-		if result.NextKeyMarker == nil {
-			return removed, errors.New("list orphan multipart uploads: truncated result has no next key marker")
-		}
-		keyMarker = result.NextKeyMarker
-		uploadIDMarker = result.NextUploadIdMarker
-	}
-}
-
 func (s *S3Store) reconcileOrUploadPart(
-	ctx context.Context,
-	session s3Session,
-	partNumber int32,
-	chunk []byte,
-	checksum string,
+	ctx context.Context, session s3Session, number int32, chunk []byte, checksum string,
 ) (durablePart, error) {
-	remote, found, err := s.findRemotePart(ctx, session, partNumber)
+	remote, found, err := s.findRemotePart(ctx, session, number)
 	if err != nil {
 		return durablePart{}, err
 	}
 	if found && remote.Size == int64(len(chunk)) && remote.ChecksumSHA256 == checksum && remote.ETag != "" {
 		return remote, nil
 	}
-
-	contentLength := int64(len(chunk))
-	uploaded, err := s.client.UploadPart(ctx, &s3.UploadPartInput{
+	length := int64(len(chunk))
+	part, err := s.client.UploadPart(ctx, &s3.UploadPartInput{
 		Body:           bytes.NewReader(chunk),
 		Bucket:         aws.String(s.domain.StagingBucket()),
 		Key:            aws.String(session.Path),
-		PartNumber:     aws.Int32(partNumber),
+		PartNumber:     aws.Int32(number),
 		UploadId:       aws.String(session.UploadID),
-		ContentLength:  &contentLength,
+		ContentLength:  &length,
 		ChecksumSHA256: aws.String(checksum),
 	})
 	if err != nil {
-		return durablePart{}, fmt.Errorf("upload part %d: %w", partNumber, err)
+		return durablePart{}, fmt.Errorf("upload part %d: %w", number, err)
 	}
-	etag := strings.TrimSpace(aws.ToString(uploaded.ETag))
+	etag := strings.TrimSpace(aws.ToString(part.ETag))
 	if etag == "" {
-		return durablePart{}, fmt.Errorf("upload part %d: empty etag", partNumber)
+		return durablePart{}, fmt.Errorf("upload part %d: empty etag", number)
 	}
-
-	return durablePart{
-		Number:         partNumber,
-		Size:           contentLength,
-		ETag:           etag,
-		ChecksumSHA256: checksum,
-	}, nil
+	return durablePart{Number: number, Size: length, ETag: etag, ChecksumSHA256: checksum}, nil
 }
 
-func (s *S3Store) findRemotePart(
-	ctx context.Context,
-	session s3Session,
-	partNumber int32,
-) (durablePart, bool, error) {
-	marker := strconv.FormatInt(int64(partNumber-1), 10)
-	maxParts := int32(1)
+func (s *S3Store) findRemotePart(ctx context.Context, session s3Session, number int32) (durablePart, bool, error) {
 	result, err := s.client.ListParts(ctx, &s3.ListPartsInput{
 		Bucket:           aws.String(s.domain.StagingBucket()),
 		Key:              aws.String(session.Path),
 		UploadId:         aws.String(session.UploadID),
-		PartNumberMarker: aws.String(marker),
-		MaxParts:         &maxParts,
+		PartNumberMarker: aws.String(strconv.FormatInt(int64(number-1), 10)),
+		MaxParts:         aws.Int32(1),
 	})
 	if err != nil {
-		return durablePart{}, false, fmt.Errorf("list multipart part %d: %w", partNumber, err)
+		return durablePart{}, false, fmt.Errorf("list multipart part %d: %w", number, err)
 	}
-	if len(result.Parts) == 0 || aws.ToInt32(result.Parts[0].PartNumber) != partNumber {
+	if len(result.Parts) == 0 || aws.ToInt32(result.Parts[0].PartNumber) != number {
 		return durablePart{}, false, nil
 	}
-
 	return fromS3Part(result.Parts[0]), true, nil
 }
 
@@ -562,7 +345,7 @@ func (s *S3Store) listRemoteParts(ctx context.Context, session s3Session) ([]dur
 			break
 		}
 		if strings.TrimSpace(aws.ToString(result.NextPartNumberMarker)) == "" {
-			return nil, errors.New("list multipart parts: truncated result has no next marker")
+			return nil, errors.New("truncated parts result has no next marker")
 		}
 		marker = result.NextPartNumberMarker
 	}
@@ -585,7 +368,6 @@ func (s *S3Store) completeResult(session s3Session) CompleteResult {
 	return CompleteResult{
 		Size:            session.UploadLength,
 		RelativePath:    session.Path,
-		URL:             "",
 		MimeType:        session.MimeType,
 		OriginalName:    session.OriginalName,
 		FileName:        session.FileName,
@@ -614,10 +396,8 @@ func validateRemoteParts(session s3Session, remote []durablePart) error {
 		if durable.Size != part.Size || durable.ETag != part.ETag {
 			return fmt.Errorf("multipart part %d does not match durable state", part.Number)
 		}
-		// S3-compatible providers are allowed to omit checksum extensions from
-		// ListParts. Yandex Object Storage, for example, returns only part number,
-		// size, and ETag. Keep checksum validation when the provider exposes it,
-		// while treating the durable UploadPart ETag as the remote identity proof.
+		// Some compatible providers omit checksums from ListParts. Their ETag
+		// still has to match the identity recorded from UploadPart.
 		if part.ChecksumSHA256 != "" && durable.ChecksumSHA256 != part.ChecksumSHA256 {
 			return fmt.Errorf("multipart part %d checksum does not match durable state", part.Number)
 		}
@@ -643,34 +423,26 @@ func checksumSHA256(data []byte) string {
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
-func buildKey(prefix, sessionID, fileName string) (string, error) {
-	if strings.TrimSpace(fileName) == "" {
+func buildKey(prefix, id, name string) (string, error) {
+	if strings.TrimSpace(name) == "" {
 		return "", errors.New("file name is required")
 	}
-
-	safeFileName, err := filesanitize.SanitizeFileName(fileName)
+	safe, err := filesanitize.SanitizeFileName(name)
 	if err != nil {
 		return "", err
 	}
-
-	ext := strings.TrimPrefix(strings.ToLower(path.Ext(safeFileName)), ".")
+	ext := strings.TrimPrefix(strings.ToLower(path.Ext(safe)), ".")
 	if ext == "" {
 		ext = "bin"
 	}
-	segments := strings.Split(strings.Trim(prefix, "/"), "/")
-	segments = append(segments, sessionID)
-	safeSegments, err := filesanitize.SanitizeSegments(segments)
+	segments := append(strings.Split(strings.Trim(prefix, "/"), "/"), id)
+	segments, err = filesanitize.SanitizeSegments(segments)
 	if err != nil {
 		return "", err
 	}
-	safeSegments = append(safeSegments, "source."+ext)
-	return strings.Join(safeSegments, "/"), nil
+	return strings.Join(append(segments, "source."+ext), "/"), nil
 }
-
-func uuidString() string {
-	return uuid.NewString()
-}
-
+func uuidString() string { return uuid.NewString() }
 func optionalString(value string) *string {
 	if strings.TrimSpace(value) == "" {
 		return nil

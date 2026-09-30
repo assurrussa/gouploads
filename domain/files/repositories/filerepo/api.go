@@ -2,7 +2,9 @@ package filerepo
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Masterminds/squirrel"
@@ -14,8 +16,7 @@ import (
 )
 
 const (
-	tableName = "files"
-
+	tableName         = "files"
 	columnID          = "id"
 	columnUserID      = "user_id"
 	columnObjectType  = "object_type"
@@ -42,6 +43,7 @@ const (
 	columnUpdatedAt   = "updated_at"
 	columnDeletedAt   = "deleted_at"
 	columnPublishedAt = "published_at"
+	MaxListLimit      = 100
 )
 
 var columns = []string{
@@ -51,315 +53,267 @@ var columns = []string{
 	columnSlug, columnLocale, columnData, columnCreatedAt, columnUpdatedAt, columnDeletedAt, columnPublishedAt,
 }
 
-// ListFilters фильтры для списка файлов.
 type ListFilters struct {
 	Limit      int
 	Offset     int
 	FileType   string
 	ObjectType string
 	ObjectID   int64
+	// SkipTotal avoids a COUNT when the caller only needs the current page.
+	SkipTotal bool
 }
 
-// List возвращает список файлов с фильтрами.
 func (r *Repo) List(ctx context.Context, filters ListFilters) ([]model.File, int, error) {
 	const op = "filerepo.List"
-
-	// Базовый запрос для подсчета
-	countBuilder := querybuilder.BuilderDollar().
-		Select(fmt.Sprintf("count(%s) as total", columnID)).
-		From(tableName).
-		Where(squirrel.Eq{columnDeletedAt: nil})
-
-	// Базовый запрос для получения данных
-	listBuilder := querybuilder.BuilderDollar().
-		Select(columns...).
-		From(tableName).
-		Where(squirrel.Eq{columnDeletedAt: nil})
-
-	// Применяем фильтры
+	if filters.Limit < 0 || filters.Offset < 0 {
+		return nil, 0, fmt.Errorf("%s: pagination must be nonnegative", op)
+	}
+	if filters.Limit == 0 {
+		filters.Limit = 50
+	}
+	if filters.Limit > MaxListLimit {
+		filters.Limit = MaxListLimit
+	}
+	conditions := squirrel.And{squirrel.Eq{columnDeletedAt: nil}}
 	if filters.FileType != "" {
-		countBuilder = countBuilder.Where(squirrel.Like{columnMimeType: filters.FileType + "%"})
-		listBuilder = listBuilder.Where(squirrel.Like{columnMimeType: filters.FileType + "%"})
+		condition, err := fileTypeCondition(filters.FileType)
+		if err != nil {
+			return nil, 0, err
+		}
+		conditions = append(conditions, condition)
 	}
-
 	if filters.ObjectType != "" {
-		countBuilder = countBuilder.Where(squirrel.Eq{columnObjectType: filters.ObjectType})
-		listBuilder = listBuilder.Where(squirrel.Eq{columnObjectType: filters.ObjectType})
+		conditions = append(conditions, squirrel.Eq{columnObjectType: filters.ObjectType})
 	}
-
 	if filters.ObjectID > 0 {
-		countBuilder = countBuilder.Where(squirrel.Eq{columnObjectID: filters.ObjectID})
-		listBuilder = listBuilder.Where(squirrel.Eq{columnObjectID: filters.ObjectID})
+		conditions = append(conditions, squirrel.Eq{columnObjectID: filters.ObjectID})
 	}
-
-	// Получаем общее количество
 	var total int
-	if err := r.pgsql.DB().ScanOnex(ctx, op, &total, countBuilder); err != nil {
-		return nil, 0, fmt.Errorf("failed to count files: %w", pgsql.ErrorTransform(err))
+	if !filters.SkipTotal {
+		count := querybuilder.BuilderDollar().Select("count(id)").From(tableName).Where(conditions)
+		if err := r.pgsql.DB().ScanOnex(ctx, op, &total, count); err != nil {
+			return nil, 0, fmt.Errorf("count files: %w", pgsql.ErrorTransform(err))
+		}
 	}
-
-	// Применяем сортировку и пагинацию
-	listBuilder = listBuilder.
-		OrderBy("created_at DESC").
-		Limit(uint64(filters.Limit)).
-		Offset(uint64(filters.Offset))
-
+	query := querybuilder.BuilderDollar().Select(columns...).From(tableName).Where(conditions).
+		OrderBy("created_at DESC", "id DESC").Limit(uint64(filters.Limit)).Offset(uint64(filters.Offset))
 	var files []model.File
-	if err := r.pgsql.DB().ScanAllx(ctx, op, &files, listBuilder); err != nil {
-		return nil, 0, fmt.Errorf("failed to query files: %w", pgsql.ErrorTransform(err))
+	if err := r.pgsql.DB().ScanAllx(ctx, op, &files, query); err != nil {
+		return nil, 0, fmt.Errorf("query files: %w", pgsql.ErrorTransform(err))
 	}
-
 	return files, total, nil
 }
 
-// Create создает новый файл в базе данных.
-func (r *Repo) Create(ctx context.Context, file model.File) (int64, error) {
-	const op = "filerepo.Create"
-
-	builder := querybuilder.BuilderDollar().
-		Insert(tableName).
-		Suffix("RETURNING id").
-		SetMap(querybuilder.Eq{
-			columnUserID:      file.UserID,
-			columnManagerID:   file.ManagerID,
-			columnObjectType:  file.ObjectType,
-			columnObjectID:    file.ObjectID,
-			columnOriginal:    file.OriginalFileName,
-			columnFilename:    file.FileName,
-			columnFolderPath:  file.FolderPath,
-			columnProvider:    file.Provider,
-			columnSize:        file.Size,
-			columnMimeType:    file.MimeType,
-			columnURL:         file.URL,
-			columnSlug:        file.Slug,
-			columnName:        file.Name,
-			columnDescription: file.Description,
-			columnData:        file.Data,
-			columnIsPrimary:   file.IsPrimary,
-			columnCreatedAt:   file.CreatedAt,
-			columnUpdatedAt:   file.UpdatedAt,
-		})
-
-	var id int64
-	if err := r.pgsql.DB().Getx(ctx, op, &id, builder); err != nil {
-		return 0, fmt.Errorf("failed to create file: %w", pgsql.ErrorTransform(err))
+func fileTypeCondition(raw string) (squirrel.Sqlizer, error) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	for _, kind := range []model.FileType{
+		model.FileTypeUnknown,
+		model.FileTypeImage,
+		model.FileTypeVideo,
+		model.FileTypePdf,
+		model.FileTypeDocx,
+		model.FileTypeLink,
+		model.FileTypeText,
+	} {
+		if value == kind.String() || value == kind.ToString() {
+			return squirrel.Eq{columnFileType: kind}, nil
+		}
 	}
+	// Keep the explicitly documented MIME-prefix form for repository consumers.
+	switch value {
+	case "image/", "video/", "text/", "application/":
+		return squirrel.Like{columnMimeType: value + "%"}, nil
+	case "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return squirrel.Eq{columnMimeType: value}, nil
+	default:
+		return nil, fmt.Errorf("unsupported file type filter %q", raw)
+	}
+}
 
+func mutableFileValues(file model.File) querybuilder.Eq {
+	return querybuilder.Eq{
+		columnUserID: file.UserID, columnManagerID: file.ManagerID, columnObjectType: file.ObjectType, columnObjectID: file.ObjectID,
+		columnOriginal: file.OriginalFileName, columnFilename: file.FileName, columnFolderPath: file.FolderPath,
+		columnProvider: file.Provider, columnSize: file.Size, columnMimeType: file.MimeType, columnURL: file.URL,
+		columnName: file.Name, columnDescription: file.Description, columnData: file.Data, columnIsPrimary: file.IsPrimary,
+		columnFileType: file.FileType, columnPosition: file.Position, columnModerate: file.Moderate, columnBlockCause: file.BlockCause,
+		columnLocale: file.Locale, columnPublishedAt: file.PublishedAt,
+	}
+}
+
+func (r *Repo) Create(ctx context.Context, file model.File) (int64, error) {
+	values := mutableFileValues(file)
+	values[columnSlug] = file.Slug
+	values[columnCreatedAt] = file.CreatedAt
+	values[columnUpdatedAt] = file.UpdatedAt
+	query := querybuilder.BuilderDollar().Insert(tableName).Suffix("RETURNING id").SetMap(values)
+	var id int64
+	if err := r.pgsql.DB().Getx(ctx, "filerepo.Create", &id, query); err != nil {
+		return 0, fmt.Errorf("create file: %w", pgsql.ErrorTransform(err))
+	}
 	return id, nil
 }
 
 func (r *Repo) Update(ctx context.Context, id int64, file model.File) error {
-	const op = "filerepo.Update"
-
-	builder := querybuilder.BuilderDollar().
-		Update(tableName).
-		SetMap(querybuilder.Eq{
-			columnUserID:      file.UserID,
-			columnManagerID:   file.ManagerID,
-			columnObjectType:  file.ObjectType,
-			columnObjectID:    file.ObjectID,
-			columnOriginal:    file.OriginalFileName,
-			columnFilename:    file.FileName,
-			columnFolderPath:  file.FolderPath,
-			columnProvider:    file.Provider,
-			columnSize:        file.Size,
-			columnMimeType:    file.MimeType,
-			columnURL:         file.URL,
-			columnName:        file.Name,
-			columnData:        file.Data,
-			columnDescription: file.Description,
-			columnIsPrimary:   file.IsPrimary,
-			columnCreatedAt:   file.CreatedAt,
-			columnUpdatedAt:   file.UpdatedAt,
-		}).Where(squirrel.Eq{columnID: id})
-
-	if _, err := r.pgsql.DB().Execx(ctx, op, builder); err != nil {
-		return fmt.Errorf("error update: %w", pgsql.ErrorTransform(err))
+	if id <= 0 {
+		return errors.New("filerepo.Update: invalid id")
 	}
-
+	values := mutableFileValues(file)
+	values[columnUpdatedAt] = time.Now()
+	query := querybuilder.BuilderDollar().Update(tableName).SetMap(values).Where(squirrel.Eq{columnID: id, columnDeletedAt: nil})
+	tag, err := r.pgsql.DB().Execx(ctx, "filerepo.Update", query)
+	if err != nil {
+		return fmt.Errorf("update file: %w", pgsql.ErrorTransform(err))
+	}
+	if tag.RowsAffected() != 1 {
+		return model.ErrFileNotFound
+	}
 	return nil
 }
 
-// GetByID получает файл по ID.
 func (r *Repo) GetByID(ctx context.Context, id int64) (model.File, error) {
-	const op = "filerepo.GetByID"
-
 	if id <= 0 {
-		return model.File{}, fmt.Errorf("%s: invalid id", op)
+		return model.File{}, errors.New("filerepo.GetByID: invalid id")
 	}
-
-	builder := querybuilder.BuilderDollar().
-		Select(columns...).
-		From(tableName).
-		Where(squirrel.Eq{columnID: id, columnDeletedAt: nil}).
-		Limit(1)
-
+	query := querybuilder.BuilderDollar().Select(columns...).From(tableName).Where(squirrel.Eq{
+		columnID:        id,
+		columnDeletedAt: nil,
+	}).Limit(1)
 	var file model.File
-	if err := r.pgsql.DB().ScanOnex(ctx, op, &file, builder); err != nil {
+	if err := r.pgsql.DB().ScanOnex(ctx, "filerepo.GetByID", &file, query); err != nil {
 		if pgxscan.NotFound(err) {
 			return model.File{}, nil
 		}
-
-		return model.File{}, fmt.Errorf("%s: error get: %w", op, pgsql.ErrorTransform(err))
+		return model.File{}, fmt.Errorf("get file: %w", pgsql.ErrorTransform(err))
 	}
-
 	return file, nil
 }
 
-// DeleteByID удаляет файл по ID (soft delete).
 func (r *Repo) DeleteByID(ctx context.Context, id int64) error {
-	const op = "filerepo.DeleteByID"
-
 	if id <= 0 {
-		return fmt.Errorf("%s: invalid id", op)
+		return errors.New("filerepo.DeleteByID: invalid id")
 	}
-
-	builder := querybuilder.BuilderDollar().
-		Update(tableName).
-		Set(columnDeletedAt, time.Now()).
-		Where(squirrel.Eq{columnID: id}).
-		Where(squirrel.Eq{columnDeletedAt: nil})
-
-	if _, err := r.pgsql.DB().Execx(ctx, op, builder); err != nil {
-		return fmt.Errorf("failed to delete file: %w", pgsql.ErrorTransform(err))
+	query := querybuilder.BuilderDollar().Update(tableName).Set(columnDeletedAt, time.Now()).Set(columnUpdatedAt, time.Now()).
+		Where(squirrel.Eq{columnID: id, columnDeletedAt: nil})
+	if _, err := r.pgsql.DB().Execx(ctx, "filerepo.DeleteByID", query); err != nil {
+		return fmt.Errorf("delete file: %w", pgsql.ErrorTransform(err))
 	}
-
 	return nil
 }
 
-// GetByObjectType возвращает файлы по типу объекта.
 func (r *Repo) GetByObjectType(ctx context.Context, objectType string, objectID int64) ([]model.File, error) {
-	const op = "filerepo.GetByObjectType"
-
-	builder := querybuilder.BuilderDollar().
-		Select(columns...).
-		From(tableName).
-		Where(squirrel.Eq{columnObjectType: objectType}).
-		Where(squirrel.Eq{columnObjectID: objectID}).
-		Where(squirrel.Eq{columnDeletedAt: nil}).
-		OrderBy("is_primary DESC", "position ASC", "created_at DESC")
-
+	query := querybuilder.BuilderDollar().Select(columns...).From(tableName).
+		Where(squirrel.Eq{columnObjectType: objectType, columnObjectID: objectID, columnDeletedAt: nil}).
+		OrderBy("is_primary DESC", "position ASC", "created_at DESC", "id DESC")
 	var files []model.File
-	if err := r.pgsql.DB().ScanAllx(ctx, op, &files, builder); err != nil {
-		return nil, fmt.Errorf("failed to query files by object type: %w", pgsql.ErrorTransform(err))
+	if err := r.pgsql.DB().ScanAllx(ctx, "filerepo.GetByObjectType", &files, query); err != nil {
+		return nil, fmt.Errorf("query object files: %w", pgsql.ErrorTransform(err))
 	}
-
 	return files, nil
 }
 
-// ClearPrimary resets the primary flag for files attached to an entity.
+func (r *Repo) lockPrimary(ctx context.Context, objectType string, objectID int64) error {
+	if objectType == "" || objectID <= 0 {
+		return errors.New("primary object binding is required")
+	}
+	key := fmt.Sprintf("gouploads:primary:%s:%d", objectType, objectID)
+	_, err := r.pgsql.DB().Exec(ctx, "filerepo.LockPrimary", "select pg_advisory_xact_lock(hashtextextended($1, 0))", key)
+	return err
+}
+
+func (r *Repo) checkPrimaryBinding(ctx context.Context, id int64, objectType string, objectID int64) error {
+	file, err := r.GetByIDForUpdate(ctx, id)
+	if err != nil {
+		return err
+	}
+	if file.ID == 0 {
+		return model.ErrFileNotFound
+	}
+	if file.ObjectID == nil || file.ObjectType.String() != objectType || file.ObjectID.Int64() != objectID {
+		return model.ErrObjectBindingMismatch
+	}
+	return nil
+}
+
 func (r *Repo) ClearPrimary(ctx context.Context, objectType string, objectID int64, excludeID int64) error {
-	const op = "filerepo.ClearPrimary"
-
-	if objectType == "" {
-		return fmt.Errorf("%s: objectType is required", op)
-	}
-	if objectID <= 0 {
-		return fmt.Errorf("%s: objectID must be positive", op)
-	}
-
-	builder := querybuilder.BuilderDollar().
-		Update(tableName).
-		Set(columnIsPrimary, false).
-		Set(columnUpdatedAt, time.Now()).
-		Where(squirrel.Eq{columnObjectType: objectType}).
-		Where(squirrel.Eq{columnObjectID: objectID}).
-		Where(squirrel.Eq{columnIsPrimary: true})
-
-	if excludeID > 0 {
-		builder = builder.Where(squirrel.NotEq{columnID: excludeID})
-	}
-
-	if _, err := r.pgsql.DB().Execx(ctx, op, builder); err != nil {
-		return fmt.Errorf("failed to clear primary flag: %w", pgsql.ErrorTransform(err))
-	}
-
-	return nil
+	return r.trxManager.RunInTx(ctx, func(ctx context.Context) error {
+		if err := r.lockPrimary(ctx, objectType, objectID); err != nil {
+			return err
+		}
+		if excludeID > 0 {
+			if err := r.checkPrimaryBinding(ctx, excludeID, objectType, objectID); err != nil {
+				return err
+			}
+		}
+		query := querybuilder.BuilderDollar().Update(tableName).Set(columnIsPrimary, false).Set(columnUpdatedAt, time.Now()).
+			Where(squirrel.Eq{columnObjectType: objectType, columnObjectID: objectID, columnIsPrimary: true, columnDeletedAt: nil})
+		if excludeID > 0 {
+			query = query.Where(squirrel.NotEq{columnID: excludeID})
+		}
+		if _, err := r.pgsql.DB().Execx(ctx, "filerepo.ClearPrimary", query); err != nil {
+			return fmt.Errorf("clear primary: %w", pgsql.ErrorTransform(err))
+		}
+		return nil
+	})
 }
 
-// SetPrimary marks the specified file as primary and updates its binding.
+// SetPrimary never changes the owning object. Rebinding requires a separate,
+// explicitly authorized domain operation, not an implicit side effect here.
 func (r *Repo) SetPrimary(ctx context.Context, id int64, objectType string, objectID int64) error {
-	const op = "filerepo.SetPrimary"
-
-	if id <= 0 {
-		return fmt.Errorf("%s: invalid id", op)
-	}
-	if objectType == "" {
-		return fmt.Errorf("%s: objectType is required", op)
-	}
-	if objectID <= 0 {
-		return fmt.Errorf("%s: objectID must be positive", op)
-	}
-
-	builder := querybuilder.BuilderDollar().
-		Update(tableName).
-		SetMap(querybuilder.Eq{
-			columnObjectType: objectType,
-			columnObjectID:   objectID,
-			columnIsPrimary:  true,
-			columnUpdatedAt:  time.Now(),
-		}).
-		Where(squirrel.Eq{columnID: id}).
-		Where(squirrel.Eq{columnDeletedAt: nil})
-
-	if _, err := r.pgsql.DB().Execx(ctx, op, builder); err != nil {
-		return fmt.Errorf("failed to set primary: %w", pgsql.ErrorTransform(err))
-	}
-
-	return nil
+	return r.trxManager.RunInTx(ctx, func(ctx context.Context) error {
+		if err := r.lockPrimary(ctx, objectType, objectID); err != nil {
+			return err
+		}
+		if err := r.checkPrimaryBinding(ctx, id, objectType, objectID); err != nil {
+			return err
+		}
+		query := querybuilder.BuilderDollar().Update(tableName).Set(columnIsPrimary, true).Set(columnUpdatedAt, time.Now()).
+			Where(squirrel.Eq{columnID: id, columnObjectType: objectType, columnObjectID: objectID, columnDeletedAt: nil})
+		tag, err := r.pgsql.DB().Execx(ctx, "filerepo.SetPrimary", query)
+		if err != nil {
+			return fmt.Errorf("set primary: %w", pgsql.ErrorTransform(err))
+		}
+		if tag.RowsAffected() != 1 {
+			return model.ErrFileNotFound
+		}
+		return nil
+	})
 }
 
-// UpdatePosition обновляет позицию файла.
 func (r *Repo) UpdatePosition(ctx context.Context, id int64, position int) error {
-	const op = "filerepo.UpdatePosition"
-
 	if id <= 0 {
-		return fmt.Errorf("%s: invalid id", op)
+		return errors.New("filerepo.UpdatePosition: invalid id")
 	}
-
-	builder := querybuilder.BuilderDollar().
-		Update(tableName).
-		Set(columnPosition, position).
-		Set(columnUpdatedAt, "NOW()").
-		Where(squirrel.Eq{columnID: id}).
-		Where(squirrel.Eq{columnDeletedAt: nil})
-
-	if _, err := r.pgsql.DB().Execx(ctx, op, builder); err != nil {
-		return fmt.Errorf("failed to update file position: %w", pgsql.ErrorTransform(err))
+	query := querybuilder.BuilderDollar().Update(tableName).Set(columnPosition, position).
+		Set(columnUpdatedAt, squirrel.Expr("NOW()")).Where(squirrel.Eq{columnID: id, columnDeletedAt: nil})
+	tag, err := r.pgsql.DB().Execx(ctx, "filerepo.UpdatePosition", query)
+	if err != nil {
+		return fmt.Errorf("update file position: %w", pgsql.ErrorTransform(err))
 	}
-
+	if tag.RowsAffected() != 1 {
+		return model.ErrFileNotFound
+	}
 	return nil
 }
 
-// CleanupExpiredFiles удаляет строки, где deleted_at старше, к примеру 60 минут.
-// Работает батчами со SKIP LOCKED, чтобы не блокировать рабочие транзакции.
-// batchSize: количество строк за раз (например, 100).
-// minutes: кол-во минут прошедших с момента удаления.
+// CleanupExpiredFiles removes tombstones in bounded, nonblocking batches.
 func (r *Repo) CleanupExpiredFiles(ctx context.Context, batchSize, minutes int) (int64, error) {
-	const op = "CleanupExpiredFiles"
 	if batchSize <= 0 {
-		return 0, fmt.Errorf("%s: invalid batchSize", op)
+		return 0, errors.New("CleanupExpiredFiles: invalid batchSize")
 	}
-
 	if minutes < 0 {
 		minutes = 60
 	}
-
-	query := fmt.Sprintf(`WITH c AS (
-  SELECT id FROM %s
-  WHERE deleted_at < $1::timestamp - $2 * INTERVAL '1 minute'
-  ORDER BY id ASC
-  FOR UPDATE SKIP LOCKED
-  LIMIT $3
+	query := `WITH c AS (
+  SELECT f.id FROM files f
+  WHERE f.deleted_at < $1::timestamp - $2 * INTERVAL '1 minute'
+    AND NOT EXISTS (SELECT 1 FROM file_deletions d WHERE d.file_id = f.id AND d.completed_at IS NULL)
+  ORDER BY f.id ASC FOR UPDATE OF f SKIP LOCKED LIMIT $3
 )
-DELETE FROM %s t
-USING c
-WHERE t.id = c.id;`, tableName, tableName)
-
-	result, err := r.pgsql.DB().Exec(ctx, op, query, time.Now(), minutes, batchSize)
+DELETE FROM files t USING c WHERE t.id = c.id;`
+	tag, err := r.pgsql.DB().Exec(ctx, "CleanupExpiredFiles", query, time.Now(), minutes, batchSize)
 	if err != nil {
-		return 0, fmt.Errorf("%s: error cleaning up expired files: %w", op, pgsql.ErrorTransform(err))
+		return 0, fmt.Errorf("clean up files: %w", pgsql.ErrorTransform(err))
 	}
-
-	return result.RowsAffected(), nil
+	return tag.RowsAffected(), nil
 }

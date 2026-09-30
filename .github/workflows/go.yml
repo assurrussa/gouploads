@@ -1,17 +1,67 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
 name: Go
 
 on:
   push:
-    branches: [ "master", "release/*" ]
+    branches: [master, 'release/*']
   pull_request:
-    branches: [ "master" ]
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gouploads-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: go1.27.1
+  GOPRIVATE: ''
+  GOCACHE: ${{ github.workspace }}/.go-cache/gocache
+  GOMODCACHE: ${{ github.workspace }}/.go-cache/gomodcache
+  GOPATH: ${{ github.workspace }}/.go-cache/gopath
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+      - name: Check declared toolchain
+        run: test "$(go env GOVERSION)" = "$(awk '$1 == "toolchain" { print $2 }' go.mod)"
+      - run: go mod tidy -diff
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race -cover -covermode=atomic -count=1 ./...
+      - run: make test-surface externalconsumer-local anonymous-source
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --timeout=5m
+      - name: Verify configured formatting
+        run: |
+          golangci-lint fmt
+          git diff --exit-code
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17-alpine
@@ -26,36 +76,37 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+    env:
+      TEST_PSQL_ADDRESS_LOCAL: 127.0.0.1
+      TEST_PSQL_PORT_LOCAL: '5432'
+      TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      TEST_S3_ACCESS_KEY: minioadmin
+      TEST_S3_SECRET_KEY: minioadmin
     steps:
       - uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
         with:
-          go-version: stable
-
-      - name: Configure Git for private modules
-        run: git config --global url."https://${{ secrets.GH_PAT }}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
-
-      - name: Set GOPRIVATE
-        run: go env -w GOPRIVATE=github.com/assurrussa
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+          persist-credentials: false
+      - uses: actions/setup-go@v6
         with:
-          version: latest
-          args: --timeout=5m
-        env:
-          GOPRIVATE: "github.com/assurrussa"
-
-      - name: Build
-        run: go build -v ./...
-
-      - name: Test Race
-        run: go test -race -v ./...
-
-      - name: Test durable TUS PostgreSQL fencing
-        run: go test -tags integration ./domain/files/service/tusupload -run TestIntegration_PostgresSessionRepository -count=1
-        env:
-          TEST_PSQL_ADDRESS_LOCAL: 127.0.0.1
-          TEST_PSQL_PORT_LOCAL: 5432
+          go-version: '1.27.1'
+      - name: Start isolated S3 fixture
+        run: |
+          docker run -d --name gouploads-minio \
+            -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live; then exit 0; fi
+            sleep 1
+          done
+          docker logs gouploads-minio
+          exit 1
+      - run: make test-surface-integration
+      - run: go test -race -tags=integration ./domain/files/repositories/filerepo -count=1
+      - run: make test-tus-postgres-integration test-source-url-s3-integration
+      - run: make test-portable-media-e2e test-originals-integration
+      - name: Fixture logs and shutdown
+        if: always()
+        run: |
+          docker logs gouploads-minio || true
+          docker rm -f gouploads-minio || true

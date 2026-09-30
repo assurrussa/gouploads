@@ -15,7 +15,6 @@ import (
 	"github.com/assurrussa/outbox/backends/pgsql/storage/transaction"
 	querybuilder "github.com/assurrussa/outbox/shared/query_builder"
 	"github.com/jackc/pgx/v5"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
@@ -29,342 +28,209 @@ import (
 
 type TestRepoSuite struct {
 	suite.Suite
-
 	db       pgsql.Client
 	dbHelper *testshelpers.DBHelper
 	trx      *transaction.Manager
 	cleanUp  func(context.Context)
-
-	repo *filerepo.Repo
+	repo     *filerepo.Repo
 }
 
 func NewTestRepoSuite(t *testing.T, opts ...testshelpers.OptionDatabase) (context.Context, context.CancelFunc, *TestRepoSuite) {
+	t.Helper()
 	return tests.NewSuite[*TestRepoSuite](t, func(t *testing.T, ctx context.Context) *TestRepoSuite {
-		db, dbHelper, cleanUp := testshelpers.PrepareDB(ctx, t, "TestFilesRepoSuite", opts...)
-		trx := transaction.New(db.DB())
-		repo := filerepo.Must(filerepo.NewOptions(db, trx))
-
-		return &TestRepoSuite{
-			db:       db,
-			dbHelper: dbHelper,
-			trx:      trx,
-			cleanUp:  cleanUp,
-			repo:     repo,
-		}
+		t.Helper()
+		db, helper, cleanup := testshelpers.PrepareDB(ctx, t, "TestFilesRepoSuite", opts...)
+		tx := transaction.New(db.DB())
+		return &TestRepoSuite{db: db, dbHelper: helper, trx: tx, cleanUp: cleanup, repo: filerepo.Must(filerepo.NewOptions(db, tx))}
 	})
 }
 
 func TestIntegration_Init(t *testing.T) {
-	assert.Panics(t, func() {
-		filerepo.Must(filerepo.NewOptions(nil, nil))
-	})
+	require.Panics(t, func() { filerepo.Must(filerepo.NewOptions(nil, nil)) })
 }
 
 func TestIntegration_Create(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
-
-	tmCreate := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	ts.Run("rowModel does not exist, should be created", func() {
-		rowModel := createModel("TestName", "test_slug", tmCreate)
-
-		rowModelID, err := ts.repo.Create(ctx, rowModel)
-		ts.Require().NoError(err)
-		ts.NotEmpty(rowModelID)
-	})
-
-	ts.Run("rowModel already exists", func() {
-		rowModel := createModel("TestName2", "test_slug2", tmCreate)
-
-		rowModelID, err := ts.repo.Create(ctx, rowModel)
-		ts.Require().NoError(err)
-		ts.NotEmpty(rowModelID)
-
-		// check unique duplicate
-		rowModelID, err = ts.repo.Create(ctx, rowModel)
-		ts.Require().Error(err)
-		ts.Require().ErrorIs(err, pgsql.ErrRowAlreadyExists)
-		ts.Empty(rowModelID)
-	})
+	file := createModel("TestName", "test_slug", time.Now().UTC())
+	id, err := ts.repo.Create(ctx, file)
+	require.NoError(t, err)
+	require.Positive(t, id)
+	id, err = ts.repo.Create(ctx, file)
+	require.ErrorIs(t, err, pgsql.ErrRowAlreadyExists)
+	require.Zero(t, id)
 }
 
 func TestIntegration_GetByID(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
-
-	data := createModels(t, ts, ctx, 5)
-	rowModelID := data[0].ID
-
-	ts.Run("rowModel exist", func() {
-		acc, err := ts.repo.GetByID(ctx, rowModelID)
-		ts.Require().NoError(err)
-		ts.NotEmpty(acc)
-	})
-
-	ts.Run("rowModel does not exist", func() {
-		acc, err := ts.repo.GetByID(ctx, 99999)
-		ts.Require().NoError(err)
-		ts.Empty(acc)
-	})
-
-	ts.Run("rowModel does not exist zero", func() {
-		acc, err := ts.repo.GetByID(ctx, 0)
-		ts.Require().Error(err)
-		ts.Empty(acc)
-	})
+	files := createModels(t, ctx, ts, 5)
+	file, err := ts.repo.GetByID(ctx, files[0].ID)
+	require.NoError(t, err)
+	require.Equal(t, files[0].Name, file.Name)
+	file, err = ts.repo.GetByID(ctx, 99999)
+	require.NoError(t, err)
+	require.Zero(t, file.ID)
+	_, err = ts.repo.GetByID(ctx, 0)
+	require.Error(t, err)
 }
 
 func TestIntegration_DeleteByID(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
-
-	data := createModels(t, ts, ctx, 5)
-	rowModelID := data[0].ID
-
-	ts.Run("rowModel exist", func() {
-		acc, err := ts.repo.GetByID(ctx, rowModelID)
-		ts.Require().NoError(err)
-		ts.NotEmpty(acc)
-		err = ts.repo.DeleteByID(ctx, rowModelID)
-		ts.Require().NoError(err)
-		acc, err = ts.repo.GetByID(ctx, rowModelID)
-		ts.Require().NoError(err)
-		ts.Empty(acc)
-	})
-
-	ts.Run("rowModel does not exist", func() {
-		err := ts.repo.DeleteByID(ctx, 99999)
-		ts.Require().NoError(err)
-	})
-
-	ts.Run("rowModel does not exist zero", func() {
-		err := ts.repo.DeleteByID(ctx, 0)
-		ts.Require().Error(err)
-	})
+	files := createModels(t, ctx, ts, 2)
+	require.NoError(t, ts.repo.DeleteByID(ctx, files[0].ID))
+	file, err := ts.repo.GetByID(ctx, files[0].ID)
+	require.NoError(t, err)
+	require.Zero(t, file.ID)
+	require.NoError(t, ts.repo.DeleteByID(ctx, files[0].ID))
+	require.NoError(t, ts.repo.DeleteByID(ctx, 99999))
+	require.Error(t, ts.repo.DeleteByID(ctx, 0))
 }
 
 func TestIntegration_Update(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
-
-	data := createModels(t, ts, ctx, 5)
-	rowModel := data[0]
-
-	ts.Run("rowModel update", func() {
-		acc, err := ts.repo.GetByID(ctx, rowModel.ID)
-		ts.Require().NoError(err)
-		ts.NotEmpty(acc)
-		ts.Equal(rowModel.Name, acc.Name)
-		ts.Equal(rowModel.Slug, acc.Slug)
-		ts.Equal(rowModel.Description, acc.Description)
-		rowModel.Name = "testNameUpdate"
-		actualSlug := rowModel.Slug
-		rowModel.Slug = "testSlugUpdate"
-		rowModel.Description = pointer.To("testDescUpdate")
-		err = ts.repo.Update(ctx, rowModel.ID, rowModel)
-		ts.Require().NoError(err)
-		acc, err = ts.repo.GetByID(ctx, rowModel.ID)
-		ts.Require().NoError(err)
-		ts.Equal(rowModel.Name, acc.Name)
-		ts.Equal(actualSlug, acc.Slug)
-		ts.Equal(rowModel.Description, acc.Description)
-	})
+	files := createModels(t, ctx, ts, 1)
+	file := files[0]
+	slug := file.Slug
+	created := file.CreatedAt
+	file.Name = "updated"
+	file.Description = pointer.To("description")
+	file.Slug = "not mutable"
+	file.CreatedAt = time.Now().UTC()
+	require.NoError(t, ts.repo.Update(ctx, file.ID, file))
+	got, err := ts.repo.GetByID(ctx, file.ID)
+	require.NoError(t, err)
+	require.Equal(t, slug, got.Slug)
+	require.Equal(t, file.Name, got.Name)
+	require.Equal(t, file.Description, got.Description)
+	require.True(t, created.Equal(got.CreatedAt))
+	require.NoError(t, ts.repo.DeleteByID(ctx, file.ID))
+	require.ErrorIs(t, ts.repo.Update(ctx, file.ID, file), model.ErrFileNotFound)
 }
 
 func TestRepo_PrimaryControls(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
-
 	objectType := shared.ObjectTypeExercise
-	baseTime := time.Now().UTC().Truncate(time.Second)
-
-	ts.Run("clear and set primary keep exclusivity", func() {
-		objectID := shared.FileObjectID(9101)
-
-		primaryCandidate := createObjectFile(
-			"Primary File",
-			"primary-file-clear",
-			baseTime,
-			objectType,
-			objectID,
-			true,
-		)
-
-		primaryID, err := ts.repo.Create(ctx, primaryCandidate)
-		ts.Require().NoError(err)
-		primaryCandidate.ID = primaryID
-
-		secondaryCandidate := createObjectFile(
-			"Secondary File",
-			"secondary-file-clear",
-			baseTime.Add(time.Minute),
-			shared.ObjectTypeAdmin,
-			55,
-			false,
-		)
-
-		secondaryID, err := ts.repo.Create(ctx, secondaryCandidate)
-		ts.Require().NoError(err)
-		secondaryCandidate.ID = secondaryID
-
-		ts.Require().NoError(ts.repo.ClearPrimary(ctx, objectType.String(), objectID.Int64(), 0))
-
-		updatedPrimary, err := ts.repo.GetByID(ctx, primaryID)
-		ts.Require().NoError(err)
-		ts.False(updatedPrimary.IsPrimary)
-
-		ts.Require().NoError(ts.repo.SetPrimary(ctx, secondaryID, objectType.String(), objectID.Int64()))
-
-		updatedSecondary, err := ts.repo.GetByID(ctx, secondaryID)
-		ts.Require().NoError(err)
-		ts.True(updatedSecondary.IsPrimary)
-		ts.Equal(objectType, updatedSecondary.ObjectType)
-		ts.Equal(objectID, pointer.Indirect(updatedSecondary.ObjectID))
-
-		// exclude newly promoted primary from reset
-		ts.Require().NoError(ts.repo.ClearPrimary(ctx, objectType.String(), objectID.Int64(), secondaryID))
-		recheckedSecondary, err := ts.repo.GetByID(ctx, secondaryID)
-		ts.Require().NoError(err)
-		ts.True(recheckedSecondary.IsPrimary)
-
-		files, err := ts.repo.GetByObjectType(ctx, objectType.String(), objectID.Int64())
-		ts.Require().NoError(err)
-		ts.Require().Len(files, 2)
-		ts.Equal(secondaryID, files[0].ID)
-		ts.True(files[0].IsPrimary)
-	})
+	objectID := shared.FileObjectID(9101)
+	stamp := time.Now().UTC().Truncate(time.Second)
+	primary := createObjectFile("Primary", "primary", stamp, objectType, objectID, true)
+	primaryID, err := ts.repo.Create(ctx, primary)
+	require.NoError(t, err)
+	secondary := createObjectFile("Secondary", "secondary", stamp.Add(time.Minute), objectType, objectID, false)
+	secondaryID, err := ts.repo.Create(ctx, secondary)
+	require.NoError(t, err)
+	foreign := createObjectFile("Foreign", "foreign", stamp, shared.ObjectTypeAdmin, 55, false)
+	foreignID, err := ts.repo.Create(ctx, foreign)
+	require.NoError(t, err)
+	require.ErrorIs(t, ts.repo.SetPrimary(ctx, foreignID, objectType.String(), objectID.Int64()), model.ErrObjectBindingMismatch)
+	require.NoError(t, ts.trx.RunInTx(ctx, func(ctx context.Context) error {
+		if err := ts.repo.ClearPrimary(ctx, objectType.String(), objectID.Int64(), 0); err != nil {
+			return err
+		}
+		return ts.repo.SetPrimary(ctx, secondaryID, objectType.String(), objectID.Int64())
+	}))
+	got, err := ts.repo.GetByID(ctx, primaryID)
+	require.NoError(t, err)
+	require.False(t, got.IsPrimary)
+	got, err = ts.repo.GetByID(ctx, secondaryID)
+	require.NoError(t, err)
+	require.True(t, got.IsPrimary)
+	require.Equal(t, objectID, *got.ObjectID)
+	require.NoError(t, ts.repo.ClearPrimary(ctx, objectType.String(), objectID.Int64(), secondaryID))
+	files, err := ts.repo.GetByObjectType(ctx, objectType.String(), objectID.Int64())
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	require.Equal(t, secondaryID, files[0].ID)
 }
 
 func TestIntegration_CleanupExpiredFiles(t *testing.T) {
 	ctx, _, ts := NewTestRepoSuite(t)
 	defer ts.cleanUp(ctx)
-	_ = createModels(t, ts, ctx, 100)
-	tmCreateDel := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	rowModel := createModel("TestName2", "test_slug2", tmCreateDel)
-	rowModelID, err := ts.repo.Create(ctx, rowModel)
+	_ = createModels(t, ctx, ts, 100)
+	stamp := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	id, err := ts.repo.Create(ctx, createModel("extra", "extra_slug", stamp))
 	require.NoError(t, err)
-	sqlQueryDeleted := querybuilder.BuilderDollar().Update("files").
-		Set("deleted_at", sql.NullTime{Time: tmCreateDel, Valid: true}).
-		Where(squirrel.Or{
-			squirrel.Expr("id % 3 = 0"),
-			squirrel.Eq{"id": rowModelID},
-		})
-	_, err = ts.db.DB().Execx(ctx, "test", sqlQueryDeleted)
-	require.NoError(t, err)
-
-	fnCounts := func() int {
-		var countRows int
-		err := ts.db.DB().Getx(
-			ctx,
-			"count rows",
-			&countRows,
-			querybuilder.BuilderDollar().Select("count(id)").From("files").Limit(1),
-		)
-		ts.Require().NoError(err)
-
-		return countRows
-	}
-
-	ts.Run("delete files", func() {
-		countRows := fnCounts()
-
-		const queryblock = `SELECT id FROM files WHERE id = $1 LIMIT 1 FOR UPDATE;`
-		txManager, err := ts.db.DB().BeginTx(ctx, pgx.TxOptions{})
-		ts.Require().NoError(err)
-		_, err = txManager.Exec(ctx, queryblock, rowModelID)
-		ts.Require().NoError(err)
-
-		err = ts.trx.RunInTx(ctx, func(ctx context.Context) error {
-			count, err := ts.repo.CleanupExpiredFiles(ctx, 3, 60)
-			ts.Require().NoError(err)
-			ts.Equal(int64(3), count)
-			return nil
-		})
-		ts.Require().NoError(err)
-		ts.Equal(countRows-3, fnCounts())
-
-		count, err := ts.repo.CleanupExpiredFiles(ctx, 1000, 60)
-		ts.Require().NoError(err)
-		ts.Equal(int64(30), count)
-		ts.Equal(countRows-33, fnCounts())
-
-		ts.Require().NoError(txManager.Commit(ctx))
-
-		err = ts.trx.RunInTx(ctx, func(ctx context.Context) error {
-			count, err := ts.repo.CleanupExpiredFiles(ctx, 1000, 60)
-			ts.Require().NoError(err)
-			ts.Equal(int64(1), count)
-
-			return nil
-		})
-		ts.Require().NoError(err)
-		ts.Equal(67, fnCounts())
+	query := querybuilder.BuilderDollar().Update("files").Set("deleted_at", sql.NullTime{
+		Time:  stamp,
+		Valid: true,
+	}).Where(squirrel.Or{
+		squirrel.Expr("id % 3 = 0"),
+		squirrel.Eq{"id": id},
 	})
+	_, err = ts.db.DB().Execx(ctx, "mark_deleted", query)
+	require.NoError(t, err)
+	countRows := func() int {
+		var count int
+		require.NoError(t, ts.db.DB().QueryRow(ctx, "count_files", "select count(*) from files").Scan(&count))
+		return count
+	}
+	require.Equal(t, 101, countRows())
+	tx, err := ts.db.DB().BeginTx(ctx, pgx.TxOptions{})
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, "select id from files where id=$1 for update", id)
+	require.NoError(t, err)
+	count, err := ts.repo.CleanupExpiredFiles(ctx, 3, 60)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, count)
+	count, err = ts.repo.CleanupExpiredFiles(ctx, 1000, 60)
+	require.NoError(t, err)
+	require.EqualValues(t, 30, count)
+	require.Equal(t, 68, countRows())
+	require.NoError(t, tx.Commit(ctx))
+	count, err = ts.repo.CleanupExpiredFiles(ctx, 1000, 60)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count)
+	require.Equal(t, 67, countRows())
 }
 
-func createModels(t *testing.T, ts *TestRepoSuite, ctx context.Context, size int) []model.File {
+func createModels(t *testing.T, ctx context.Context, ts *TestRepoSuite, size int) []model.File {
 	t.Helper()
-
-	tmCreate := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	list := make([]model.File, 0, 100)
+	stamp := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	files := make([]model.File, 0, size)
 	for i := 1; i <= size; i++ {
-		strIndex := "__" + strconv.Itoa(i)
-		rowModel := model.File{
-			Name:        "TestName_" + strIndex,
-			Description: pointer.To("TestDesc_" + strIndex),
-			Slug:        "TestSlug_" + strIndex,
-			URL:         "TestUrl_" + strIndex,
+		suffix := "__" + strconv.Itoa(i)
+		file := model.File{
+			Name:        "Name" + suffix,
+			Description: pointer.To("Description" + suffix),
+			Slug:        "slug" + suffix,
+			URL:         "url" + suffix,
 			Locale:      pointer.To("EN_en"),
-			CreatedAt:   tmCreate.Add(time.Duration(i) * time.Minute), // разные времена создания
-			UpdatedAt:   tmCreate.Add(time.Duration(i) * time.Minute),
-			PublishedAt: sql.NullTime{Valid: true, Time: tmCreate.Add(time.Duration(i) * time.Minute)},
+			CreatedAt:   stamp.Add(time.Duration(i) * time.Minute),
+			UpdatedAt:   stamp.Add(time.Duration(i) * time.Minute),
+			PublishedAt: sql.NullTime{
+				Valid: i%3 != 0,
+				Time:  stamp,
+			},
 		}
-
-		if i%3 == 0 {
-			rowModel.PublishedAt = sql.NullTime{}
-		}
-
-		id, err := ts.repo.Create(ctx, rowModel)
-		ts.Require().NoError(err)
-		rowModel.ID = id
-
-		list = append(list, rowModel)
+		id, err := ts.repo.Create(ctx, file)
+		require.NoError(t, err)
+		file.ID = id
+		files = append(files, file)
 	}
-
-	return list
+	return files
 }
 
-func createModel(name string, slug string, tmCreate time.Time) model.File {
-	return model.File{
-		Name:        name,
-		Description: pointer.To(""),
-		Slug:        slug,
-		URL:         "",
-		CreatedAt:   tmCreate,
-		UpdatedAt:   tmCreate,
-	}
+func createModel(name, slug string, stamp time.Time) model.File {
+	return model.File{Name: name, Description: pointer.To(""), Slug: slug, CreatedAt: stamp, UpdatedAt: stamp}
 }
 
 func createObjectFile(
-	name string,
-	slug string,
-	tmCreate time.Time,
-	objectType shared.FileObjectType,
-	objectID shared.FileObjectID,
-	isPrimary bool,
+	name, slug string, stamp time.Time, objectType shared.FileObjectType, objectID shared.FileObjectID, primary bool,
 ) model.File {
-	file := createModel(name, slug, tmCreate)
+	file := createModel(name, slug, stamp)
 	file.ObjectType = objectType
 	file.ObjectID = pointer.To(objectID)
-	file.FileName = fmt.Sprintf("%s.png", slug)
-	file.OriginalFileName = fmt.Sprintf("%s.png", slug)
+	file.FileName = slug + ".png"
+	file.OriginalFileName = file.FileName
 	file.FolderPath = fmt.Sprintf("uploads/%s/%d", objectType, objectID)
-	file.URL = fmt.Sprintf("/%s/%s", file.FolderPath, file.FileName)
+	file.URL = "/" + file.FolderPath + "/" + file.FileName
 	file.MimeType = "image/png"
+	file.FileType = model.FileTypeImage
 	file.Size = 1024
-	file.IsPrimary = isPrimary
-
+	file.IsPrimary = primary
 	return file
 }

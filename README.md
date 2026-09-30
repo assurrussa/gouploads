@@ -110,6 +110,15 @@ The isolated CMS quarantine lifecycle and `host.NewQuarantinePromoter` are
 unchanged. Generic completion/read/delete routes must not be inherited by CMS
 transports. `UploadRouteGuards` separates read, create/resume and delete policy.
 
+Use `host.NewUploadHandlerWithPolicy` to authorize operations on the actual
+object. Its zero policy denies access; `TrustRouteGuards` is an explicit host
+responsibility. `OriginalRuntimeDeps.ContentScanner` optionally scans the same
+private bytes subsequently published. TUS completion carries a durable
+`ReaderRequest.FinalizationKey` and retains ready sessions until TTL for retries.
+Batch failures return the accepted prefix and `*host.BatchError` (HTTP 207).
+See [lifecycle hardening](docs/review-hardening.md) for required migrations,
+worker transition, public policy/scanner contracts and limitations.
+
 ## External media and storage probes
 
 For explicit external processing, `host.NewSourceURLResolver(cfg)` creates a

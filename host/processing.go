@@ -34,19 +34,19 @@ type UploadOutbox interface {
 	Put(ctx context.Context, name, payload string, availableAt time.Time) (outboxtypes.JobID, error)
 }
 
-// OriginalRuntimeDeps are application-owned infrastructure. Construct the
-// database and transaction manager against the same pool. No resizer, site,
-// HTTP client, Redis wrapper or WebSocket server is required here.
+// OriginalRuntimeDeps are application-owned infrastructure. The database,
+// transaction manager and outbox must share the same transaction context.
 type OriginalRuntimeDeps struct {
 	Database    pgsql.Client
 	Transaction pgsql.TxManager
 	Outbox      UploadOutbox
 	Logger      logger.Logger
-	Events      EventPublisher // Optional; nil disables live events.
+	Events      EventPublisher
+	// ContentScanner is optional. When supplied, the finalizer privately spools
+	// and scans the same bounded bytes it will publish. Nil is not approval.
+	ContentScanner ContentScanner
 }
 
-// OriginalRuntime does not start workers, mount routes or own supplied clients.
-// Register Jobs with the application's outbox and keep its worker running.
 type OriginalRuntime struct {
 	Uploader  *UploadService
 	Files     *FileRepo
@@ -56,8 +56,7 @@ type OriginalRuntime struct {
 	Jobs      []outbox.Job
 }
 
-// NewOriginalRuntime builds the default standalone original-only pipeline for
-// either local or S3 storage. Empty ProcessingMode means original_only.
+// NewOriginalRuntime does not start workers, mount routes or own supplied clients.
 func NewOriginalRuntime(cfg StorageConfig, deps OriginalRuntimeDeps) (*OriginalRuntime, error) {
 	var err error
 	cfg, err = uploadconfig.NormalizeProcessingConfig(cfg)
@@ -75,6 +74,9 @@ func NewOriginalRuntime(cfg StorageConfig, deps OriginalRuntimeDeps) (*OriginalR
 	}
 	if nilRuntimeDependency(deps.Events) {
 		deps.Events = eventstream.Discard{}
+	}
+	if nilRuntimeDependency(deps.ContentScanner) {
+		deps.ContentScanner = nil
 	}
 	if cfg.Driver == "" {
 		cfg.Driver = StorageDriverLocal
@@ -97,9 +99,12 @@ func NewOriginalRuntime(cfg StorageConfig, deps OriginalRuntimeDeps) (*OriginalR
 	if err != nil {
 		return nil, err
 	}
-	uploader, err := uploadservice.NewWithProcessing(uploadservice.NewOptions(
-		deps.Transaction, deps.Outbox, repo, deps.Logger, storage,
-	), cfg.ProcessingMode)
+	uploader, err := uploadservice.NewWithProcessing(uploadservice.NewOptions(deps.Transaction,
+		deps.Outbox,
+		repo,
+		deps.Logger,
+		storage),
+		cfg.ProcessingMode)
 	if err != nil {
 		return nil, err
 	}
@@ -107,19 +112,27 @@ func NewOriginalRuntime(cfg StorageConfig, deps OriginalRuntimeDeps) (*OriginalR
 	if prefix == "" {
 		prefix = uploadconfig.DefaultStagingPrefix
 	}
-	finalizer, err := uploadfile.NewOriginal(uploadfile.OriginalOptions{
-		Transaction: deps.Transaction, Repository: repo, Storage: storage,
-		Outbox: deps.Outbox, Events: deps.Events, Logger: deps.Logger,
-		BaseFolder: cfg.Public.Prefix, DeliveryBaseURL: fileurl.BaseURL(cfg),
+	finalizer, err := uploadfile.NewOriginalWithContentScanner(uploadfile.OriginalOptions{
+		Transaction:     deps.Transaction,
+		Repository:      repo,
+		Storage:         storage,
+		Outbox:          deps.Outbox,
+		Events:          deps.Events,
+		Logger:          deps.Logger,
+		BaseFolder:      cfg.Public.Prefix,
+		DeliveryBaseURL: fileurl.BaseURL(cfg),
 		StagingPrefixes: []string{"tmp/uploads", prefix},
-	})
+	}, deps.ContentScanner)
 	if err != nil {
 		return nil, err
 	}
-	deleter, err := deletefile.New(deletefile.NewOptions(
-		deps.Transaction, repo, deps.Events, deps.Logger, storage, deps.Outbox,
-		deletefile.WithDeliveryBaseURL(fileurl.BaseURL(cfg)),
-	))
+	deleter, err := deletefile.New(deletefile.NewOptions(deps.Transaction,
+		repo,
+		deps.Events,
+		deps.Logger,
+		storage,
+		deps.Outbox,
+		deletefile.WithDeliveryBaseURL(fileurl.BaseURL(cfg))))
 	if err != nil {
 		return nil, err
 	}
@@ -127,15 +140,17 @@ func NewOriginalRuntime(cfg StorageConfig, deps OriginalRuntimeDeps) (*OriginalR
 	if err != nil {
 		return nil, fmt.Errorf("build original TUS store: %w", err)
 	}
-	jobs, err := BuildOutboxJobs(OutboxJobDeps{
-		Logger: deps.Logger, UseCaseFinalizeOriginal: finalizer, UseCaseDeleteFile: deleter,
-	})
+	jobs, err := BuildOutboxJobs(OutboxJobDeps{Logger: deps.Logger, UseCaseFinalizeOriginal: finalizer, UseCaseDeleteFile: deleter})
 	if err != nil {
 		return nil, err
 	}
 	return &OriginalRuntime{
-		Uploader: uploader, Files: repo, Storage: storage,
-		TusStore: tusStore, Finalizer: finalizer, Jobs: jobs,
+		Uploader:  uploader,
+		Files:     repo,
+		Storage:   storage,
+		TusStore:  tusStore,
+		Finalizer: finalizer,
+		Jobs:      jobs,
 	}, nil
 }
 

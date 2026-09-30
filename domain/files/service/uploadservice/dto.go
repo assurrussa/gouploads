@@ -14,10 +14,9 @@ import (
 var (
 	ErrNoFiles      = errors.New("no files provided for upload")
 	ErrTaskNotFound = errors.New("upload task not found")
-	ErrFileNotFound = errors.New("file not found")
+	ErrFileNotFound = model.ErrFileNotFound
 )
 
-// BatchRequest describes parameters for uploading multiple files.
 type BatchRequest struct {
 	UploaderUUID sharedtypes.UserID `validate:"required"`
 	ManagerID    int64
@@ -34,11 +33,9 @@ func (r BatchRequest) Validate() error {
 	if r.UserID == 0 && r.ManagerID == 0 {
 		return shared.ErrUnknownUploadUser
 	}
-
 	return validator.Validator.Struct(r)
 }
 
-// SingleRequest describes parameters for uploading a single file.
 type SingleRequest struct {
 	UploaderUUID sharedtypes.UserID `validate:"required"`
 	ManagerID    int64
@@ -55,11 +52,9 @@ func (r SingleRequest) Validate() error {
 	if r.UserID == 0 && r.ManagerID == 0 {
 		return shared.ErrUnknownUploadUser
 	}
-
 	return validator.Validator.Struct(r)
 }
 
-// ReaderRequest describes parameters for uploading a file from a reader (e.g. TUS).
 type ReaderRequest struct {
 	UploaderUUID sharedtypes.UserID `validate:"required"`
 	ManagerID    int64
@@ -69,49 +64,39 @@ type ReaderRequest struct {
 	DeletedID    shared.FileObjectID
 	AfterJobs    []shared.FileEventAfterJob
 	Config       *FileUploadConfig
+	// FinalizationKey is the server-issued TUS completion UUID, never client metadata.
+	// Empty keeps the ordinary non-TUS reader/stored upload contract.
+	FinalizationKey string
 }
 
 func (r ReaderRequest) Validate() error {
 	if r.UserID == 0 && r.ManagerID == 0 {
 		return shared.ErrUnknownUploadUser
 	}
-
 	return validator.Validator.Struct(r)
 }
 
-// DeleteRequest describes parameters for uploading a delete file.
 type DeleteRequest struct {
 	UserRequestID sharedtypes.UserID
 	FileID        int64
 	AfterJobs     []shared.FileEventAfterJob
 }
 
-// ValidationError describes upload validation issues.
-type ValidationError struct {
-	Errors map[string]string
-}
+type ValidationError struct{ Errors map[string]string }
 
-func (e ValidationError) Error() string {
-	return "upload validation error"
-}
+func (e ValidationError) Error() string { return "upload validation error" }
 
-// ClientError represents an error that should be propagated to clients.
-type ClientError struct {
-	Message string
-}
+type ClientError struct{ Message string }
 
-func (e ClientError) Error() string {
-	return e.Message
-}
+func (e ClientError) Error() string { return e.Message }
 
-// SetPrimaryRequest describes re-binding of a file as primary.
+// SetPrimaryRequest identifies a file already attached to the specified object.
 type SetPrimaryRequest struct {
 	FileID     int64
 	ObjectType shared.FileObjectType
 	ObjectID   int64
 }
 
-// File is metadata for a stored file.
 type File struct {
 	ID             int64  `json:"id"`
 	FileName       string `json:"fileName"`
@@ -127,12 +112,8 @@ type File struct {
 
 func ToFileTransform(file model.File, baseURL, bucket string) File {
 	return File{
-		ID:             file.ID,
-		FileName:       file.FileName,
-		OriginalName:   file.OriginalFileName,
-		URL:            fileurl.Compose(baseURL, bucket, file.URL),
-		Size:           file.Size,
-		MimeType:       file.MimeType,
+		ID: file.ID, FileName: file.FileName, OriginalName: file.OriginalFileName,
+		URL: fileurl.Compose(baseURL, bucket, file.URL), Size: file.Size, MimeType: file.MimeType,
 		IsPrimary:      file.IsPrimary,
 		Width:          file.GetWidth(),
 		Height:         file.GetHeight(),

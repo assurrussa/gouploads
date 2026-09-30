@@ -1,5 +1,6 @@
 //go:build integration
 
+//nolint:testpackage // integration tests exercise private session repository and fencing internals.
 package tusupload
 
 import (

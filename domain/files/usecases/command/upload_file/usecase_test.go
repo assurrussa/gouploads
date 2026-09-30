@@ -3,708 +3,567 @@ package uploadfile_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/png"
 	"io"
 	"path"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	logger "github.com/assurrussa/gologger"
+	outboxtypes "github.com/assurrussa/outbox/shared/types"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/suite"
-	"go.uber.org/mock/gomock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	clientresizer "github.com/assurrussa/gouploads/domain/files/service/client_resizer"
 	"github.com/assurrussa/gouploads/domain/files/shared"
-	testshelpers "github.com/assurrussa/gouploads/domain/files/tests"
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
-	uploadfilemocks "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file/mocks"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
-	eventstreammocks "github.com/assurrussa/gouploads/internal/events/mocks"
-	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
-	tests "github.com/assurrussa/gouploads/internal/testsupport"
+	"github.com/assurrussa/gouploads/internal/events"
+	"github.com/assurrussa/gouploads/internal/filepolicy"
+	"github.com/assurrussa/gouploads/internal/identity"
 )
 
-const (
-	filePreset           = "main"
-	downloadURL          = "https://resizer.example.com/my-bucket/uploads/admin/12/main/example.png"
-	fileURL              = "https://s3store.example.com/my-bucket/uploads/admin/12/main/example.png"
-	s3BaseURL            = "https://s3store.example.com/my-bucket"
-	videoPresetMain      = "video_mp4_main"
-	videoPresetThumbnail = "video_mp4_main_thumbnail"
-	videoPresetPreview   = "video_mp4_main_preview"
-	videoDownloadURL     = "https://resizer.example.com/my-bucket/uploads/admin/12/video/video.mp4"
-	videoThumbnailURL    = "https://resizer.example.com/my-bucket/uploads/admin/12/video/video-thumb.webp"
-	videoPreviewURL      = "https://resizer.example.com/my-bucket/uploads/admin/12/video/video-preview.webp"
-	videoFileURL         = "https://s3store.example.com/my-bucket/uploads/admin/12/video/video.mp4"
+var errInjected = errors.New("injected storage or transaction failure")
+
+type (
+	txMarker    struct{}
+	recordedJob struct{ name, payload string }
 )
 
-type TestSuite struct {
-	suite.Suite
-
-	fileMock         *uploadfilemocks.MockfileRepository
-	clientResizeMock *uploadfilemocks.MockresizeClient
-	fileStorageMock  *uploadfilemocks.MockfileStorage
-	transactorMock   *uploadfilemocks.Mocktransactor
-	outboxMock       *uploadfilemocks.MockoutboxPutter
-	eventStreamMock  *eventstreammocks.MockPublisher
-
-	useCase       *uploadfile.UseCase
-	expectedError error
+// The state fake rolls back metadata and outbox together, but not object
+// storage. That distinction is the invariant being tested here.
+type finalizationState struct {
+	mu                                   sync.Mutex
+	file                                 model.File
+	jobs                                 []recordedJob
+	events                               []any
+	failUpdate, failPut, uncertainCommit bool
 }
 
-func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite) {
+func cloneFile(file model.File) model.File {
+	body, err := json.Marshal(file)
+	if err != nil {
+		panic(err)
+	}
+	var result model.File
+	if err := json.Unmarshal(body, &result); err != nil {
+		panic(err)
+	}
+	return result
+}
+
+func (s *finalizationState) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	saved := cloneFile(s.file)
+	jobs := append([]recordedJob(nil), s.jobs...)
+	if err := fn(context.WithValue(ctx, txMarker{}, true)); err != nil {
+		s.file = saved
+		s.jobs = jobs
+		return err
+	}
+	if s.uncertainCommit {
+		s.uncertainCommit = false
+		return errInjected
+	}
+	return nil
+}
+
+func (s *finalizationState) GetByID(context.Context, int64) (model.File, error) {
+	return cloneFile(s.file), nil
+}
+
+func (s *finalizationState) GetByIDForUpdate(ctx context.Context, _ int64) (model.File, error) {
+	if active, ok := ctx.Value(txMarker{}).(bool); !ok || !active {
+		return model.File{}, errors.New("read was not locked in transaction")
+	}
+	return cloneFile(s.file), nil
+}
+
+func (s *finalizationState) Update(ctx context.Context, _ int64, file model.File) error {
+	if active, ok := ctx.Value(txMarker{}).(bool); !ok || !active {
+		return errors.New("update outside transaction")
+	}
+	if s.failUpdate {
+		return errInjected
+	}
+	s.file = cloneFile(file)
+	return nil
+}
+
+func (s *finalizationState) Put(ctx context.Context, name, payload string, _ time.Time) (outboxtypes.JobID, error) {
+	if active, ok := ctx.Value(txMarker{}).(bool); !ok || !active {
+		return outboxtypes.JobIDNil, errors.New("outbox outside transaction")
+	}
+	if s.failPut {
+		return outboxtypes.JobIDNil, errInjected
+	}
+	s.jobs = append(s.jobs, recordedJob{name, payload})
+	return outboxtypes.NewJobID(), nil
+}
+
+func (s *finalizationState) Publish(_ context.Context, _ identity.UserID, event events.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+type finalizationStorage struct {
+	mu       sync.Mutex
+	objects  map[string][]byte
+	deletes  int
+	failSave bool
+}
+
+func (s *finalizationStorage) SavePersist(_ context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failSave {
+		return filestorage.StoredFile{}, errInjected
+	}
+	body, err := io.ReadAll(input.Reader)
+	if err != nil {
+		return filestorage.StoredFile{}, err
+	}
+	key := path.Join(input.Dir, input.FileName)
+	s.objects[key] = append([]byte(nil), body...)
+	return filestorage.StoredFile{RelativePath: key, Size: int64(len(body)), MimeType: input.MimeType}, nil
+}
+
+func (s *finalizationStorage) Delete(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deletes++
+	delete(s.objects, key)
+	return nil
+}
+
+type finalizationDownload struct {
+	bodies     map[string][]byte
+	failPreset string
+	nilBody    bool
+	downloads  int
+}
+
+func (s *finalizationDownload) DownloadFile(ctx context.Context,
+	req clientresizer.RequestDownload,
+) (clientresizer.ResponseDownload, error) {
+	if err := ctx.Err(); err != nil {
+		return clientresizer.ResponseDownload{}, err
+	}
+	s.downloads++
+	if req.Preset == s.failPreset {
+		return clientresizer.ResponseDownload{}, errInjected
+	}
+	if s.nilBody {
+		return clientresizer.ResponseDownload{}, nil
+	}
+	body := s.bodies[req.Preset]
+	return clientresizer.ResponseDownload{Body: io.NopCloser(bytes.NewReader(body)), ContentLength: int64(len(body))}, nil
+}
+
+func pngBody(t *testing.T) []byte {
 	t.Helper()
-
-	return tests.NewSuite[*TestSuite](t, func(t *testing.T, _ context.Context) *TestSuite {
-		t.Helper()
-
-		log := logger.Discard()
-
-		ctrl := gomock.NewController(t)
-		clientResizeMock := uploadfilemocks.NewMockresizeClient(ctrl)
-		fileStorageMock := uploadfilemocks.NewMockfileStorage(ctrl)
-		transactorMock := uploadfilemocks.NewMocktransactor(ctrl)
-		fileMock := uploadfilemocks.NewMockfileRepository(ctrl)
-		eventStreamMock := eventstreammocks.NewMockPublisher(ctrl)
-		outboxMock := uploadfilemocks.NewMockoutboxPutter(ctrl)
-
-		useCase := uploadfile.Must(uploadfile.NewOptions(
-			transactorMock,
-			fileMock,
-			clientResizeMock,
-			eventStreamMock,
-			log,
-			fileStorageMock,
-			outboxMock,
-			uploadfile.WithDeliveryBaseURL("https://media.example.test"),
-		))
-
-		return &TestSuite{
-			useCase:          useCase,
-			fileMock:         fileMock,
-			clientResizeMock: clientResizeMock,
-			transactorMock:   transactorMock,
-			eventStreamMock:  eventStreamMock,
-			outboxMock:       outboxMock,
-			fileStorageMock:  fileStorageMock,
-			expectedError:    errors.New("expected error"),
-		}
-	})
+	var body bytes.Buffer
+	require.NoError(t, png.Encode(&body, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	return body.Bytes()
 }
 
-func TestHandle_MustInit(t *testing.T) {
-	assert.Panics(t, func() {
-		uploadfile.Must(uploadfile.NewOptions(
-			nil, nil, nil, nil, nil, nil, nil,
-		))
-	})
-}
-
-func TestHandle_Success(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	file := testshelpers.CreateFile(t)
-	file.FileType = model.FileTypeImage
-	uploaderFile := file.GetData().Uploader
-	file.URL = fileURL
-	file.IsPrimary = true
-	file.FileName = uuid.NewString() + ".png"
-	readerOpenResp := testshelpers.CreateTestImage(t)
-	clientResizerReq := clientresizer.RequestDownload{
-		Preset:    filePreset,
-		URL:       downloadURL,
-		TypeMedia: file.FileType.ToString(),
-	}
-	body, err := io.ReadAll(readerOpenResp)
-	ts.Require().NoError(err)
-	file.Size = int64(len(body))
-	clientResizerResp := clientresizer.ResponseDownload{
-		Body:          io.NopCloser(bytes.NewReader(body)),
-		ContentLength: int64(len(body)),
-	}
-
-	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		}).Times(1)
-	ts.fileMock.EXPECT().GetByID(ctx, file.ID).Return(file, nil).Times(1)
-	ts.clientResizeMock.EXPECT().DownloadFile(ctx, clientResizerReq).Return(clientResizerResp, nil).Times(1)
-	var (
-		storedFileName string
-		storedRelPath  string
-	)
-	finalDir := path.Join("media/v1", file.ObjectType.String(), file.ObjectID.String(), file.Slug)
-
-	ts.fileStorageMock.EXPECT().
-		SavePersist(ctx, gomock.AssignableToTypeOf(filestorage.SaveFileInput{})).
-		DoAndReturn(func(_ context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
-			ts.Equal(finalDir, input.Dir)
-			ts.Equal("main.png", input.FileName)
-			written, err := io.Copy(io.Discard, input.Reader)
-			ts.Require().NoError(err)
-			storedFileName = input.FileName
-			storedRelPath = path.Join(input.Dir, input.FileName)
-
-			return filestorage.StoredFile{
-				RelativePath: storedRelPath,
-				Size:         written,
-				MimeType:     "image/png",
-			}, nil
-		}).Times(1)
-
-	ts.fileMock.EXPECT().
-		Update(ctx, file.ID, gomock.AssignableToTypeOf(model.File{})).
-		DoAndReturn(func(_ context.Context, _ int64, updated model.File) error {
-			ts.Equal(storedFileName, updated.FileName)
-			ts.Empty(updated.URL)
-			ts.Equal(file.Size, updated.Size)
-			ts.Equal("image/png", updated.MimeType)
-
-			data := updated.GetData()
-			ts.Empty(data.Uploader)
-			ts.Contains(data.Presets, shared.PresetName(filePreset))
-
-			mainPreset := data.Presets[shared.PresetName(filePreset)]
-			ts.Empty(mainPreset.URL)
-			ts.Equal(storedRelPath, mainPreset.RelativePath)
-			ts.Equal("image/png", mainPreset.MimeType)
-			ts.Equal(file.Size, mainPreset.Size)
-			ts.Len(mainPreset.ChecksumSHA256, 64)
-
-			return nil
-		}).Times(1)
-
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, uploaderFile.UserUUID, gomock.AssignableToTypeOf(shared.FileUploadStatusEvent{})).
-		DoAndReturn(func(_ context.Context, _ sharedtypes.UserID, event shared.FileUploadStatusEvent) error {
-			ts.Equal(file.ID, event.File.ID)
-			ts.Equal(storedFileName, event.File.FileName)
-			ts.Equal("https://media.example.test/"+storedRelPath, event.File.URL)
-			ts.Equal(shared.FileUploadTaskStatusCompleted, event.Status)
-
-			return nil
-		}).Times(1)
-
-	ts.outboxMock.EXPECT().
-		Put(gomock.Any(), "test_name_job", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, job, payload string, availableAt time.Time) (int64, error) {
-			ts.Equal("test_name_job", job)
-			ts.NotZero(availableAt)
-
-			var pl map[string]any
-			ts.Require().NoError(json.Unmarshal([]byte(payload), &pl))
-			ts.InDelta(float64(file.ID), pl["fileId"], 0.1)
-
-			meta, ok := pl["meta"].(map[string]any)
-			ts.Require().True(ok)
-			ts.Equal(storedFileName, meta["fileName"])
-			ts.Equal("https://media.example.test/"+storedRelPath, meta["fileUrl"])
-			ts.Equal(file.OriginalFileName, meta["originalFileName"])
-
-			return 777, nil
-		}).Times(1)
-
-	ts.outboxMock.EXPECT().
-		Put(gomock.Any(), "deleted_file", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ string, payload string, _ time.Time) (int64, error) {
-			var data map[string]any
-			ts.Require().NoError(json.Unmarshal([]byte(payload), &data))
-			ts.Equal(file.GetFullPath(), data["filepath"])
-			return 778, nil
-		}).Times(1)
-
-	resp, err := ts.useCase.Handle(ctx, uploadfile.Request{
-		FileID: file.ID,
-		Artifacts: []uploadfile.Artifact{
-			{
-				Preset:      filePreset,
-				URL:         downloadURL,
-				MediaType:   "image",
-				ContentType: "image/png",
-				Size:        int64(len(body)),
-				ExpireAt:    time.Now().Add(2 * time.Hour),
-			},
-		},
-	})
-	ts.Require().NoError(err)
-	ts.Empty(resp)
-}
-
-func TestHandle_VideoPresets(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	file := testshelpers.CreateFile(t)
-	file.FileType = model.FileTypeVideo
-	file.MimeType = "video/mp4"
-	file.FileName = uuid.NewString() + ".mov"
-	file.URL = videoFileURL
-	file.Size = 0
-	fileData := file.GetData()
-	fileData.Width = 0
-	fileData.Height = 0
-	file.SetData(fileData)
-
-	uploaderFile := file.GetData().Uploader
-
-	mainBody := sampleMP4Header()
-	thumbReader := testshelpers.CreateTestImage(t)
-	thumbBody, err := io.ReadAll(thumbReader)
-	ts.Require().NoError(err)
-
-	previewReader := testshelpers.CreateTestImage(t)
-	previewBody, err := io.ReadAll(previewReader)
-	ts.Require().NoError(err)
-
-	var (
-		mainStoredName     string
-		mainStoredRelPath  string
-		thumbStoredRelPath string
-		previewStoredRel   string
-	)
-	finalDir := path.Join("media/v1", file.ObjectType.String(), file.ObjectID.String(), file.Slug)
-
-	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		}).Times(1)
-	ts.fileMock.EXPECT().GetByID(ctx, file.ID).Return(file, nil).Times(1)
-	ts.clientResizeMock.EXPECT().DownloadFile(ctx, clientresizer.RequestDownload{
-		Preset:    videoPresetMain,
-		URL:       videoDownloadURL,
-		TypeMedia: file.FileType.ToString(),
-	}).Return(clientresizer.ResponseDownload{
-		Body:          io.NopCloser(bytes.NewReader(mainBody)),
-		ContentLength: int64(len(mainBody)),
-	}, nil).Times(1)
-	ts.fileStorageMock.EXPECT().
-		SavePersist(ctx, gomock.AssignableToTypeOf(filestorage.SaveFileInput{})).
-		DoAndReturn(func(_ context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
-			ts.Equal(finalDir, input.Dir)
-			ts.Equal(videoPresetMain, strings.TrimSuffix(input.FileName, path.Ext(input.FileName)))
-			written, err := io.Copy(io.Discard, input.Reader)
-			ts.Require().NoError(err)
-			mainStoredName = input.FileName
-			mainStoredRelPath = path.Join(input.Dir, input.FileName)
-
-			return filestorage.StoredFile{
-				RelativePath: mainStoredRelPath,
-				Size:         written,
-				MimeType:     "video/mp4",
-			}, nil
-		}).Times(1)
-
-	ts.clientResizeMock.EXPECT().DownloadFile(ctx, clientresizer.RequestDownload{
-		Preset:    videoPresetThumbnail,
-		URL:       videoThumbnailURL,
-		TypeMedia: "image",
-	}).Return(clientresizer.ResponseDownload{
-		Body:          io.NopCloser(bytes.NewReader(thumbBody)),
-		ContentLength: int64(len(thumbBody)),
-	}, nil).Times(1)
-	ts.fileStorageMock.EXPECT().
-		SavePersist(ctx, gomock.AssignableToTypeOf(filestorage.SaveFileInput{})).
-		DoAndReturn(func(_ context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
-			ts.Equal(finalDir, input.Dir)
-			ts.Equal(videoPresetThumbnail, strings.TrimSuffix(input.FileName, path.Ext(input.FileName)))
-			written, err := io.Copy(io.Discard, input.Reader)
-			ts.Require().NoError(err)
-			thumbStoredRelPath = path.Join(input.Dir, input.FileName)
-
-			return filestorage.StoredFile{
-				RelativePath: thumbStoredRelPath,
-				Size:         written,
-				MimeType:     "image/png",
-			}, nil
-		}).Times(1)
-
-	ts.clientResizeMock.EXPECT().DownloadFile(ctx, clientresizer.RequestDownload{
-		Preset:    videoPresetPreview,
-		URL:       videoPreviewURL,
-		TypeMedia: "image",
-	}).Return(clientresizer.ResponseDownload{
-		Body:          io.NopCloser(bytes.NewReader(previewBody)),
-		ContentLength: int64(len(previewBody)),
-	}, nil).Times(1)
-	ts.fileStorageMock.EXPECT().
-		SavePersist(ctx, gomock.AssignableToTypeOf(filestorage.SaveFileInput{})).
-		DoAndReturn(func(_ context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
-			ts.Equal(finalDir, input.Dir)
-			ts.Equal(videoPresetPreview, strings.TrimSuffix(input.FileName, path.Ext(input.FileName)))
-			written, err := io.Copy(io.Discard, input.Reader)
-			ts.Require().NoError(err)
-			previewStoredRel = path.Join(input.Dir, input.FileName)
-
-			return filestorage.StoredFile{
-				RelativePath: previewStoredRel,
-				Size:         written,
-				MimeType:     "image/png",
-			}, nil
-		}).Times(1)
-
-	ts.fileMock.EXPECT().
-		Update(ctx, file.ID, gomock.AssignableToTypeOf(model.File{})).
-		DoAndReturn(func(_ context.Context, _ int64, updated model.File) error {
-			ts.Equal(mainStoredName, updated.FileName)
-			ts.Empty(updated.URL)
-			ts.Equal(int64(len(mainBody)), updated.Size)
-			ts.Equal("video/mp4", updated.MimeType)
-
-			data := updated.GetData()
-			ts.Equal(320, data.Width)
-			ts.Equal(180, data.Height)
-			ts.Empty(data.Uploader)
-
-			mainPreset := data.Presets[shared.PresetName(videoPresetMain)]
-			ts.Empty(mainPreset.URL)
-			ts.Equal(mainStoredRelPath, mainPreset.RelativePath)
-			ts.Equal(int64(len(mainBody)), mainPreset.Size)
-			ts.Len(mainPreset.ChecksumSHA256, 64)
-
-			thumbPreset := data.Presets[shared.PresetName(videoPresetThumbnail)]
-			ts.Empty(thumbPreset.URL)
-			ts.Equal(thumbStoredRelPath, thumbPreset.RelativePath)
-			ts.True(thumbPreset.IsThumbnail)
-
-			previewPreset := data.Presets[shared.PresetName(videoPresetPreview)]
-			ts.Empty(previewPreset.URL)
-			ts.Equal(previewStoredRel, previewPreset.RelativePath)
-			ts.True(previewPreset.IsPreview)
-
-			return nil
-		}).Times(1)
-
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, uploaderFile.UserUUID, gomock.AssignableToTypeOf(shared.FileUploadStatusEvent{})).
-		DoAndReturn(func(_ context.Context, _ sharedtypes.UserID, event shared.FileUploadStatusEvent) error {
-			ts.Equal(file.ID, event.File.ID)
-			ts.Equal("https://media.example.test/"+mainStoredRelPath, event.File.URL)
-			ts.Equal(mainStoredName, event.File.FileName)
-
-			return nil
-		}).Times(1)
-
-	ts.outboxMock.EXPECT().
-		Put(gomock.Any(), "test_name_job", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, job, payload string, availableAt time.Time) (int64, error) {
-			ts.Equal("test_name_job", job)
-			ts.NotZero(availableAt)
-
-			var pl map[string]any
-			ts.Require().NoError(json.Unmarshal([]byte(payload), &pl))
-			ts.InDelta(float64(file.ID), pl["fileId"], 0.1)
-
-			meta, ok := pl["meta"].(map[string]any)
-			ts.Require().True(ok)
-			ts.Equal(mainStoredName, meta["fileName"])
-			ts.Equal("https://media.example.test/"+mainStoredRelPath, meta["fileUrl"])
-
-			return 777, nil
-		}).Times(1)
-
-	ts.outboxMock.EXPECT().
-		Put(gomock.Any(), "deleted_file", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ string, payload string, _ time.Time) (int64, error) {
-			var data map[string]any
-			ts.Require().NoError(json.Unmarshal([]byte(payload), &data))
-			ts.Equal(file.GetFullPath(), data["filepath"])
-			return 778, nil
-		}).Times(1)
-
-	resp, err := ts.useCase.Handle(ctx, uploadfile.Request{
-		FileID: file.ID,
-		Artifacts: []uploadfile.Artifact{
-			{
-				Preset:      videoPresetMain,
-				URL:         videoDownloadURL,
-				MediaType:   "video",
-				ContentType: "video/mp4",
-				Size:        int64(len(mainBody)),
-				ExpireAt:    time.Now().Add(2 * time.Hour),
-				Metadata: map[string]any{
-					"media_type":    "video",
-					"target_width":  float64(320),
-					"target_height": float64(180),
-				},
-			},
-			{
-				Preset:      videoPresetThumbnail,
-				URL:         videoThumbnailURL,
-				MediaType:   "image",
-				ContentType: "image/png",
-				Size:        int64(len(thumbBody)),
-				ExpireAt:    time.Now().Add(2 * time.Hour),
-				Metadata: map[string]any{
-					"thumbnail": true,
-				},
-			},
-			{
-				Preset:      videoPresetPreview,
-				URL:         videoPreviewURL,
-				MediaType:   "image",
-				ContentType: "image/png",
-				Size:        int64(len(previewBody)),
-				ExpireAt:    time.Now().Add(2 * time.Hour),
-				Metadata: map[string]any{
-					"preview": true,
-				},
-			},
-		},
-	})
-	ts.Require().NoError(err)
-	ts.Empty(resp)
-}
-
-func TestHandle_PartialArtifactFailureSchedulesFinalCleanup(t *testing.T) {
-	ctx, cancel, ts := NewTestSuite(t)
-
-	file := testshelpers.CreateFile(t)
-	file.FileType = model.FileTypeImage
-	body, err := io.ReadAll(testshelpers.CreateTestImage(t))
-	ts.Require().NoError(err)
-	mainPath := path.Join("media/v1", file.ObjectType.String(), file.ObjectID.String(), file.Slug, "main.png")
-
-	ts.fileMock.EXPECT().GetByID(ctx, file.ID).Return(file, nil).Times(1)
-	ts.clientResizeMock.EXPECT().DownloadFile(ctx, clientresizer.RequestDownload{
-		Preset: "main", URL: downloadURL, TypeMedia: "image",
-	}).Return(clientresizer.ResponseDownload{
-		Body: io.NopCloser(bytes.NewReader(body)), ContentLength: int64(len(body)),
-	}, nil).Times(1)
-	ts.fileStorageMock.EXPECT().
-		SavePersist(ctx, gomock.AssignableToTypeOf(filestorage.SaveFileInput{})).
-		DoAndReturn(func(_ context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
-			written, copyErr := io.Copy(io.Discard, input.Reader)
-			ts.Require().NoError(copyErr)
-			return filestorage.StoredFile{
-				RelativePath: path.Join(input.Dir, input.FileName),
-				Size:         written,
-				MimeType:     "image/png",
-			}, nil
-		}).Times(1)
-	ts.clientResizeMock.EXPECT().DownloadFile(ctx, clientresizer.RequestDownload{
-		Preset: "thumbnail", URL: "https://resizer.example.com/thumbnail.png", TypeMedia: "image",
-	}).Return(clientresizer.ResponseDownload{}, ts.expectedError).Times(1)
-	ts.outboxMock.EXPECT().
-		Put(gomock.Any(), "deleted_file", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(cleanupCtx context.Context, _ string, payload string, _ time.Time) (int64, error) {
-			ts.Require().NoError(cleanupCtx.Err(), "terminal cleanup must outlive the failed attempt context")
-			var data map[string]any
-			ts.Require().NoError(json.Unmarshal([]byte(payload), &data))
-			ts.Equal(mainPath, data["filepath"])
-			return 901, nil
-		}).Times(1)
-
-	cancel()
-	_, err = ts.useCase.Handle(ctx, uploadfile.Request{
-		FileID:           file.ID,
-		CleanupOnFailure: true,
-		Artifacts: []uploadfile.Artifact{
-			{
-				Preset: "main", URL: downloadURL, MediaType: "image", ContentType: "image/png",
-				Size: int64(len(body)), ExpireAt: time.Now().Add(time.Hour),
-			},
-			{
-				Preset: "thumbnail", URL: "https://resizer.example.com/thumbnail.png", MediaType: "image",
-				ContentType: "image/png", ExpireAt: time.Now().Add(time.Hour),
-			},
-		},
-	})
-	ts.Require().ErrorIs(err, ts.expectedError)
-}
-
-func TestHandle_CompletedRecordWithClearedUploaderIsIdempotent(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	file := testshelpers.CreateFile(t)
-	data := file.GetData()
-	data.Uploader = shared.FileUploader{}
-	data.Presets = map[shared.PresetName]shared.FilePreset{
-		shared.FilePresetMainName: {
-			PresetName:   shared.FilePresetMainName.String(),
-			RelativePath: "media/v1/admin/42/file-slug/main.png",
-		},
-	}
-	file.SetData(data)
-	ts.fileMock.EXPECT().GetByID(ctx, file.ID).Return(file, nil).Times(1)
-
-	resp, err := ts.useCase.Handle(ctx, uploadfile.Request{
-		FileID: file.ID,
+func newFinalization(t *testing.T) (*uploadfile.UseCase,
+	*finalizationState,
+	*finalizationStorage,
+	*finalizationDownload,
+	uploadfile.Request,
+) {
+	t.Helper()
+	owner := identity.NewUserID()
+	objectID := shared.FileObjectID(42)
+	body := pngBody(t)
+	state := &finalizationState{file: model.File{
+		ID:               12,
+		ObjectType:       shared.ObjectTypeExercise,
+		ObjectID:         &objectID,
+		Slug:             uuid.NewString(),
+		FolderPath:       "tmp/uploads/source",
+		FileName:         "source.png",
+		OriginalFileName: "photo.png",
+		MimeType:         "image/png",
+		FileType:         model.FileTypeImage,
+		Size:             int64(len(body)),
+		IsPrimary:        true,
+		Data: &model.FileData{Uploader: shared.FileUploader{
+			UserUUID: owner,
+			UserID:   10,
+			Type:     shared.UserTypeUser,
+			Status:   shared.FileUploadTaskStatusQueued,
+			AfterJobs: []shared.FileEventAfterJob{shared.NewFileEventAfterJob("test_job",
+				owner,
+				"")},
+		}},
+	}}
+	storage := &finalizationStorage{objects: make(map[string][]byte)}
+	download := &finalizationDownload{bodies: map[string][]byte{"main": body}}
+	options := uploadfile.NewOptions(state,
+		state,
+		download,
+		state,
+		logger.Discard(),
+		storage,
+		state,
+		uploadfile.WithDeliveryBaseURL("https://media.example.test"))
+	useCase, err := uploadfile.New(options)
+	require.NoError(t, err)
+	request := uploadfile.Request{
+		FileID: 12,
 		Artifacts: []uploadfile.Artifact{{
 			Preset:      "main",
-			URL:         downloadURL,
-			MediaType:   "image",
-			ContentType: "image/png",
-			Size:        1,
-			ExpireAt:    time.Now().Add(time.Hour),
-		}},
-	})
-	ts.Require().NoError(err)
-	ts.Empty(resp)
-}
-
-func TestHandle_PartialArtifactFailureKeepsFinalsForRetry(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	file := testshelpers.CreateFile(t)
-	file.FileType = model.FileTypeImage
-	body, err := io.ReadAll(testshelpers.CreateTestImage(t))
-	ts.Require().NoError(err)
-
-	ts.fileMock.EXPECT().GetByID(ctx, file.ID).Return(file, nil).Times(1)
-	ts.clientResizeMock.EXPECT().DownloadFile(ctx, clientresizer.RequestDownload{
-		Preset: "main", URL: downloadURL, TypeMedia: "image",
-	}).Return(clientresizer.ResponseDownload{
-		Body: io.NopCloser(bytes.NewReader(body)), ContentLength: int64(len(body)),
-	}, nil).Times(1)
-	ts.fileStorageMock.EXPECT().
-		SavePersist(ctx, gomock.AssignableToTypeOf(filestorage.SaveFileInput{})).
-		DoAndReturn(func(_ context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
-			written, copyErr := io.Copy(io.Discard, input.Reader)
-			ts.Require().NoError(copyErr)
-			return filestorage.StoredFile{
-				RelativePath: path.Join(input.Dir, input.FileName),
-				Size:         written,
-				MimeType:     "image/png",
-			}, nil
-		}).Times(1)
-	ts.clientResizeMock.EXPECT().DownloadFile(ctx, clientresizer.RequestDownload{
-		Preset: "thumbnail", URL: "https://resizer.example.com/thumbnail.png", TypeMedia: "image",
-	}).Return(clientresizer.ResponseDownload{}, ts.expectedError).Times(1)
-
-	_, err = ts.useCase.Handle(ctx, uploadfile.Request{
-		FileID: file.ID,
-		Artifacts: []uploadfile.Artifact{
-			{
-				Preset: "main", URL: downloadURL, MediaType: "image", ContentType: "image/png",
-				Size: int64(len(body)), ExpireAt: time.Now().Add(time.Hour),
-			},
-			{
-				Preset: "thumbnail", URL: "https://resizer.example.com/thumbnail.png", MediaType: "image",
-				ContentType: "image/png", ExpireAt: time.Now().Add(time.Hour),
-			},
-		},
-	})
-	ts.Require().ErrorIs(err, ts.expectedError)
-}
-
-func TestHandle_ExpiredArtifactFailsWithoutCompleting(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	file := testshelpers.CreateFile(t)
-	ts.fileMock.EXPECT().GetByID(ctx, file.ID).Return(file, nil).Times(1)
-
-	_, err := ts.useCase.Handle(ctx, uploadfile.Request{
-		FileID: file.ID,
-		Artifacts: []uploadfile.Artifact{{
-			Preset:      "main",
-			URL:         downloadURL,
-			MediaType:   "image",
-			ContentType: "image/png",
-			ExpireAt:    time.Now().Add(-time.Minute),
-		}},
-	})
-	ts.Require().ErrorContains(err, "artifact \"main\" is expired")
-}
-
-func TestHandle_RejectsFinalizationWithoutMainArtifact(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	file := testshelpers.CreateFile(t)
-	file.FileType = model.FileTypeImage
-	body, err := io.ReadAll(testshelpers.CreateTestImage(t))
-	ts.Require().NoError(err)
-
-	ts.fileMock.EXPECT().GetByID(ctx, file.ID).Return(file, nil).Times(1)
-	ts.clientResizeMock.EXPECT().DownloadFile(ctx, gomock.Any()).Return(clientresizer.ResponseDownload{
-		Body: io.NopCloser(bytes.NewReader(body)), ContentLength: int64(len(body)),
-	}, nil).Times(1)
-	ts.fileStorageMock.EXPECT().SavePersist(ctx, gomock.Any()).
-		DoAndReturn(func(_ context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
-			written, copyErr := io.Copy(io.Discard, input.Reader)
-			ts.Require().NoError(copyErr)
-			return filestorage.StoredFile{
-				RelativePath: path.Join(input.Dir, input.FileName),
-				Size:         written,
-				MimeType:     "image/png",
-			}, nil
-		}).Times(1)
-
-	_, err = ts.useCase.Handle(ctx, uploadfile.Request{
-		FileID: file.ID,
-		Artifacts: []uploadfile.Artifact{{
-			Preset:      "thumbnail",
-			URL:         downloadURL,
+			URL:         "https://resizer.example.test/main",
 			MediaType:   "image",
 			ContentType: "image/png",
 			Size:        int64(len(body)),
 			ExpireAt:    time.Now().Add(time.Hour),
-			Metadata:    map[string]any{"thumbnail": true},
+			Metadata: map[string]any{
+				"target_width":  2,
+				"target_height": 2,
+			},
 		}},
-	})
-	ts.Require().ErrorContains(err, "finalization has no main artifact")
+	}
+	return useCase, state, storage, download, request
 }
 
-func TestHandle_TransactionFailureSchedulesFinalCleanup(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
+func TestHandle_MustInit(t *testing.T) {
+	require.Panics(t, func() { uploadfile.Must(uploadfile.NewOptions(nil, nil, nil, nil, nil, nil, nil)) })
+}
 
-	file := testshelpers.CreateFile(t)
-	file.FileType = model.FileTypeImage
-	body, err := io.ReadAll(testshelpers.CreateTestImage(t))
-	ts.Require().NoError(err)
-	mainPath := path.Join("media/v1", file.ObjectType.String(), file.ObjectID.String(), file.Slug, "main.png")
+func TestHandleRejectsNormalizedPresetCollisionsBeforeStorage(t *testing.T) {
+	for _, names := range [][2]string{{"main", "MAIN"}, {"foo-bar", "foo--bar"}, {"foo bar", "foo-bar"}} {
+		t.Run(names[0]+"_"+names[1], func(t *testing.T) {
+			useCase, state, storage, download, request := newFinalization(t)
+			for _, name := range names {
+				artifact := request.Artifacts[0]
+				artifact.Preset = name
+				request.Artifacts = append(request.Artifacts, artifact)
+				download.bodies[name] = pngBody(t)
+			}
+			if names[0] == "main" {
+				request.Artifacts = request.Artifacts[1:]
+			}
+			_, err := useCase.Handle(context.Background(), request)
+			require.ErrorContains(t, err, "duplicate artifact preset")
+			require.Zero(t, download.downloads)
+			require.Empty(t, storage.objects)
+			require.Empty(t, state.jobs)
+			require.Equal(t, shared.FileUploadTaskStatusQueued, state.file.GetData().Uploader.Status)
+		})
+	}
+}
 
-	ts.fileMock.EXPECT().GetByID(ctx, file.ID).Return(file, nil).Times(1)
-	ts.clientResizeMock.EXPECT().DownloadFile(ctx, gomock.Any()).Return(clientresizer.ResponseDownload{
-		Body: io.NopCloser(bytes.NewReader(body)), ContentLength: int64(len(body)),
-	}, nil).Times(1)
-	ts.fileStorageMock.EXPECT().
-		SavePersist(ctx, gomock.AssignableToTypeOf(filestorage.SaveFileInput{})).
-		DoAndReturn(func(_ context.Context, input filestorage.SaveFileInput) (filestorage.StoredFile, error) {
-			written, copyErr := io.Copy(io.Discard, input.Reader)
-			ts.Require().NoError(copyErr)
-			return filestorage.StoredFile{
-				RelativePath: path.Join(input.Dir, input.FileName),
-				Size:         written,
-				MimeType:     "image/png",
-			}, nil
-		}).Times(1)
-	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).Return(ts.expectedError).Times(1)
-	ts.outboxMock.EXPECT().
-		Put(gomock.Any(), "deleted_file", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ string, payload string, _ time.Time) (int64, error) {
-			var data map[string]any
-			ts.Require().NoError(json.Unmarshal([]byte(payload), &data))
-			ts.Equal(mainPath, data["filepath"])
-			return 902, nil
-		}).Times(1)
+func TestHandle_Success(t *testing.T) {
+	useCase, state, storage, download, request := newFinalization(t)
+	source := state.file.GetFullPath()
+	_, err := useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	file := state.file
+	require.Equal(t, "main.png", file.FileName)
+	require.Empty(t, file.URL)
+	require.Equal(t, "image/png", file.MimeType)
+	require.True(t, file.IsPrimary)
+	require.Equal(t, 2, file.GetWidth())
+	require.Equal(t, 2, file.GetHeight())
+	require.Empty(t, file.GetData().Uploader)
+	preset := file.GetData().Presets[shared.FilePresetMainName]
+	checksum := sha256.Sum256(download.bodies["main"])
+	require.Equal(t, hex.EncodeToString(checksum[:]), preset.ChecksumSHA256)
+	require.Equal(t, download.bodies["main"], storage.objects[file.GetFullPath()])
+	require.Equal(t, file.GetFullPath(), preset.RelativePath)
+	require.Len(t, state.jobs, 2)
+	require.Equal(t, "test_job", state.jobs[0].name)
+	var after map[string]any
+	require.NoError(t, json.Unmarshal([]byte(state.jobs[0].payload), &after))
+	metadata, ok := after["meta"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "main.png", metadata["fileName"])
+	require.Equal(t, "photo.png", metadata["originalFileName"])
+	require.Equal(t, "https://media.example.test/"+file.GetFullPath(), metadata["fileUrl"])
+	var cleanup map[string]any
+	require.NoError(t, json.Unmarshal([]byte(state.jobs[1].payload), &cleanup))
+	require.Equal(t, source, cleanup["filepath"])
+	require.Len(t, state.events, 1)
+	event, ok := state.events[0].(shared.FileUploadStatusEvent)
+	require.True(t, ok)
+	require.Equal(t, shared.FileUploadTaskStatusCompleted, event.Status)
+	require.Equal(t, "https://media.example.test/"+file.GetFullPath(), event.File.URL)
+}
 
-	_, err = ts.useCase.Handle(ctx, uploadfile.Request{
-		FileID:           file.ID,
-		CleanupOnFailure: true,
-		Artifacts: []uploadfile.Artifact{{
-			Preset: "main", URL: downloadURL, MediaType: "image", ContentType: "image/png",
-			Size: int64(len(body)), ExpireAt: time.Now().Add(time.Hour),
+func TestHandle_VideoPresets(t *testing.T) {
+	useCase, state, _, download, request := newFinalization(t)
+	download.bodies["video_mp4_main"] = sampleMP4Header()
+	download.bodies["video_mp4_main_thumbnail"] = pngBody(t)
+	download.bodies["video_mp4_main_preview"] = pngBody(t)
+	request.Artifacts = []uploadfile.Artifact{
+		{
+			Preset:      "video_mp4_main",
+			URL:         "https://resizer.example.test/video",
+			MediaType:   "video",
+			ContentType: "video/mp4",
+			Size:        int64(len(sampleMP4Header())),
+			ExpireAt:    time.Now().Add(time.Hour),
+			Metadata: map[string]any{
+				"target_width":  320,
+				"target_height": 180,
+			},
+		},
+
+		{
+			Preset:      "video_mp4_main_thumbnail",
+			URL:         "https://resizer.example.test/thumbnail",
+			MediaType:   "image",
+			ContentType: "image/png",
+			ExpireAt:    time.Now().Add(time.Hour),
+			Metadata:    map[string]any{"thumbnail": true},
+		},
+
+		{
+			Preset:      "video_mp4_main_preview",
+			URL:         "https://resizer.example.test/preview",
+			MediaType:   "image",
+			ContentType: "image/png",
+			ExpireAt:    time.Now().Add(time.Hour),
+			Metadata:    map[string]any{"preview": true},
+		},
+	}
+	_, err := useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, "video_mp4_main.mp4", state.file.FileName)
+	require.Equal(t, model.FileTypeVideo, state.file.FileType)
+	require.Equal(t, 320, state.file.GetWidth())
+	require.Equal(t, 180, state.file.GetHeight())
+	require.Len(t, state.file.GetData().Presets, 3)
+	require.True(t, state.file.GetData().Presets["video_mp4_main_thumbnail"].IsThumbnail)
+	require.True(t, state.file.GetData().Presets["video_mp4_main_preview"].IsPreview)
+}
+
+func TestHandle_CompletedRecordWithClearedUploaderIsIdempotent(t *testing.T) {
+	useCase, state, _, download, request := newFinalization(t)
+	_, err := useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	_, err = useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, 1, download.downloads)
+	require.Len(t, state.jobs, 2)
+	require.Len(t, state.events, 1)
+}
+
+func TestHandle_ConcurrentDuplicateIsSerialized(t *testing.T) {
+	useCase, state, _, download, request := newFinalization(t)
+	failures := make(chan error, 8)
+	var wait sync.WaitGroup
+	for range 8 {
+		wait.Add(1)
+		go func() { defer wait.Done(); _, err := useCase.Handle(context.Background(), request); failures <- err }()
+	}
+	wait.Wait()
+	close(failures)
+	for err := range failures {
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, download.downloads)
+	require.Len(t, state.jobs, 2)
+	require.Len(t, state.events, 1)
+}
+
+func TestHandle_PartialArtifactFailureKeepsFinalsForRetry(t *testing.T) {
+	for _, cleanupFlag := range []bool{false, true} {
+		t.Run(map[bool]string{false: "retryable", true: "legacy_cleanup_flag"}[cleanupFlag], func(t *testing.T) {
+			useCase, state, storage, download, request := newFinalization(t)
+			request.CleanupOnFailure = cleanupFlag
+			download.failPreset = "thumbnail"
+			request.Artifacts = append(request.Artifacts,
+				uploadfile.Artifact{
+					Preset:      "thumbnail",
+					URL:         "https://resizer.example.test/thumbnail",
+					MediaType:   "image",
+					ContentType: "image/png",
+					ExpireAt:    time.Now().Add(time.Hour),
+					Metadata:    map[string]any{"thumbnail": true},
+				})
+			_, err := useCase.Handle(context.Background(), request)
+			require.ErrorIs(t, err, errInjected)
+			require.Equal(t, shared.FileUploadTaskStatusQueued, state.file.GetData().Uploader.Status)
+			require.Empty(t, state.jobs)
+			require.Empty(t, state.events)
+			require.Len(t, storage.objects, 1)
+			require.Zero(t, storage.deletes)
+		})
+	}
+}
+
+func TestHandle_UncertainCommitNeverDeletesFinals(t *testing.T) {
+	useCase, state, storage, download, request := newFinalization(t)
+	state.uncertainCommit = true
+	request.CleanupOnFailure = true
+	_, err := useCase.Handle(context.Background(), request)
+	require.ErrorIs(t, err, errInjected)
+	require.Len(t, storage.objects, 1)
+	require.Zero(t, storage.deletes)
+	require.Len(t, state.jobs, 2)
+	_, err = useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	require.Len(t, state.jobs, 2)
+	require.Equal(t, 1, download.downloads)
+}
+
+func TestHandle_ValidationAndFailures(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(*finalizationState, *finalizationStorage, *finalizationDownload, *uploadfile.Request)
+	}{
+		{"expired", func(_ *finalizationState, _ *finalizationStorage, _ *finalizationDownload, r *uploadfile.Request) {
+			r.Artifacts[0].ExpireAt = time.Now().Add(-time.Minute)
 		}},
+		{"no_main", func(_ *finalizationState, _ *finalizationStorage, _ *finalizationDownload, r *uploadfile.Request) {
+			r.Artifacts[0].Preset = "thumbnail"
+			r.Artifacts[0].Metadata = map[string]any{"thumbnail": true}
+		}},
+		{"duplicate", func(_ *finalizationState, _ *finalizationStorage, _ *finalizationDownload, r *uploadfile.Request) {
+			r.Artifacts = append(r.Artifacts, r.Artifacts[0])
+		}},
+		{"declared_size", func(_ *finalizationState, _ *finalizationStorage, _ *finalizationDownload, r *uploadfile.Request) {
+			r.Artifacts[0].Size++
+		}},
+		{"mime_mismatch", func(_ *finalizationState, _ *finalizationStorage, _ *finalizationDownload, r *uploadfile.Request) {
+			r.Artifacts[0].ContentType = "application/pdf"
+		}},
+		{"nil_reader", func(_ *finalizationState, _ *finalizationStorage, d *finalizationDownload, _ *uploadfile.Request) {
+			d.nilBody = true
+		}},
+		{"download", func(_ *finalizationState, _ *finalizationStorage, d *finalizationDownload, _ *uploadfile.Request) {
+			d.failPreset = "main"
+		}},
+		{"storage", func(_ *finalizationState, s *finalizationStorage, _ *finalizationDownload, _ *uploadfile.Request) {
+			s.failSave = true
+		}},
+		{"metadata", func(s *finalizationState, _ *finalizationStorage, _ *finalizationDownload, _ *uploadfile.Request) {
+			s.failUpdate = true
+		}},
+		{"outbox", func(s *finalizationState, _ *finalizationStorage, _ *finalizationDownload, _ *uploadfile.Request) {
+			s.failPut = true
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			useCase, state, storage, download, request := newFinalization(t)
+			tc.change(state, storage, download, &request)
+			_, err := useCase.Handle(context.Background(), request)
+			require.Error(t, err)
+			require.Equal(t, shared.FileUploadTaskStatusQueued, state.file.GetData().Uploader.Status)
+			require.Empty(t, state.jobs)
+			require.Empty(t, state.events)
+			require.Zero(t, storage.deletes)
+		})
+	}
+}
+
+func TestHandle_CancelledAndDeletedDoNotWrite(t *testing.T) {
+	useCase, state, storage, download, request := newFinalization(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := useCase.Handle(ctx, request)
+	require.ErrorIs(t, err, context.Canceled)
+	state.file = model.File{}
+	_, err = useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	require.Zero(t, download.downloads)
+	require.Empty(t, storage.objects)
+	require.Empty(t, state.jobs)
+}
+
+func TestHandle_ContentScannerRunsBeforePublication(t *testing.T) {
+	_, state, storage, download, request := newFinalization(t)
+	scanned := false
+	scanner := filepolicy.ScannerFunc(func(_ context.Context, reader io.Reader, metadata filepolicy.Metadata) error {
+		body, err := io.ReadAll(reader)
+		if err != nil {
+			return err
+		}
+		require.Equal(t, download.bodies["main"], body)
+		require.EqualValues(t, len(body), metadata.Size)
+		require.Empty(t, storage.objects)
+		scanned = true
+		return errInjected
 	})
-	ts.Require().ErrorIs(err, ts.expectedError)
+	useCase, err := uploadfile.NewWithContentScanner(uploadfile.NewOptions(state,
+		state,
+		download,
+		state,
+		logger.Discard(),
+		storage,
+		state),
+		scanner)
+	require.NoError(t, err)
+	_, err = useCase.Handle(context.Background(), request)
+	require.ErrorIs(t, err, errInjected)
+	require.True(t, scanned)
+	require.Empty(t, storage.objects)
+	require.Empty(t, state.jobs)
 }
 
 func sampleMP4Header() []byte {
 	return []byte{
-		0x00, 0x00, 0x00, 0x20,
-		0x66, 0x74, 0x79, 0x70,
-		0x69, 0x73, 0x6F, 0x6D,
-		0x00, 0x00, 0x00, 0x00,
-		0x69, 0x73, 0x6F, 0x6D,
-		0x69, 0x73, 0x6F, 0x32,
-		0x00, 0x00, 0x00, 0x08,
-		0x66, 0x72, 0x65, 0x65,
-		0x00, 0x00, 0x02, 0xD4,
-		0x6D, 0x64, 0x61, 0x74,
-		0x00, 0x00, 0x00, 0x00,
+		0,
+		0,
+		0,
+		32,
+		'f',
+		't',
+		'y',
+		'p',
+		'i',
+		's',
+		'o',
+		'm',
+		0,
+		0,
+		0,
+		0,
+		'i',
+		's',
+		'o',
+		'm',
+		'i',
+		's',
+		'o',
+		'2',
+		0,
+		0,
+		0,
+		8,
+		'f',
+		'r',
+		'e',
+		'e',
+		0,
+		0,
+		2,
+		212,
+		'm',
+		'd',
+		'a',
+		't',
+		0,
+		0,
+		0,
+		0,
 	}
 }
