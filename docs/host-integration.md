@@ -150,7 +150,7 @@ flow remains pass-through.
 3. Build an upload handler with host-owned auth context extraction.
 
    ```go
-   handler := host.NewUploadHandler(
+   handler := host.NewUploadHandlerWithPolicy(
        uploader,
        fileRepo,
        tusStore,
@@ -167,16 +167,41 @@ flow remains pass-through.
        func(path string) string {
            return host.ComposeFileURL(host.FilesBaseURL(cfg), host.FilesBucket(cfg), path)
        },
+       host.UploadHandlerPolicy{
+           Authorize: authorizeUploadObject, // check actor, action and actual File object binding
+           ResolveActor: resolveUploadActor, // return managerID, userID and error for this host
+       },
    )
    handler.RegisterStrategy("default", defaultStrategy)
    handler.RegisterStrategy("rich-text", richTextStrategy)
    ```
+
+   The zero policy denies requests. `TrustRouteGuards: true` is appropriate only
+   when every mounted operation already checks access to the actual object.
+   The legacy `NewUploadHandler` keeps that route-guard-owned authorization
+   contract. Unknown nonempty strategy names are rejected in both constructors;
+   set `AllowDefaultStrategy` explicitly when the unnamed default is needed.
 
 4. Mount the transport adapter.
 
    ```go
    host.NewFiberUploadHandler(handler).RegisterGroupRoutes("/files", app)
    ```
+
+   For original-only wiring, `OriginalRuntimeDeps.ContentScanner` accepts an
+   optional `host.ContentScanner`. It scans a complete private spool before
+   publication, and the same bytes are stored. Nil provides no content approval.
+   TUS completion forwards `ReaderRequest.FinalizationKey`; ready sessions remain
+   until TTL. Repeats return the same file and cannot resurrect a deleted result.
+   Custom `TaskUploader` implementations must persist the handoff atomically with
+   their file/outbox job, including `upload_finalizations` when using the built-in
+   S3 cleaner. The shipped uploader and repository implement this protocol. Run
+   all embedded lifecycle migrations before new workers.
+
+   Batch upload is non-atomic: `*host.BatchError` identifies `FailedIndex`, while
+   returned files are the successful prefix. HTTP returns 207 for partial success.
+   Retry only unaccepted entries. See [lifecycle hardening](review-hardening.md)
+   for deletion plans and coordinated worker rollout.
 
 5. Mount the media-resizer callback route in the host API and convert the HTTP
    request body into `host.BuildListenResizeRequest(...)`, then call

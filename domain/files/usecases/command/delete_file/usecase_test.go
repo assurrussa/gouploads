@@ -5,484 +5,395 @@ import (
 	"encoding/json"
 	"errors"
 	"path"
+	"sync"
 	"testing"
 	"time"
 
 	logger "github.com/assurrussa/gologger"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/suite"
-	"go.uber.org/mock/gomock"
+	outboxtypes "github.com/assurrussa/outbox/shared/types"
+	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/shared"
-	testsmatcher "github.com/assurrussa/gouploads/domain/files/tests/matcher"
 	deletedfile "github.com/assurrussa/gouploads/domain/files/usecases/command/delete_file"
-	deletedfilemocks "github.com/assurrussa/gouploads/domain/files/usecases/command/delete_file/mocks"
-	eventstreammocks "github.com/assurrussa/gouploads/internal/events/mocks"
-	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
+	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	"github.com/assurrussa/gouploads/internal/events"
+	"github.com/assurrussa/gouploads/internal/identity"
 	"github.com/assurrussa/gouploads/internal/pointer"
-	tests "github.com/assurrussa/gouploads/internal/testsupport"
 )
 
-type TestSuite struct {
-	suite.Suite
+var errInjected = errors.New("injected deletion failure")
 
-	fileMock        *deletedfilemocks.MockfileRepository
-	transactorMock  *deletedfilemocks.Mocktransactor
-	storageMock     *deletedfilemocks.MockfileStorage
-	outboxMock      *deletedfilemocks.MockoutboxPutter
-	eventStreamMock *eventstreammocks.MockPublisher
+type (
+	deletionTX    struct{}
+	deletionState struct {
+		mu                                    sync.Mutex
+		file                                  model.File
+		hidden                                bool
+		plan                                  *model.DeletionPlan
+		jobs                                  []string
+		events                                []shared.FileDeletedEvent
+		failRead, failPlan, failHide, failPut bool
+		transactions, uncertainAt             int
+	}
+)
 
-	useCase   *deletedfile.UseCase
-	errExpect error
+func copyPlan(plan *model.DeletionPlan) *model.DeletionPlan {
+	if plan == nil {
+		return nil
+	}
+	body, err := json.Marshal(plan)
+	if err != nil {
+		panic(err)
+	}
+	var copied model.DeletionPlan
+	if err := json.Unmarshal(body, &copied); err != nil {
+		panic(err)
+	}
+	copied.Completed = plan.Completed
+	return &copied
 }
 
-func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite) {
-	t.Helper()
+func inDeletionTransaction(ctx context.Context) bool {
+	active, _ := ctx.Value(deletionTX{}).(bool)
+	return active
+}
 
-	return tests.NewSuite[*TestSuite](t, func(t *testing.T, _ context.Context) *TestSuite {
-		t.Helper()
+func (s *deletionState) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transactions++
+	hidden, plan, jobs := s.hidden, copyPlan(s.plan), append([]string(nil), s.jobs...)
+	if err := fn(context.WithValue(ctx, deletionTX{}, true)); err != nil {
+		s.hidden, s.plan, s.jobs = hidden, plan, jobs
+		return err
+	}
+	if s.uncertainAt == s.transactions {
+		return errInjected
+	}
+	return nil
+}
 
-		log := logger.Discard()
+func (s *deletionState) GetByIDForUpdate(ctx context.Context, _ int64) (model.File, error) {
+	if !inDeletionTransaction(ctx) {
+		return model.File{}, errors.New("file read outside transaction")
+	}
+	if s.failRead {
+		return model.File{}, errInjected
+	}
+	if s.hidden {
+		return model.File{}, nil
+	}
+	return s.file, nil
+}
 
-		ctrl := gomock.NewController(t)
-		transactorMock := deletedfilemocks.NewMocktransactor(ctrl)
-		fileMock := deletedfilemocks.NewMockfileRepository(ctrl)
-		outboxMock := deletedfilemocks.NewMockoutboxPutter(ctrl)
-		storageMock := deletedfilemocks.NewMockfileStorage(ctrl)
-		eventStreamMock := eventstreammocks.NewMockPublisher(ctrl)
+func (s *deletionState) DeleteByID(context.Context, int64) error {
+	if s.failHide {
+		return errInjected
+	}
+	s.hidden = true
+	return nil
+}
 
-		useCase := deletedfile.Must(deletedfile.NewOptions(
-			transactorMock,
-			fileMock,
-			eventStreamMock,
-			log,
-			storageMock,
-			outboxMock,
-		))
+func (s *deletionState) GetDeletionPlanForUpdate(ctx context.Context, _ int64) (model.DeletionPlan, bool, error) {
+	if !inDeletionTransaction(ctx) {
+		return model.DeletionPlan{}, false, errors.New("plan read outside transaction")
+	}
+	if s.plan == nil {
+		return model.DeletionPlan{}, false, nil
+	}
+	return *copyPlan(s.plan), true, nil
+}
 
-		return &TestSuite{
-			useCase:         useCase,
-			fileMock:        fileMock,
-			transactorMock:  transactorMock,
-			eventStreamMock: eventStreamMock,
-			outboxMock:      outboxMock,
-			storageMock:     storageMock,
-			errExpect:       errors.New("expected error"),
+func (s *deletionState) SaveDeletionPlan(_ context.Context, plan model.DeletionPlan) error {
+	if s.failPlan {
+		return errInjected
+	}
+	s.plan = copyPlan(&plan)
+	return nil
+}
+
+func (s *deletionState) CompleteDeletionPlan(context.Context, int64) error {
+	s.plan.Completed = true
+	return nil
+}
+
+func (s *deletionState) Put(ctx context.Context, _ string, payload string, _ time.Time) (outboxtypes.JobID, error) {
+	if !inDeletionTransaction(ctx) {
+		return outboxtypes.JobIDNil, errors.New("after job outside transaction")
+	}
+	if s.failPut {
+		return outboxtypes.JobIDNil, errInjected
+	}
+	s.jobs = append(s.jobs, payload)
+	return outboxtypes.NewJobID(), nil
+}
+
+func (s *deletionState) Publish(_ context.Context, _ identity.UserID, event events.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	deleted, ok := event.(shared.FileDeletedEvent)
+	if !ok {
+		return errors.New("unexpected deletion event type")
+	}
+	s.events = append(s.events, deleted)
+	return nil
+}
+
+type deletionStorage struct {
+	mu                                            sync.Mutex
+	state                                         *deletionState
+	objects                                       map[string]bool
+	calls                                         []string
+	failOnce, batchUnsupported, deleteUnsupported bool
+	stagingOnly                                   bool
+}
+
+func (s *deletionStorage) Delete(ctx context.Context, key string) error {
+	return s.remove(ctx, []string{key})
+}
+
+func (s *deletionStorage) DeleteBatch(ctx context.Context, keys []string) error {
+	if s.batchUnsupported {
+		return filestorage.ErrNotSupported
+	}
+	return s.remove(ctx, keys)
+}
+
+func (s *deletionStorage) remove(ctx context.Context, keys []string) error {
+	if inDeletionTransaction(ctx) {
+		return errors.New("storage IO inside database transaction")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deleteUnsupported {
+		return filestorage.ErrNotSupported
+	}
+	if !s.stagingOnly {
+		s.state.mu.Lock()
+		hidden := s.state.hidden
+		plan := s.state.plan != nil
+		s.state.mu.Unlock()
+		if !hidden || !plan {
+			return errors.New("physical deletion before durable intent")
 		}
-	})
+	}
+	for _, key := range keys {
+		s.calls = append(s.calls, key)
+		delete(s.objects, key)
+		if s.failOnce {
+			s.failOnce = false
+			return errInjected
+		}
+	}
+	return nil
+}
+
+func newDeletion(t *testing.T) (*deletedfile.UseCase, *deletionState, *deletionStorage, deletedfile.Request) {
+	t.Helper()
+	user := identity.NewUserID()
+	file := model.File{
+		ID: 123, FileName: "main.png", OriginalFileName: "original.png", FolderPath: "media/v1/admin/123/slug",
+		ObjectType: shared.ObjectTypeAdmin, ObjectID: pointer.To(shared.FileObjectID(123)),
+		URL: "https://example.com/media/v1/admin/123/slug/main.png",
+		Data: &model.FileData{Presets: map[shared.PresetName]shared.FilePreset{
+			"main":     {PresetName: "main", RelativePath: "media/v1/admin/123/slug/main.png"},
+			"thumb":    {PresetName: "thumb", RelativePath: "media/v1/admin/123/slug/thumb.png"},
+			"original": {PresetName: "original", RelativePath: "media/v1/admin/123/slug/original.png"},
+		}},
+	}
+	state := &deletionState{file: file}
+	storage := &deletionStorage{state: state, objects: make(map[string]bool)}
+	for _, key := range []string{
+		file.GetFullPath(),
+		path.Join(file.FolderPath, "thumb.png"),
+		path.Join(file.FolderPath, "original.png"),
+		path.Join(file.FolderPath, "thumb", file.FileName),
+		path.Join(file.FolderPath, "original", file.FileName),
+	} {
+		storage.objects[key] = true
+	}
+	useCase, err := deletedfile.New(deletedfile.NewOptions(state, state, state, logger.Discard(), storage, state))
+	require.NoError(t, err)
+	return useCase, state, storage, deletedfile.Request{
+		FileID:      123,
+		FilePath:    "tmp/stale-path.png",
+		UserID:      user,
+		AfterEvents: shared.NewFileEventAfterJobs("model_deleted_bind", user, map[string]any{"foo": "bar"}),
+	}
 }
 
 func TestHandle_MustInit(t *testing.T) {
-	assert.Panics(t, func() {
-		deletedfile.Must(deletedfile.NewOptions(nil, nil, nil, nil, nil, nil))
-	})
+	require.Panics(t, func() { deletedfile.Must(deletedfile.NewOptions(nil, nil, nil, nil, nil, nil)) })
 }
 
-func TestHandle_Success(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	// Arrange.
-	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
-	fileID := int64(123)
-	file := model.File{
-		ID:               fileID,
-		FileName:         "testname.png",
-		OriginalFileName: "testname-original.png",
-		FolderPath:       "path/foo",
-		ObjectID:         pointer.To(shared.FileObjectID(fileID)),
-		ObjectType:       shared.ObjectTypeAdmin,
-		URL:              "https://example.com/path/foo/testname.png",
-	}
-	eventsAfter := shared.NewFileEventAfterJobs("model_deleted_bind", userID, map[string]any{"foo": "bar"})
-	req := deletedfile.Request{
-		UserID:      userID,
-		FileID:      fileID,
-		FilePath:    file.GetFullPath(),
-		AfterEvents: eventsAfter,
-	}
-
-	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		}).Times(1)
-	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
-	ts.fileMock.EXPECT().DeleteByID(ctx, fileID).Return(nil).Times(1)
-	ts.storageMock.EXPECT().Delete(ctx, file.GetFullPath()).Return(nil).Times(1)
-	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusCompleted)
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, userID, testsmatcher.NewEventPublishDeletedMatcher(
-			"file publish success matcher", eventFileUpload,
-		)).
-		Return(nil).Times(1)
-
-	payloadBytes := `{"userId":"368c1d49-713e-4b7f-9e8c-bd2b73b1d274","userType":"admin","fileId":123,"eventType":"model_deleted_bind","meta":{"fileName":"testname.png","fileUrl":"https://example.com/path/foo/testname.png","foo":"bar","objectId":123,"objectType":"admin","originalFileName":"testname-original.png"}}` //nolint:lll // tests
-	ts.outboxMock.EXPECT().Put(gomock.Any(), "model_deleted_bind", payloadBytes, gomock.Any()).
-		DoAndReturn(func(_ context.Context, name, payload string, availableAt time.Time) (int64, error) {
-			var dataPayload map[string]any
-			ts.Require().NoError(json.Unmarshal([]byte(payload), &dataPayload))
-			ts.Equal("model_deleted_bind", name)
-			ts.NotZero(availableAt)
-			ts.InDelta(float64(fileID), dataPayload["fileId"], 0.1)
-			meta, ok := dataPayload["meta"].(map[string]any)
-			ts.True(ok)
-			ts.Equal("bar", meta["foo"])
-			return 777, nil
-		}).Times(1)
-
-	// Action.
-	resp, err := ts.useCase.Handle(ctx, req)
-
-	// Assertion.
-	ts.Require().NoError(err)
-	ts.Empty(resp)
-}
-
-func TestHandle_RemoveStorageFileWithPresets(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
-	fileID := int64(123)
-	file := model.File{
-		ID:               fileID,
-		FileName:         "main.png",
-		OriginalFileName: "testname-original.png",
-		FolderPath:       "media/v1/admin/123/file-slug",
-		ObjectID:         pointer.To(shared.FileObjectID(fileID)),
-		ObjectType:       shared.ObjectTypeAdmin,
-		Data: &model.FileData{
-			Presets: map[shared.PresetName]shared.FilePreset{
-				shared.FilePresetMainName: {
-					PresetName:   shared.FilePresetMainName.String(),
-					RelativePath: "media/v1/admin/123/file-slug/main.png",
-				},
-				"thumb": {
-					PresetName:   "thumb",
-					RelativePath: "media/v1/admin/123/file-slug/thumb.png",
-				},
-				"original": {
-					PresetName:   "original",
-					RelativePath: "media/v1/admin/123/file-slug/original.png",
-				},
-			},
-		},
-		URL: "https://example.com/media/v1/admin/123/file-slug/main.png",
-	}
-	eventsAfter := shared.NewFileEventAfterJobs("model_deleted_bind", userID, map[string]any{"foo": "bar"})
-	req := deletedfile.Request{
-		UserID:      userID,
-		FileID:      fileID,
-		FilePath:    file.GetFullPath(),
-		AfterEvents: eventsAfter,
-	}
-
-	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		}).Times(1)
-	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
-	ts.fileMock.EXPECT().DeleteByID(ctx, fileID).Return(nil).Times(1)
-	ts.storageMock.EXPECT().DeleteBatch(ctx, gomock.Any()).
-		DoAndReturn(func(_ context.Context, paths []string) error {
-			ts.ElementsMatch([]string{
-				file.GetFullPath(),
-				path.Join(file.FolderPath, "thumb", file.FileName),
-				"media/v1/admin/123/file-slug/thumb.png",
-				path.Join(file.FolderPath, "original", file.FileName),
-				"media/v1/admin/123/file-slug/original.png",
-			}, paths)
-			return nil
-		}).Times(1)
-	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusCompleted)
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, userID, testsmatcher.NewEventPublishDeletedMatcher(
-			"file publish success matcher", eventFileUpload,
-		)).
-		Return(nil).Times(1)
-
-	payloadBytes := `{"userId":"368c1d49-713e-4b7f-9e8c-bd2b73b1d274","userType":"admin","fileId":123,"eventType":"model_deleted_bind","meta":{"fileName":"main.png","fileUrl":"https://example.com/media/v1/admin/123/file-slug/main.png","foo":"bar","objectId":123,"objectType":"admin","originalFileName":"testname-original.png"}}` //nolint:lll // tests
-	ts.outboxMock.EXPECT().Put(gomock.Any(), "model_deleted_bind", payloadBytes, gomock.Any()).
-		DoAndReturn(func(_ context.Context, name, payload string, availableAt time.Time) (int64, error) {
-			var dataPayload map[string]any
-			ts.Require().NoError(json.Unmarshal([]byte(payload), &dataPayload))
-			ts.Equal("model_deleted_bind", name)
-			ts.NotZero(availableAt)
-			return 777, nil
-		}).Times(1)
-
-	resp, err := ts.useCase.Handle(ctx, req)
-
-	ts.Require().NoError(err)
-	ts.Empty(resp)
+func TestHandle_SuccessAndPresets(t *testing.T) {
+	useCase, state, storage, request := newDeletion(t)
+	_, err := useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, state.hidden)
+	require.True(t, state.plan.Completed)
+	require.Empty(t, storage.objects)
+	require.Len(t, storage.calls, 5)
+	require.NotContains(t, storage.calls, request.FilePath)
+	require.Len(t, state.jobs, 1)
+	var job map[string]any
+	require.NoError(t, json.Unmarshal([]byte(state.jobs[0]), &job))
+	meta, ok := job["meta"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "bar", meta["foo"])
+	require.Equal(t, "main.png", meta["fileName"])
+	require.Equal(t, "original.png", meta["originalFileName"])
+	require.Equal(t, state.file.URL, meta["fileUrl"])
+	require.Len(t, state.events, 1)
+	require.Equal(t, shared.FileDeleteStatusCompleted, state.events[0].Status)
+	_, err = useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	require.Len(t, state.jobs, 1)
+	require.Len(t, storage.calls, 5)
+	require.Len(t, state.events, 1)
 }
 
 func TestHandle_RejectsFileOwnedByDifferentObject(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
+	useCase, state, storage, request := newDeletion(t)
+	request.ObjectType = shared.ObjectTypeAdmin
+	request.ObjectID = 999
+	_, err := useCase.Handle(context.Background(), request)
+	require.ErrorIs(t, err, deletedfile.ErrFileOwnershipMismatch)
+	require.False(t, state.hidden)
+	require.Nil(t, state.plan)
+	require.Empty(t, storage.calls)
+}
+
+func TestHandle_StorageFailureResumesFromDurablePlan(t *testing.T) {
+	useCase, state, storage, request := newDeletion(t)
+	storage.failOnce = true
+	_, err := useCase.Handle(context.Background(), request)
+	require.ErrorIs(t, err, errInjected)
+	require.True(t, state.hidden)
+	require.NotNil(t, state.plan)
+	require.False(t, state.plan.Completed)
+	require.Empty(t, state.jobs)
+	require.NotEmpty(t, storage.objects)
+	fresh, err := deletedfile.New(deletedfile.NewOptions(state, state, state, logger.Discard(), storage, state))
+	require.NoError(t, err)
+	_, err = fresh.Handle(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, state.plan.Completed)
+	require.Empty(t, storage.objects)
+	require.Len(t, state.jobs, 1)
+}
+
+func TestHandle_DatabaseFailureBeforeIntentDoesNotDeleteStorage(t *testing.T) {
+	for _, failure := range []string{"read", "plan", "hide"} {
+		t.Run(failure, func(t *testing.T) {
+			useCase, state, storage, request := newDeletion(t)
+			switch failure {
+			case "read":
+				state.failRead = true
+			case "plan":
+				state.failPlan = true
+			case "hide":
+				state.failHide = true
+			}
+			_, err := useCase.Handle(context.Background(), request)
+			require.ErrorIs(t, err, errInjected)
+			require.False(t, state.hidden)
+			require.Nil(t, state.plan)
+			require.Empty(t, storage.calls)
+			require.Len(t, storage.objects, 5)
 		})
-
-	const fileID = int64(123)
-	file := model.File{
-		ID:         fileID,
-		FileName:   "main.png",
-		FolderPath: "media/v1/admin/9/file-slug",
-		ObjectType: shared.ObjectTypeAdmin,
-		ObjectID:   pointer.To(shared.FileObjectID(9)),
 	}
-	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
-
-	_, err := ts.useCase.Handle(ctx, deletedfile.Request{
-		FileID:     fileID,
-		ObjectType: shared.ObjectTypeAdmin,
-		ObjectID:   shared.FileObjectID(3),
-	})
-	ts.Require().ErrorIs(err, deletedfile.ErrFileOwnershipMismatch)
 }
 
-func TestHandle_RemoveStorageFile(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	// Arrange.
-	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
-	fileID := int64(123)
-	file := model.File{
-		ID:         fileID,
-		FileName:   "testname.png",
-		FolderPath: "path/foo",
-	}
-	eventsAfter := shared.NewFileEventAfterJobs("model_deleted_bind", userID, map[string]any{"foo": "bar"})
-	req := deletedfile.Request{
-		UserID:      userID,
-		FileID:      fileID,
-		FilePath:    file.GetFullPath(),
-		AfterEvents: eventsAfter,
-	}
-
-	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		}).Times(1)
-	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
-	ts.fileMock.EXPECT().DeleteByID(ctx, fileID).Return(nil).Times(1)
-	ts.storageMock.EXPECT().Delete(ctx, file.GetFullPath()).Return(ts.errExpect).Times(1)
-	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusFailed)
-	eventFileUpload.Error = ts.errExpect.Error()
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, userID, testsmatcher.NewEventPublishDeletedMatcher(
-			"file publish error matcher", eventFileUpload,
-		)).
-		Return(nil).Times(1)
-
-	payloadBytes := `{"userId":"368c1d49-713e-4b7f-9e8c-bd2b73b1d274","userType":"admin","fileId":123,"eventType":"model_deleted_bind","meta":{"fileName":"testname.png","foo":"bar"}}` //nolint:lll // tests
-	ts.outboxMock.EXPECT().Put(gomock.Any(), "model_deleted_bind", payloadBytes, gomock.Any()).
-		DoAndReturn(func(_ context.Context, _, payload string, _ time.Time) (int64, error) {
-			var dataPayload map[string]any
-			ts.Require().NoError(json.Unmarshal([]byte(payload), &dataPayload))
-			return 777, nil
-		}).Times(1)
-
-	// Action.
-	resp, err := ts.useCase.Handle(ctx, req)
-
-	// Assertion.
-	ts.Require().ErrorIs(err, ts.errExpect)
-	ts.Empty(resp)
+func TestHandle_FailedEnqueueAfterJobsIsRetryable(t *testing.T) {
+	useCase, state, storage, request := newDeletion(t)
+	state.failPut = true
+	_, err := useCase.Handle(context.Background(), request)
+	require.ErrorIs(t, err, errInjected)
+	require.True(t, state.hidden)
+	require.False(t, state.plan.Completed)
+	require.Empty(t, state.jobs)
+	require.Empty(t, storage.objects)
+	state.failPut = false
+	_, err = useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, state.plan.Completed)
+	require.Len(t, state.jobs, 1)
 }
 
-func TestHandle_FailedEnqueueAfterJobs(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	// Arrange.
-	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
-	fileID := int64(123)
-	file := model.File{
-		ID:         fileID,
-		FileName:   "testname.png",
-		FolderPath: "path/foo",
-	}
-	eventsAfter := shared.NewFileEventAfterJobs("model_deleted_bind", userID, map[string]any{"foo": "bar"})
-	req := deletedfile.Request{
-		UserID:      userID,
-		FileID:      fileID,
-		FilePath:    file.GetFullPath(),
-		AfterEvents: eventsAfter,
-	}
-
-	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		}).Times(1)
-	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
-	ts.fileMock.EXPECT().DeleteByID(ctx, fileID).Return(nil).Times(1)
-	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusFailed)
-	eventFileUpload.Error = ts.errExpect.Error()
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, userID, testsmatcher.NewEventPublishDeletedMatcher(
-			"file publish error matcher", eventFileUpload,
-		)).
-		Return(nil).Times(1)
-
-	payloadBytes := `{"userId":"368c1d49-713e-4b7f-9e8c-bd2b73b1d274","userType":"admin","fileId":123,"eventType":"model_deleted_bind","meta":{"fileName":"testname.png","foo":"bar"}}` //nolint:lll // tests
-	ts.outboxMock.EXPECT().Put(gomock.Any(), "model_deleted_bind", payloadBytes, gomock.Any()).
-		DoAndReturn(func(_ context.Context, _, payload string, _ time.Time) (int64, error) {
-			var dataPayload map[string]any
-			ts.Require().NoError(json.Unmarshal([]byte(payload), &dataPayload))
-			return 777, ts.errExpect
-		}).Times(1)
-
-	// Action.
-	resp, err := ts.useCase.Handle(ctx, req)
-
-	// Assertion.
-	ts.Require().ErrorIs(err, ts.errExpect)
-	ts.Empty(resp)
-}
-
-func TestHandle_FailedDeleteByID(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	// Arrange.
-	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
-	fileID := int64(123)
-	file := model.File{
-		ID:         fileID,
-		FileName:   "testname.png",
-		FolderPath: "path/foo",
-	}
-	eventsAfter := shared.NewFileEventAfterJobs("model_deleted_bind", userID, map[string]any{"foo": "bar"})
-	req := deletedfile.Request{
-		UserID:      userID,
-		FileID:      fileID,
-		FilePath:    file.GetFullPath(),
-		AfterEvents: eventsAfter,
-	}
-
-	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		}).Times(1)
-	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, nil).Times(1)
-	ts.fileMock.EXPECT().DeleteByID(ctx, fileID).Return(ts.errExpect).Times(1)
-	eventFileUpload := shared.NewFileDeletedEvent(fileID, file.GetPublicURL(), shared.FileDeleteStatusFailed)
-	eventFileUpload.Error = ts.errExpect.Error()
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, userID, testsmatcher.NewEventPublishDeletedMatcher(
-			"file publish error matcher", eventFileUpload,
-		)).
-		Return(nil).Times(1)
-
-	// Action.
-	resp, err := ts.useCase.Handle(ctx, req)
-
-	// Assertion.
-	ts.Require().ErrorIs(err, ts.errExpect)
-	ts.Empty(resp)
-}
-
-func TestHandle_FileIDIsEmpty_Success(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	// Arrange.
-	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
-	fileID := int64(0)
-	file := model.File{
-		ID:         fileID,
-		FileName:   "testname.png",
-		FolderPath: "path/foo",
-	}
-	eventsAfter := shared.NewFileEventAfterJobs("model_deleted_bind", userID, map[string]any{"foo": "bar"})
-	req := deletedfile.Request{
-		UserID:      userID,
-		FileID:      fileID,
-		FilePath:    file.GetFullPath(),
-		AfterEvents: eventsAfter,
-	}
-
-	ts.storageMock.EXPECT().Delete(ctx, file.GetFullPath()).Return(nil).Times(1)
-	// Action.
-	resp, err := ts.useCase.Handle(ctx, req)
-
-	// Assertion.
-	ts.Require().NoError(err)
-	ts.Empty(resp)
-}
-
-func TestHandle_FileIDIsEmpty_Error(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	// Arrange.
-	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
-	fileID := int64(0)
-	file := model.File{
-		ID:         fileID,
-		FileName:   "testname.png",
-		FolderPath: "path/foo",
-	}
-	eventsAfter := shared.NewFileEventAfterJobs("model_deleted_bind", userID, map[string]any{"foo": "bar"})
-	req := deletedfile.Request{
-		UserID:      userID,
-		FileID:      fileID,
-		FilePath:    file.GetFullPath(),
-		AfterEvents: eventsAfter,
-	}
-
-	ts.storageMock.EXPECT().Delete(ctx, file.GetFullPath()).Return(ts.errExpect).Times(1)
-	// Action.
-	resp, err := ts.useCase.Handle(ctx, req)
-
-	// Assertion.
-	ts.Require().ErrorIs(err, ts.errExpect)
-	ts.Empty(resp)
-}
-
-func TestHandle_GetFileID_Error(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-	ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
-			return fn(ctx)
+func TestHandle_UncertainCommitsDoNotLoseDeletionPlan(t *testing.T) {
+	for _, at := range []int{1, 2} {
+		t.Run(map[int]string{1: "intent", 2: "completion"}[at], func(t *testing.T) {
+			useCase, state, storage, request := newDeletion(t)
+			state.uncertainAt = at
+			_, err := useCase.Handle(context.Background(), request)
+			require.ErrorIs(t, err, errInjected)
+			require.True(t, state.hidden)
+			require.NotNil(t, state.plan)
+			if at == 1 {
+				require.Empty(t, storage.calls)
+			}
+			_, err = useCase.Handle(context.Background(), request)
+			require.NoError(t, err)
+			require.True(t, state.plan.Completed)
+			require.Empty(t, storage.objects)
+			require.Len(t, state.jobs, 1)
 		})
-
-	// Arrange.
-	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
-	fileID := int64(123)
-	file := model.File{
-		ID:         fileID,
-		FileName:   "testname.png",
-		FolderPath: "path/foo",
 	}
-	req := deletedfile.Request{
-		UserID:   userID,
-		FileID:   fileID,
-		FilePath: file.GetFullPath(),
-	}
-
-	ts.fileMock.EXPECT().GetByIDForUpdate(ctx, fileID).Return(file, ts.errExpect).Times(1)
-
-	// Action.
-	resp, err := ts.useCase.Handle(ctx, req)
-
-	// Assertion.
-	ts.Require().ErrorIs(err, ts.errExpect)
-	ts.Empty(resp)
 }
 
-func TestHandle_FilePath_Empty(t *testing.T) {
-	ctx, _, ts := NewTestSuite(t)
-
-	// Arrange.
-	userID := sharedtypes.MustParse[sharedtypes.UserID]("368c1d49-713e-4b7f-9e8c-bd2b73b1d274")
-	fileID := int64(0)
-	req := deletedfile.Request{
-		UserID: userID,
-		FileID: fileID,
+func TestHandle_ConcurrentDeliveryEnqueuesAfterEventOnce(t *testing.T) {
+	useCase, state, storage, request := newDeletion(t)
+	failures := make(chan error, 8)
+	var wait sync.WaitGroup
+	for range 8 {
+		wait.Add(1)
+		go func() { defer wait.Done(); _, err := useCase.Handle(context.Background(), request); failures <- err }()
 	}
+	wait.Wait()
+	close(failures)
+	for err := range failures {
+		require.NoError(t, err)
+	}
+	require.Len(t, state.jobs, 1)
+	require.Empty(t, storage.objects)
+	require.True(t, state.plan.Completed)
+}
 
-	// Action.
-	resp, err := ts.useCase.Handle(ctx, req)
+func TestHandle_BatchFallbackAndUnsupportedDelete(t *testing.T) {
+	useCase, state, storage, request := newDeletion(t)
+	storage.batchUnsupported = true
+	_, err := useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, state.plan.Completed)
+	useCase, state, storage, request = newDeletion(t)
+	storage.batchUnsupported = true
+	storage.deleteUnsupported = true
+	_, err = useCase.Handle(context.Background(), request)
+	require.ErrorIs(t, err, filestorage.ErrNotSupported)
+	require.False(t, state.plan.Completed)
+	require.Empty(t, state.jobs)
+}
 
-	// Assertion.
-	ts.Require().Error(err)
-	ts.Empty(resp)
+func TestHandle_FileIDIsEmpty(t *testing.T) {
+	useCase, state, storage, request := newDeletion(t)
+	storage.stagingOnly = true
+	request.FileID = 0
+	request.FilePath = "tmp/uploads/source.png"
+	_, err := useCase.Handle(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, []string{request.FilePath}, storage.calls)
+	require.Zero(t, state.transactions)
+	require.Empty(t, state.jobs)
+	require.Empty(t, state.events)
+	storage.failOnce = true
+	_, err = useCase.Handle(context.Background(), request)
+	require.ErrorIs(t, err, errInjected)
+	request.FilePath = ""
+	_, err = useCase.Handle(context.Background(), request)
+	require.Error(t, err)
 }

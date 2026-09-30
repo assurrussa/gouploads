@@ -5,12 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	logger "github.com/assurrussa/gologger"
 	"github.com/google/uuid"
@@ -18,21 +19,24 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	"github.com/assurrussa/gouploads/internal/filepolicy"
 	"github.com/assurrussa/gouploads/internal/filesanitize"
 )
 
-const sniffLen = 512
+const (
+	sniffLen                 = 512
+	failedTempCleanupTimeout = 30 * time.Second
+)
 
 const (
-	extJPG  = ".jpg"
-	extJPEG = ".jpeg"
-	extPNG  = ".png"
-	extGIF  = ".gif"
-	extWebP = ".webp"
-	extMP4  = ".mp4"
-	extWebM = ".webm"
-	extPDF  = ".pdf"
-
+	extJPG        = ".jpg"
+	extJPEG       = ".jpeg"
+	extPNG        = ".png"
+	extGIF        = ".gif"
+	extWebP       = ".webp"
+	extMP4        = ".mp4"
+	extWebM       = ".webm"
+	extPDF        = ".pdf"
 	mimeImageJPEG = "image/jpeg"
 	mimeImagePNG  = "image/png"
 	mimeImageGIF  = "image/gif"
@@ -79,20 +83,10 @@ func (e *uploadError) Error() string {
 	}
 	return uploadErrorMessages[uploadErrorCodeUnexpected]
 }
+func (e *uploadError) Unwrap() error              { return e.err }
+func (e *uploadError) Code() string               { return e.code }
+func newUploadError(code string, err error) error { return &uploadError{code: code, err: err} }
 
-func (e *uploadError) Unwrap() error {
-	return e.err
-}
-
-func (e *uploadError) Code() string {
-	return e.code
-}
-
-func newUploadError(code string, err error) error {
-	return &uploadError{code: code, err: err}
-}
-
-// FileUploadConfig configures file upload behavior.
 type FileUploadConfig struct {
 	MaxFileSize       int64
 	AllowedExtensions []string
@@ -101,7 +95,17 @@ type FileUploadConfig struct {
 	SkipResizer       bool
 }
 
-// UploadedFile represents an uploaded file with metadata.
+// Clone isolates request-specific changes from a strategy's reusable policy.
+func (c *FileUploadConfig) Clone() *FileUploadConfig {
+	if c == nil {
+		return nil
+	}
+	cloned := *c
+	cloned.AllowedExtensions = append([]string(nil), c.AllowedExtensions...)
+	cloned.AllowedMimeTypes = cloneMimeMap(c.AllowedMimeTypes)
+	return &cloned
+}
+
 type UploadedFile struct {
 	OriginalName string
 	FileName     string
@@ -115,14 +119,12 @@ type UploadedFile struct {
 	Height       int
 }
 
-// ReaderUploadInput describes a file provided via a reader (e.g. TUS).
 type ReaderUploadInput struct {
 	OriginalName string
 	Size         int64
 	Reader       io.Reader
 }
 
-// UploadValidationInput contains data available for custom upload validators.
 type UploadValidationInput struct {
 	OriginalFileName string
 	MimeType         string
@@ -131,24 +133,20 @@ type UploadValidationInput struct {
 	Sniff            []byte
 }
 
-// UploadValidator allows plugging additional validation rules (e.g. antivirus).
+// UploadValidator checks metadata and a bounded prefix only. Full-content malware
+// scanning belongs to a ContentScanner on the private finalization source.
 type UploadValidator interface {
 	Validate(ctx context.Context, input UploadValidationInput) error
 }
-
-// UploadValidatorFunc turns a function into an UploadValidator.
-type UploadValidatorFunc func(ctx context.Context, input UploadValidationInput) error
+type UploadValidatorFunc func(context.Context, UploadValidationInput) error
 
 func (fn UploadValidatorFunc) Validate(ctx context.Context, input UploadValidationInput) error {
 	return fn(ctx, input)
 }
 
-// DefaultFileUploadConfig returns default configuration for file upload_file.
 func DefaultFileUploadConfig(addPathDir ...string) *FileUploadConfig {
-	uploadSegments := append([]string{"upload_file"}, addPathDir...)
-	uploadDir := strings.Join(uploadSegments, "/")
 	return &FileUploadConfig{
-		MaxFileSize:       10 * 1024 * 1024, // 10MB
+		MaxFileSize:       10 * 1024 * 1024,
 		AllowedExtensions: []string{extJPG, extJPEG, extPNG, extGIF, extWebP, extMP4, extWebM, extPDF},
 		AllowedMimeTypes: map[string][]string{
 			extJPG:  {mimeImageJPEG},
@@ -160,16 +158,13 @@ func DefaultFileUploadConfig(addPathDir ...string) *FileUploadConfig {
 			extWebM: {mimeVideoWebM},
 			extPDF:  {mimePDF},
 		},
-		UploadDir: uploadDir,
+		UploadDir: strings.Join(append([]string{"upload_file"}, addPathDir...), "/"),
 	}
 }
 
-// DefaultFileUploadRichTextConfig returns default configuration for rich text editor file upload_file.
 func DefaultFileUploadRichTextConfig(addPathDir ...string) *FileUploadConfig {
-	segments := append([]string{"upload_file", "rich-text"}, addPathDir...)
-	uploadDir := strings.Join(segments, "/")
 	return &FileUploadConfig{
-		MaxFileSize:       5 * 1024 * 1024, // 5MB для Rich Text
+		MaxFileSize:       5 * 1024 * 1024,
 		AllowedExtensions: []string{extJPG, extJPEG, extPNG, extGIF, extWebP},
 		AllowedMimeTypes: map[string][]string{
 			extJPG:  {mimeImageJPEG},
@@ -178,202 +173,129 @@ func DefaultFileUploadRichTextConfig(addPathDir ...string) *FileUploadConfig {
 			extGIF:  {mimeImageGIF},
 			extWebP: {mimeImageWebP},
 		},
-		UploadDir: uploadDir,
+		UploadDir: strings.Join(append([]string{"upload_file", "rich-text"}, addPathDir...), "/"),
 	}
 }
 
-// ProcessSingleFileUpload processes a single file upload.
 func (s *Service) ProcessSingleFileUpload(
 	ctx context.Context,
-	fileHeader *multipart.FileHeader,
+	header *multipart.FileHeader,
 	configs ...*FileUploadConfig,
 ) (UploadedFile, error) {
-	config := s.mergeConfig(configs...)
-
-	if config.UploadDir == "" {
+	cfg := s.mergeConfig(configs...)
+	if cfg.UploadDir == "" {
 		return UploadedFile{}, newUploadError(uploadErrorCodeUploadDirMissing, errors.New("upload directory is not defined"))
 	}
-
-	return s.processFile(ctx, fileHeader, config)
+	return s.processFile(ctx, header, cfg)
 }
 
-// ProcessReaderUpload processes a file upload from a reader.
 func (s *Service) ProcessReaderUpload(
 	ctx context.Context,
 	input ReaderUploadInput,
 	configs ...*FileUploadConfig,
 ) (UploadedFile, error) {
-	config := s.mergeConfig(configs...)
-
-	if config.UploadDir == "" {
+	cfg := s.mergeConfig(configs...)
+	if cfg.UploadDir == "" {
 		return UploadedFile{}, newUploadError(uploadErrorCodeUploadDirMissing, errors.New("upload directory is not defined"))
 	}
-
-	return s.processReader(ctx, input, config)
+	return s.processReader(ctx, input, cfg)
 }
 
-// processFile handles the processing of a single file.
-func (s *Service) processFile(
-	ctx context.Context, fileHeader *multipart.FileHeader, config *FileUploadConfig,
-) (UploadedFile, error) {
-	if fileHeader == nil {
-		err := shared.ErrFileHeaderIsNil
-		s.logger.WarnContext(ctx, "upload: missing file header", logger.Error(err))
-		return UploadedFile{}, newUploadError(uploadErrorCodeFileHeaderMissing, err)
+func (s *Service) processFile(ctx context.Context, header *multipart.FileHeader, cfg *FileUploadConfig) (UploadedFile, error) {
+	if header == nil {
+		return UploadedFile{}, newUploadError(uploadErrorCodeFileHeaderMissing, shared.ErrFileHeaderIsNil)
 	}
-
-	if err := ensureDeclaredSize(fileHeader.Size, config.MaxFileSize); err != nil {
+	if err := ensureDeclaredSize(header.Size, cfg.MaxFileSize); err != nil {
 		return UploadedFile{}, err
 	}
-
-	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
-	if err := s.ensureAllowedExtension(ext, config.AllowedExtensions); err != nil {
+	if err := s.ensureAllowedExtension(strings.ToLower(filepath.Ext(header.Filename)), cfg.AllowedExtensions); err != nil {
 		return UploadedFile{}, err
 	}
-
-	src, err := s.openMultipartFile(ctx, fileHeader)
+	source, err := s.openMultipartFile(ctx, header)
 	if err != nil {
 		return UploadedFile{}, err
 	}
-	defer s.closeSource(ctx, src)
-
-	reader, mimeType, err := s.prepareReader(ctx, fileHeader, src, ext, config)
-	if err != nil {
-		return UploadedFile{}, err
-	}
-
-	fileType, err := model.GetFileTypeFromMimeType(mimeType)
-	if err != nil {
-		return UploadedFile{}, err
-	}
-
-	reader, width, height := inspectImageDimensions(reader, mimeType)
-	reader, limited := wrapWithSizeLimit(reader, config.MaxFileSize)
-	fileName := uuid.New().String() + ext
-
-	tempFile, err := s.saveTempFile(ctx, config, fileName, fileHeader.Size, mimeType, reader)
-	if err != nil {
-		return UploadedFile{}, err
-	}
-
-	relativePath, err := filesanitize.EnsureRelativePath(tempFile.RelativePath)
-	if err != nil {
-		return UploadedFile{}, err
-	}
-
-	if err := s.ensureStoredSize(ctx, tempFile, fileHeader.Size, config.MaxFileSize, limited); err != nil {
-		return UploadedFile{}, err
-	}
-
-	return UploadedFile{
-		OriginalName: fileHeader.Filename,
-		FileName:     fileName,
-		Size:         tempFile.Size,
-		Path:         relativePath,
-		FolderPath:   filesanitize.EnsureRelativeDir(relativePath),
-		URL:          tempFile.URL,
-		MimeType:     mimeType,
-		FileType:     fileType,
-		Width:        width,
-		Height:       height,
-	}, nil
+	defer s.closeSource(ctx, source)
+	return s.processReader(ctx, ReaderUploadInput{OriginalName: header.Filename, Size: header.Size, Reader: source}, cfg)
 }
 
-// processReader handles the processing of a single file from reader.
-func (s *Service) processReader(
-	ctx context.Context,
-	input ReaderUploadInput,
-	config *FileUploadConfig,
-) (UploadedFile, error) {
+func (s *Service) processReader(ctx context.Context, input ReaderUploadInput, cfg *FileUploadConfig) (UploadedFile, error) {
+	if err := ctx.Err(); err != nil {
+		return UploadedFile{}, err
+	}
 	if input.Reader == nil {
-		err := shared.ErrFileHeaderIsNil
-		s.logger.WarnContext(ctx, "upload: missing reader", logger.Error(err))
-		return UploadedFile{}, newUploadError(uploadErrorCodeFileHeaderMissing, err)
+		return UploadedFile{}, newUploadError(uploadErrorCodeFileHeaderMissing, shared.ErrFileHeaderIsNil)
 	}
-
-	originalName := strings.TrimSpace(input.OriginalName)
-	if originalName == "" {
-		err := errors.New("original file name is required")
-		s.logger.WarnContext(ctx, "upload: missing file name", logger.Error(err))
-		return UploadedFile{}, newUploadError(uploadErrorCodeFileHeaderMissing, err)
+	name := strings.TrimSpace(input.OriginalName)
+	if name == "" || !utf8.ValidString(name) || utf8.RuneCountInString(name) > 255 || strings.ContainsRune(name, 0) {
+		return UploadedFile{}, newUploadError(uploadErrorCodeFileHeaderMissing, errors.New("invalid original file name"))
 	}
-
-	if err := ensureDeclaredSize(input.Size, config.MaxFileSize); err != nil {
+	if err := ensureDeclaredSize(input.Size, cfg.MaxFileSize); err != nil {
 		return UploadedFile{}, err
 	}
-
-	ext := strings.ToLower(filepath.Ext(originalName))
-	if err := s.ensureAllowedExtension(ext, config.AllowedExtensions); err != nil {
+	ext := strings.ToLower(filepath.Ext(name))
+	if err := s.ensureAllowedExtension(ext, cfg.AllowedExtensions); err != nil {
 		return UploadedFile{}, err
 	}
-
-	sniff := make([]byte, sniffLen)
-	n, readErr := io.ReadFull(input.Reader, sniff)
-	if readErr != nil && readErr != io.EOF && !errors.Is(readErr, io.ErrUnexpectedEOF) {
-		s.logger.WarnContext(ctx, "upload: read file", logger.Error(readErr))
-		return UploadedFile{}, newUploadError(
-			uploadErrorCodeReadFailed,
-			fmt.Errorf("failed to read file for mime detection: %w", readErr),
-		)
+	// Install the whole-file budget before MIME/dimension parsing.
+	reader, limited := wrapWithSizeLimit(input.Reader, cfg.MaxFileSize)
+	header := make([]byte, sniffLen)
+	n, err := io.ReadFull(reader, header)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return UploadedFile{}, newUploadError(uploadErrorCodeReadFailed, err)
 	}
 	if n == 0 {
 		return UploadedFile{}, newUploadError(uploadErrorCodeFileEmpty, errors.New("file is empty"))
 	}
-
-	data := sniff[:n]
-	mimeType := http.DetectContentType(data)
-	if !s.isAllowedMime(ext, mimeType, config.AllowedMimeTypes) {
-		err := fmt.Errorf("mime type %s is not allowed for %s", mimeType, ext)
-		return UploadedFile{}, newUploadError(uploadErrorCodeMimeDenied, err)
+	mimeType := http.DetectContentType(header[:n])
+	if !s.isAllowedMime(ext, mimeType, cfg.AllowedMimeTypes) {
+		return UploadedFile{},
+			newUploadError(uploadErrorCodeMimeDenied,
+				fmt.Errorf("mime type %s is not allowed for %s",
+					mimeType,
+					ext))
 	}
-
-	if err := s.runValidatorsFromInput(ctx, input, ext, mimeType, data); err != nil {
+	if err := s.runValidatorsFromInput(ctx, input, ext, mimeType, header[:n]); err != nil {
 		return UploadedFile{}, err
 	}
-
-	reader := io.MultiReader(bytes.NewReader(data), input.Reader)
-
-	fileType, err := model.GetFileTypeFromMimeType(mimeType)
-	if err != nil {
-		return UploadedFile{}, err
-	}
-
+	reader = io.MultiReader(bytes.NewReader(header[:n]), reader)
 	reader, width, height := inspectImageDimensions(reader, mimeType)
-	reader, limited := wrapWithSizeLimit(reader, config.MaxFileSize)
-	fileName := uuid.New().String() + ext
-
-	tempFile, err := s.saveTempFile(ctx, config, fileName, input.Size, mimeType, reader)
+	kind, err := model.GetFileTypeFromMimeType(mimeType)
 	if err != nil {
 		return UploadedFile{}, err
 	}
-
-	relativePath, err := filesanitize.EnsureRelativePath(tempFile.RelativePath)
+	fileName := uuid.NewString() + ext
+	temporary, err := s.saveTempFile(ctx, cfg, fileName, input.Size, mimeType, reader)
 	if err != nil {
 		return UploadedFile{}, err
 	}
-
-	if err := s.ensureStoredSize(ctx, tempFile, input.Size, config.MaxFileSize, limited); err != nil {
+	key, err := filesanitize.EnsureRelativePath(temporary.RelativePath)
+	if err != nil {
 		return UploadedFile{}, err
 	}
-
+	if err := s.ensureStoredSize(ctx, temporary, input.Size, cfg.MaxFileSize, limited); err != nil {
+		return UploadedFile{}, err
+	}
 	return UploadedFile{
-		OriginalName: originalName,
+		OriginalName: name,
 		FileName:     fileName,
-		Size:         tempFile.Size,
-		Path:         relativePath,
-		FolderPath:   filesanitize.EnsureRelativeDir(relativePath),
-		URL:          tempFile.URL,
+		Size:         temporary.Size,
+		Path:         key,
+		FolderPath:   filesanitize.EnsureRelativeDir(key),
+		URL:          temporary.URL,
 		MimeType:     mimeType,
-		FileType:     fileType,
+		FileType:     kind,
 		Width:        width,
 		Height:       height,
 	}, nil
 }
 
 func ensureDeclaredSize(size, limit int64) error {
+	if size < 0 {
+		return newUploadError(uploadErrorCodeReadFailed, errors.New("negative file size"))
+	}
 	if limit > 0 && size > limit {
-		err := fmt.Errorf("file size %d exceeds maximum allowed size %d", size, limit)
-		return newUploadError(uploadErrorCodeFileTooLarge, err)
+		return newUploadError(uploadErrorCodeFileTooLarge, fmt.Errorf("file size %d exceeds maximum allowed size %d", size, limit))
 	}
 	return nil
 }
@@ -382,120 +304,36 @@ func (s *Service) ensureAllowedExtension(ext string, allowed []string) error {
 	if s.isAllowedExtension(ext, allowed) {
 		return nil
 	}
-	err := fmt.Errorf("file extension %s is not allowed", ext)
-	return newUploadError(uploadErrorCodeExtensionDenied, err)
+	return newUploadError(uploadErrorCodeExtensionDenied, fmt.Errorf("file extension %s is not allowed", ext))
 }
 
-func (s *Service) openMultipartFile(ctx context.Context, fileHeader *multipart.FileHeader) (multipart.File, error) {
-	src, err := fileHeader.Open()
+func (s *Service) openMultipartFile(ctx context.Context, header *multipart.FileHeader) (multipart.File, error) {
+	file, err := header.Open()
 	if err != nil {
 		s.logger.WarnContext(ctx, "upload: open file", logger.Error(err))
-		return nil, newUploadError(
-			uploadErrorCodeOpenFailed,
-			fmt.Errorf("failed to open uploaded file: %w", err),
-		)
+		return nil, newUploadError(uploadErrorCodeOpenFailed, err)
 	}
-	return src, nil
+	return file, nil
 }
 
-func (s *Service) closeSource(ctx context.Context, src multipart.File) {
-	if closeErr := src.Close(); closeErr != nil {
-		s.logger.ErrorContext(ctx, "failed to close uploaded file in src", logger.Error(closeErr))
+func (s *Service) closeSource(ctx context.Context, file multipart.File) {
+	if err := file.Close(); err != nil {
+		s.logger.ErrorContext(ctx, "failed to close uploaded source", logger.Error(err))
 	}
 }
 
-func (s *Service) prepareReader(
-	ctx context.Context,
-	fileHeader *multipart.FileHeader,
-	src multipart.File,
-	ext string,
-	config *FileUploadConfig,
-) (io.Reader, string, error) {
-	sniff := make([]byte, sniffLen)
-	n, readErr := io.ReadFull(src, sniff)
-	if readErr != nil && readErr != io.EOF && !errors.Is(readErr, io.ErrUnexpectedEOF) {
-		s.logger.WarnContext(ctx, "upload: read file", logger.Error(readErr))
-		return nil, "", newUploadError(
-			uploadErrorCodeReadFailed,
-			fmt.Errorf("failed to read file for mime detection: %w", readErr),
-		)
-	}
-	if n == 0 {
-		return nil, "", newUploadError(uploadErrorCodeFileEmpty, errors.New("file is empty"))
-	}
-
-	data := sniff[:n]
-	mimeType := http.DetectContentType(data)
-	if !s.isAllowedMime(ext, mimeType, config.AllowedMimeTypes) {
-		err := fmt.Errorf("mime type %s is not allowed for %s", mimeType, ext)
-		return nil, "", newUploadError(uploadErrorCodeMimeDenied, err)
-	}
-
-	if err := s.runValidators(ctx, fileHeader, ext, mimeType, data); err != nil {
-		return nil, "", err
-	}
-
-	reader := io.MultiReader(bytes.NewReader(data), src)
-	return reader, mimeType, nil
-}
-
-func (s *Service) runValidators(
-	ctx context.Context,
-	fileHeader *multipart.FileHeader,
-	ext string,
-	mimeType string,
-	sniff []byte,
-) error {
-	if len(s.validators) == 0 {
-		return nil
-	}
-
-	input := UploadValidationInput{
-		OriginalFileName: fileHeader.Filename,
-		MimeType:         mimeType,
-		Extension:        ext,
-		Size:             fileHeader.Size,
-		Sniff:            append([]byte(nil), sniff...),
-	}
-
+func (s *Service) runValidatorsFromInput(ctx context.Context, input ReaderUploadInput, ext, mimeType string, sniff []byte) error {
 	for _, validator := range s.validators {
 		if validator == nil {
 			continue
 		}
-		if err := validator.Validate(ctx, input); err != nil {
-			var uploadErr *uploadError
-			if errors.As(err, &uploadErr) {
-				return err
-			}
-			return newUploadError(uploadErrorCodeUnexpected, err)
-		}
-	}
-
-	return nil
-}
-
-func (s *Service) runValidatorsFromInput(
-	ctx context.Context,
-	input ReaderUploadInput,
-	ext string,
-	mimeType string,
-	sniff []byte,
-) error {
-	if len(s.validators) == 0 {
-		return nil
-	}
-
-	validation := UploadValidationInput{
-		OriginalFileName: input.OriginalName,
-		MimeType:         mimeType,
-		Extension:        ext,
-		Size:             input.Size,
-		Sniff:            append([]byte(nil), sniff...),
-	}
-
-	for _, validator := range s.validators {
-		if validator == nil {
-			continue
+		validation := UploadValidationInput{
+			OriginalFileName: input.OriginalName,
+			Size:             input.Size,
+			Extension:        ext,
+			MimeType:         mimeType,
+			Sniff: append([]byte(nil),
+				sniff...),
 		}
 		if err := validator.Validate(ctx, validation); err != nil {
 			var uploadErr *uploadError
@@ -505,7 +343,6 @@ func (s *Service) runValidatorsFromInput(
 			return newUploadError(uploadErrorCodeUnexpected, err)
 		}
 	}
-
 	return nil
 }
 
@@ -513,127 +350,103 @@ func wrapWithSizeLimit(reader io.Reader, limit int64) (io.Reader, *io.LimitedRea
 	if limit <= 0 {
 		return reader, nil
 	}
+	// All runtime configurations are bounded; avoid overflow for direct callers.
+	if limit > filepolicy.MaxFileSize {
+		limit = filepolicy.MaxFileSize
+	}
 	limited := &io.LimitedReader{R: reader, N: limit + 1}
 	return limited, limited
 }
 
 func (s *Service) saveTempFile(
 	ctx context.Context,
-	config *FileUploadConfig,
-	fileName string,
-	declaredSize int64,
+	cfg *FileUploadConfig,
+	name string,
+	size int64,
 	mimeType string,
 	reader io.Reader,
 ) (filestorage.StoredFile, error) {
-	tempFile, err := s.storage.SaveTemp(ctx, filestorage.SaveFileInput{
-		Dir:      config.UploadDir,
-		FileName: fileName,
-		Size:     declaredSize,
-		MimeType: mimeType,
-		Reader:   reader,
-	})
+	file, err := s.storage.SaveTemp(ctx,
+		filestorage.SaveFileInput{
+			Dir:      cfg.UploadDir,
+			FileName: name,
+			Size:     size,
+			MimeType: mimeType,
+			Reader:   reader,
+		})
 	if err != nil {
 		s.logger.WarnContext(ctx, "upload: save temp file", logger.Error(err))
-		return filestorage.StoredFile{}, newUploadError(uploadErrorCodeSaveTempFailed, fmt.Errorf("save temp file: %w", err))
+		return filestorage.StoredFile{}, newUploadError(uploadErrorCodeSaveTempFailed, err)
 	}
-	return tempFile, nil
+	return file, nil
 }
 
 func (s *Service) ensureStoredSize(
 	ctx context.Context,
-	tempFile filestorage.StoredFile,
-	declaredSize int64,
+	file filestorage.StoredFile,
+	declaredSize,
 	limit int64,
 	limited *io.LimitedReader,
 ) error {
 	if limit <= 0 {
 		return nil
 	}
-
-	effectiveSize := tempFile.Size
-	if effectiveSize == 0 {
-		effectiveSize = declaredSize
+	size := file.Size
+	if size == 0 {
+		size = declaredSize
 	}
-
-	if (limited != nil && limited.N == 0) || effectiveSize > limit {
-		if err := s.storage.Delete(ctx, tempFile.RelativePath); err != nil && !errors.Is(err, filestorage.ErrNotSupported) {
-			s.logger.WarnContext(ctx, "upload: cleanup oversize temp file", logger.Error(err))
+	if (limited != nil && limited.N == 0) || size > limit {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failedTempCleanupTimeout)
+		defer cancel()
+		if err := s.storage.Delete(cleanupCtx, file.RelativePath); err != nil && !errors.Is(err, filestorage.ErrNotSupported) {
+			s.logger.WarnContext(cleanupCtx, "upload: cleanup oversize file", logger.Error(err))
 		}
-		err := fmt.Errorf("file size %d exceeds maximum allowed size %d", effectiveSize, limit)
-		return newUploadError(uploadErrorCodeFileTooLarge, err)
+		return newUploadError(uploadErrorCodeFileTooLarge, fmt.Errorf("file size %d exceeds maximum allowed size %d", size, limit))
 	}
-
 	return nil
 }
 
-// isAllowedExtension checks if the file extension is allowed.
-func (s *Service) isAllowedExtension(ext string, allowedExtensions []string) bool {
-	ext = strings.ToLower(ext)
-	if len(allowedExtensions) == 0 {
-		return true
-	}
-
-	for _, allowed := range allowedExtensions {
-		if strings.ToLower(allowed) == ext {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *Service) isAllowedMime(ext string, mime string, allowed map[string][]string) bool {
-	ext = strings.ToLower(ext)
-	mime = strings.ToLower(strings.TrimSpace(mime))
-	if idx := strings.Index(mime, ";"); idx >= 0 {
-		mime = strings.TrimSpace(mime[:idx])
-	}
-	if mime == "" {
-		return false
-	}
-
+func (s *Service) isAllowedExtension(ext string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return true
 	}
-
-	allowedList, ok := allowed[ext]
-	if !ok {
-		return false
-	}
-
-	for _, candidate := range allowedList {
-		candidate = strings.ToLower(strings.TrimSpace(candidate))
-		if idx := strings.Index(candidate, ";"); idx >= 0 {
-			candidate = strings.TrimSpace(candidate[:idx])
-		}
-		if candidate == "" {
-			continue
-		}
-		if strings.HasSuffix(candidate, "/*") {
-			prefix := strings.TrimSuffix(candidate, "/*")
-			if strings.HasPrefix(mime, prefix) {
-				return true
-			}
-			continue
-		}
-		if candidate == mime {
+	for _, candidate := range allowed {
+		if strings.EqualFold(candidate, ext) {
 			return true
 		}
 	}
-
 	return false
 }
 
-func (s *Service) mergeConfig(cfgList ...*FileUploadConfig) *FileUploadConfig {
-	base := DefaultFileUploadConfig()
-	result := FileUploadConfig{
-		MaxFileSize:       base.MaxFileSize,
-		AllowedExtensions: append([]string(nil), base.AllowedExtensions...),
-		AllowedMimeTypes:  cloneMimeMap(base.AllowedMimeTypes),
-		UploadDir:         base.UploadDir,
-		SkipResizer:       base.SkipResizer,
+func (s *Service) isAllowedMime(ext, mimeType string, allowed map[string][]string) bool {
+	mimeType = filepolicy.NormalizeMIME(mimeType)
+	if mimeType == "" {
+		return false
 	}
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, candidate := range allowed[strings.ToLower(ext)] {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if strings.HasSuffix(candidate, "/*") && strings.HasPrefix(mimeType, strings.TrimSuffix(candidate, "*")) {
+			return true
+		}
+		if filepolicy.NormalizeMIME(candidate) == mimeType {
+			return true
+		}
+	}
+	return false
+}
 
-	for _, cfg := range cfgList {
+func (s *Service) mergeConfig(configs ...*FileUploadConfig) *FileUploadConfig {
+	return ResolveFileUploadConfig(configs...)
+}
+
+// ResolveFileUploadConfig applies ingestion defaults and isolates mutable policy
+// fields so transports can enforce the same limits before accepting bytes.
+func ResolveFileUploadConfig(configs ...*FileUploadConfig) *FileUploadConfig {
+	result := DefaultFileUploadConfig()
+	for _, cfg := range configs {
 		if cfg == nil {
 			continue
 		}
@@ -653,43 +466,27 @@ func (s *Service) mergeConfig(cfgList ...*FileUploadConfig) *FileUploadConfig {
 			result.SkipResizer = true
 		}
 	}
-
-	return &result
+	return result
 }
 
-func normalizeExtensions(exts []string) []string {
-	if len(exts) == 0 {
+func normalizeExtensions(extensions []string) []string {
+	if len(extensions) == 0 {
 		return nil
 	}
-	result := make([]string, 0, len(exts))
-	for _, ext := range exts {
-		clean := strings.ToLower(strings.TrimSpace(ext))
-		if clean == "" {
+	result := make([]string, 0, len(extensions))
+	for _, ext := range extensions {
+		ext = strings.ToLower(strings.TrimSpace(ext))
+		if ext == "" {
 			continue
 		}
-		if !strings.HasPrefix(clean, ".") {
-			clean = "." + clean
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
 		}
-		result = append(result, clean)
+		result = append(result, ext)
 	}
 	return result
 }
 
-func inspectImageDimensions(reader io.Reader, mime string) (replay io.Reader, width, height int) {
-	if mime == "" || !isImage(mime) {
-		return reader, 0, 0
-	}
-
-	var consumed bytes.Buffer
-	cfg, _, err := image.DecodeConfig(io.TeeReader(reader, &consumed))
-	replay = io.MultiReader(bytes.NewReader(consumed.Bytes()), reader)
-	if err != nil {
-		return replay, 0, 0
-	}
-
-	return replay, cfg.Width, cfg.Height
-}
-
-func isImage(mime string) bool {
-	return len(mime) >= 6 && mime[:6] == "image/"
+func inspectImageDimensions(reader io.Reader, mimeType string) (replay io.Reader, width, height int) {
+	return filepolicy.InspectDimensions(reader, mimeType)
 }

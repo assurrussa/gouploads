@@ -528,3 +528,25 @@
 ## Local canonical final keys (2026-09-29)
 
 A goadmin original-only PostgreSQL lifecycle probe exposed local `SavePersist` adding the legacy `uploads/` prefix to an already canonical `media/v1` directory. The S3 adapter preserves the supplied canonical key. Local storage now preserves confined `media/v1` keys too; other directories retain legacy prefix handling. The atomic-replace test asserts the returned canonical key, the physical file contents and the absence of an extra prefixed file. No schema or old-file migration is included.
+
+## Review hardening follow-up (2026-09-30)
+
+- Goal: review and repair the complete 47-file candidate against base
+  `4737b158982eb595fde315b26a1309b310f47c9a`, preserving the supported host facade.
+- Package sizes and SHA-256 verified before applying. At review start, the remote
+  candidate branch and master both pointed to the base. Publication follows the
+  local verification recorded below; no release tag or deployment is included.
+- Independent immutable-snapshot review covered storage/HTTP boundaries and
+  database/finalization/deletion consistency. Fixed canonical preset collisions,
+  effective TUS limits, valid small local PATCH requests and a reproduced panic
+  from an oversized custom-store MIME prefix. Preserved legacy DI media mode.
+- Acceptance: compile, configured format/lint, unit/race, isolated PostgreSQL and
+  MinIO lifecycle/migration tests, public consumer and import boundaries.
+- Published-tag verification and production deployment are outside this task.
+- Source readiness, default/integration race, PostgreSQL17/MinIO E2Es,
+  migration refusal/rollback guards, generated-code reproduction, public consumer
+  and import policy passed. Exact CI lint2.14.0 and actionlint passed; govulncheck
+  found zero reachable vulnerabilities (three module-only unused SSH/OpenPGP
+  advisories). Live handoff/cleanup commit-order contention passed three times.
+- Exact checks, environment and remaining acceptance limits are recorded in
+  `docs/review-hardening-verification.md`. No release or production claim is made.

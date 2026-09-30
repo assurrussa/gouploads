@@ -38,7 +38,6 @@ type fileStorage interface {
 type transactor interface {
 	RunInTx(ctx context.Context, f func(context.Context) error) error
 }
-
 type outboxPutter interface {
 	Put(ctx context.Context, name, payload string, availableAt time.Time) (outboxtypes.JobID, error)
 }
@@ -54,9 +53,7 @@ type Options struct {
 	deliveryBaseURL string                `validate:"omitempty,url"`
 }
 
-type UseCase struct {
-	Options
-}
+type UseCase struct{ Options }
 
 var ErrFileOwnershipMismatch = errors.New("file does not belong to the expected object")
 
@@ -72,81 +69,143 @@ func New(opts Options) (*UseCase, error) {
 	if err := opts.Validate(); err != nil {
 		return nil, fmt.Errorf("validate options: %w", err)
 	}
-
-	return &UseCase{
-		Options: opts,
-	}, nil
+	return &UseCase{Options: opts}, nil
 }
 
-func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errReturn error) {
+func (u *UseCase) Handle(ctx context.Context, req Request) (Response, error) {
 	if err := req.Validate(); err != nil {
 		return Response{}, fmt.Errorf("validate: %w", err)
 	}
-
-	var filePath string
-	var err error
-	if req.FilePath != "" {
-		filePath, err = filesanitize.EnsureRelativePath(req.FilePath)
+	if req.FileID == 0 {
+		key, err := filesanitize.EnsureRelativePath(req.FilePath)
 		if err != nil {
 			return Response{}, fmt.Errorf("ensure relative path: %w", err)
 		}
+		// A staging-only job has no database record to transition.
+		return Response{}, u.deletePaths(ctx, []string{key})
+	}
+	planner, ok := u.files.(deletionPlanner)
+	if !ok {
+		return Response{}, errors.New("file deletion requires a durable deletion-plan repository")
+	}
+	plan, found, err := u.prepareDeletion(ctx, req, planner)
+	if err != nil {
+		return Response{}, err
+	}
+	if !found || plan.Completed {
+		return Response{}, nil
 	}
 
-	var file model.File
-	var loaded bool
-	operation := func(ctx context.Context) error {
-		if req.FileID > 0 {
-			file, err = u.files.GetByIDForUpdate(ctx, req.FileID)
-			if err != nil {
-				return fmt.Errorf("get task %d: %w", req.FileID, err)
-			}
-		} else if filePath != "" {
-			file = model.File{
-				FolderPath: path.Dir(filePath),
-				FileName:   path.Base(filePath),
-			}
+	u.logger.InfoContext(ctx, "purging committed file deletion",
+		slog.Int64("file_id", plan.File.ID), slog.Any("public_keys", plan.Paths),
+	)
+	// No database transaction/row lock is held across storage IO. A partial
+	// failure leaves the file hidden and the complete artifact set retryable.
+	if err := u.deletePaths(ctx, plan.Paths); err != nil {
+		u.publish(ctx, plan.UserID, u.buildFailedEvent(plan.File, err))
+		return Response{}, err
+	}
+	changed := false
+	err = u.transactor.RunInTx(ctx, func(ctx context.Context) error {
+		current, found, err := planner.GetDeletionPlanForUpdate(ctx, req.FileID)
+		if err != nil {
+			return err
 		}
-		if file.ID > 0 {
-			filePath = file.GetFullPath()
+		if !found {
+			return errors.New("committed deletion plan disappeared")
+		}
+		if current.Completed {
+			return nil
+		}
+		if err := u.enqueueAfterJobs(ctx, current.File.ID, current.File, current.AfterEvents); err != nil {
+			return err
+		}
+		if err := planner.CompleteDeletionPlan(ctx, current.File.ID); err != nil {
+			return err
+		}
+		changed = true
+		return nil
+	})
+	if err != nil {
+		return Response{}, err
+	}
+	if changed {
+		u.publish(ctx, plan.UserID, u.buildCompletedEvent(plan.File))
+	}
+	return Response{}, nil
+}
+
+func (u *UseCase) prepareDeletion(ctx context.Context, req Request, planner deletionPlanner) (model.DeletionPlan, bool, error) {
+	var plan model.DeletionPlan
+	var found bool
+	err := u.transactor.RunInTx(ctx, func(ctx context.Context) error {
+		var err error
+		plan, found, err = planner.GetDeletionPlanForUpdate(ctx, req.FileID)
+		if err != nil {
+			return err
+		}
+		if found {
+			return validateOwnership(plan.File, req)
+		}
+		file, err := u.files.GetByIDForUpdate(ctx, req.FileID)
+		if err != nil {
+			return fmt.Errorf("lock deleted file: %w", err)
+		}
+		if file.ID == 0 {
+			// Another deletion can have committed while this transaction waited
+			// for the file lock. Read its plan again under READ COMMITTED.
+			plan, found, err = planner.GetDeletionPlanForUpdate(ctx, req.FileID)
+			if err != nil {
+				return err
+			}
+			if found {
+				return validateOwnership(plan.File, req)
+			}
+			return nil
 		}
 		if err := validateOwnership(file, req); err != nil {
 			return err
 		}
-
-		loaded = true
-		deletePaths := collectPaths(file, filePath)
-
-		taskLogger := u.logger.WithAttrs(
-			slog.Int64("file_id", req.FileID),
-			slog.Int64("deleted_id", req.FileID),
-			slog.String("file_path", filePath),
-		)
-		if req.FileID == 0 {
-			taskLogger = taskLogger.WithAttrs(slog.String("staging_key", filePath))
-		} else {
-			taskLogger = taskLogger.WithAttrs(slog.Any("public_keys", deletePaths))
+		plan = model.DeletionPlan{
+			File:        file,
+			Paths:       collectPaths(file, file.GetFullPath()),
+			AfterEvents: append([]shared.FileEventAfterJob(nil), req.AfterEvents...),
+			UserID:      req.UserID,
 		}
-		taskLogger.InfoContext(ctx, "deleting media objects")
-
-		return u.deleteRecordAndStorage(ctx, req, file, filePath)
-	}
-	if req.FileID > 0 {
-		err = u.transactor.RunInTx(ctx, operation)
-	} else {
-		err = operation(ctx)
-	}
+		if err := planner.SaveDeletionPlan(ctx, plan); err != nil {
+			return fmt.Errorf("save deletion plan: %w", err)
+		}
+		if err := u.files.DeleteByID(ctx, file.ID); err != nil {
+			return fmt.Errorf("hide deleted file: %w", err)
+		}
+		found = true
+		return nil
+	})
 	if err != nil {
-		if loaded && req.FileID > 0 && file.ID > 0 {
-			u.publish(ctx, req.UserID, u.buildFailedEvent(file, err))
+		return model.DeletionPlan{}, false, err
+	}
+	return plan, found, nil
+}
+
+func (u *UseCase) deletePaths(ctx context.Context, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	if len(paths) > 1 {
+		err := u.storage.DeleteBatch(ctx, paths)
+		if err == nil {
+			return nil
 		}
-		return Response{}, err
+		if !errors.Is(err, filestorage.ErrNotSupported) {
+			return fmt.Errorf("storage delete batch: %w", err)
+		}
 	}
-
-	if req.FileID > 0 {
-		u.publish(ctx, req.UserID, u.buildCompletedEvent(file))
+	for _, key := range paths {
+		if err := u.storage.Delete(ctx, key); err != nil {
+			return fmt.Errorf("storage delete file: %w", err)
+		}
 	}
-
-	return Response{}, nil
+	return nil
 }
 
 func (u *UseCase) publish(ctx context.Context, userID sharedtypes.UserID, event shared.FileDeletedEvent) {
@@ -154,29 +213,20 @@ func (u *UseCase) publish(ctx context.Context, userID sharedtypes.UserID, event 
 		u.logger.WarnContext(ctx, "invalid event", logger.Error(err))
 		return
 	}
-
 	if userID.IsZero() {
-		u.logger.WarnContext(ctx, "skip publish: empty user id")
 		return
 	}
-
 	if err := u.eventStream.Publish(ctx, userID, event); err != nil {
 		u.logger.WarnContext(ctx, "publish event", logger.Error(err))
 	}
 }
 
-func (u *UseCase) enqueueAfterJobs(
-	ctx context.Context,
-	fileID int64,
-	file model.File,
-	events []shared.FileEventAfterJob,
-) error {
+func (u *UseCase) enqueueAfterJobs(ctx context.Context, fileID int64, file model.File, events []shared.FileEventAfterJob) error {
 	for _, event := range events {
 		jobName := strings.TrimSpace(event.JobName)
 		if jobName == "" {
 			continue
 		}
-
 		meta := make(map[string]any, len(event.Meta)+5)
 		if file.ObjectType.Validate() == nil {
 			meta["objectType"] = file.ObjectType.String()
@@ -184,8 +234,8 @@ func (u *UseCase) enqueueAfterJobs(
 		if file.ObjectID != nil {
 			meta["objectId"] = file.ObjectID
 		}
-		if file.URL != "" {
-			meta["fileUrl"] = file.URL
+		if value := u.publicURL(file); value != "" {
+			meta["fileUrl"] = value
 		}
 		if file.FileName != "" {
 			meta["fileName"] = file.FileName
@@ -193,87 +243,43 @@ func (u *UseCase) enqueueAfterJobs(
 		if file.OriginalFileName != "" {
 			meta["originalFileName"] = file.OriginalFileName
 		}
-
-		if len(event.Meta) > 0 {
-			for k, v := range event.Meta {
-				meta[k] = v
-			}
+		for key, value := range event.Meta {
+			meta[key] = value
 		}
-
-		payload := eventfileafterprocess.NewPayload(event.UserID, shared.UserTypeAdmin, fileID, jobName, meta)
-		payloadBytes, err := eventfileafterprocess.MarshalPayload(payload)
+		payload, err := eventfileafterprocess.MarshalPayload(
+			eventfileafterprocess.NewPayload(event.UserID, shared.UserTypeAdmin, fileID, jobName, meta),
+		)
 		if err != nil {
 			return fmt.Errorf("marshal after job payload: %w", err)
 		}
-
-		if _, err := u.outbox.Put(ctx, jobName, payloadBytes, time.Now()); err != nil {
+		if _, err := u.outbox.Put(ctx, jobName, payload, time.Now()); err != nil {
 			return fmt.Errorf("outbox put: %w", err)
 		}
 	}
-
-	return nil
-}
-
-func (u *UseCase) removeFile(ctx context.Context, file model.File, fallbackPath string) error {
-	paths := collectPaths(file, fallbackPath)
-	if len(paths) == 0 {
-		return nil
-	}
-
-	if len(paths) == 1 {
-		if err := u.storage.Delete(ctx, paths[0]); err != nil && !errors.Is(err, filestorage.ErrNotSupported) {
-			return fmt.Errorf("storage delete file: %w", err)
-		}
-		return nil
-	}
-
-	if err := u.storage.DeleteBatch(ctx, paths); err != nil {
-		if errors.Is(err, filestorage.ErrNotSupported) {
-			for _, p := range paths {
-				if err := u.storage.Delete(ctx, p); err != nil && !errors.Is(err, filestorage.ErrNotSupported) {
-					return fmt.Errorf("storage delete file: %w", err)
-				}
-			}
-			return nil
-		}
-
-		return fmt.Errorf("storage delete batch: %w", err)
-	}
-
 	return nil
 }
 
 func collectPaths(file model.File, fallback string) []string {
 	paths := make([]string, 0, len(file.GetData().Presets)+2)
 	unique := make(map[string]struct{}, cap(paths))
-	add := func(pathValue string) {
-		pathValue = strings.TrimSpace(pathValue)
-		if pathValue == "" {
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
 			return
 		}
-		if _, exists := unique[pathValue]; exists {
+		if _, ok := unique[value]; ok {
 			return
 		}
-		unique[pathValue] = struct{}{}
-		paths = append(paths, pathValue)
+		unique[value] = struct{}{}
+		paths = append(paths, value)
 	}
-
 	add(fallback)
-
 	if file.ID == 0 {
 		return paths
 	}
-
 	add(file.GetFullPath())
-
-	data := file.GetData()
-	if data == nil || len(data.Presets) == 0 {
-		return paths
-	}
-
-	for presetName, preset := range data.Presets {
+	for presetName, preset := range file.GetData().Presets {
 		add(preset.RelativePath)
-
 		name := strings.TrimSpace(preset.PresetName)
 		if name == "" {
 			name = presetName.String()
@@ -281,10 +287,10 @@ func collectPaths(file model.File, fallback string) []string {
 		if name == "" || shared.PresetName(name) == shared.FilePresetMainName {
 			continue
 		}
-
-		add(path.Join(file.FolderPath, name, file.FileName))
+		if safe, err := filesanitize.SanitizeSegment(name); err == nil && safe == name {
+			add(path.Join(file.FolderPath, name, file.FileName))
+		}
 	}
-
 	slices.Sort(paths)
 	return paths
 }
@@ -297,15 +303,10 @@ func validateOwnership(file model.File, req Request) error {
 		return nil
 	}
 	if file.ObjectID == nil || file.ObjectType != req.ObjectType || *file.ObjectID != req.ObjectID {
-		return fmt.Errorf(
-			"%w: file_id=%d expected_object_type=%s expected_object_id=%d",
-			ErrFileOwnershipMismatch,
-			req.FileID,
-			req.ObjectType,
-			req.ObjectID,
+		return fmt.Errorf("%w: file_id=%d expected_object_type=%s expected_object_id=%d",
+			ErrFileOwnershipMismatch, req.FileID, req.ObjectType, req.ObjectID,
 		)
 	}
-
 	return nil
 }
 
@@ -321,24 +322,4 @@ func (u *UseCase) buildFailedEvent(file model.File, err error) shared.FileDelete
 
 func (u *UseCase) publicURL(file model.File) string {
 	return fileurl.Compose(u.deliveryBaseURL, "", file.GetPublicURL())
-}
-
-func (u *UseCase) deleteRecordAndStorage(ctx context.Context, req Request, file model.File, filePath string) error {
-	switch file.ID {
-	case 0:
-		// Если файл в итоге будет не найден в БД - можно будет попробовать просто удалить файл из S3
-		if err := u.removeFile(ctx, file, filePath); err != nil {
-			return fmt.Errorf("remove file: %w", err)
-		}
-	default:
-		if err := u.files.DeleteByID(ctx, file.ID); err != nil {
-			return fmt.Errorf("delete old file record: %w", err)
-		}
-		if err := u.enqueueAfterJobs(ctx, file.ID, file, req.AfterEvents); err != nil {
-			return fmt.Errorf("schedule after jobs: %w", err)
-		}
-		return u.removeFile(ctx, file, filePath)
-	}
-
-	return nil
 }
