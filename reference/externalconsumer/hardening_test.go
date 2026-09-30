@@ -73,3 +73,37 @@ func TestFinalizationAndBatchPublicErrors(t *testing.T) {
 		require.ErrorIs(t, err, cause)
 	}
 }
+
+type chunkSizeStore struct {
+	host.TusStore
+	chunkSize int64
+}
+
+func (s chunkSizeStore) ChunkSize() int64 { return s.chunkSize }
+
+func TestStandardUploadHandlerPublicContract(t *testing.T) {
+	uploadHandler := host.NewUploadHandler(nil, nil, nil, nil, nil, nil)
+	stdHandler, err := host.NewStandardUploadHandler(uploadHandler, "/files", host.StandardUploadHandlerConfig{
+		BodyLimit: 50 * 1024 * 1024,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stdHandler)
+	oversizedHandler := host.NewUploadHandler(nil, nil,
+		chunkSizeStore{chunkSize: host.DefaultBodyLimit + 1}, nil, nil, nil)
+	stdHandler, err = host.NewStandardUploadHandler(oversizedHandler, "/files")
+	require.Nil(t, stdHandler)
+	require.ErrorIs(t, err, host.ErrIncompatibleBodyLimit)
+
+	stdHandler, err = host.NewStandardUploadHandler(nil, "/files")
+	require.Nil(t, stdHandler)
+	require.ErrorIs(t, err, host.ErrNilUploadHandler)
+
+	stdHandler, err = host.NewStandardUploadHandler(&host.UploadHandler{}, "/files")
+	require.Nil(t, stdHandler)
+	require.ErrorIs(t, err, host.ErrNilUploadHandler)
+
+	stdHandler, err = host.NewStandardUploadHandler(uploadHandler, "/files",
+		host.StandardUploadHandlerConfig{}, host.StandardUploadHandlerConfig{})
+	require.Nil(t, stdHandler)
+	require.ErrorIs(t, err, host.ErrInvalidStandardHandlerConfig)
+}

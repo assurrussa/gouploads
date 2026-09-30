@@ -1,5 +1,58 @@
 # Standalone implementation and verification notes
 
+## 2026-09-30 public-readiness candidate
+
+Branch: `feat/public-readiness`.
+Verified with repository Go 1.27.1:
+
+- `StandardUploadHandler` constructor fail-fast: `NewStandardUploadHandler` returns `ErrIncompatibleBodyLimit` when the effective body limit is smaller than the underlying TUS store's chunk size (default 32 MiB body limit, explicit `StandardUploadHandlerConfig.BodyLimit` required for larger chunk sizes).
+- Full `net/http` context propagation: all hooks (`ContextBuilder`, `UploadResourceAuthorizer`, `ResolveActor`, `UploadStrategy.CanUpload`, `GetConfig`, `GetAfterJobs`, `ReadPrefix`) receive standard `r.Context()`.
+- Standalone quickstart S3 `Public.BaseURL` configured via `url.JoinPath`, and `urlComposer` wires directly through `host.ComposeFileURL`.
+- Standalone quickstart reference policy sets `TrustRouteGuards: false` with explicit authorizer callback.
+- Quickstart Web UI hardened: upload concurrency guard, file type detection (returns null for unsupported files with UI validation error before upload), local upload closure on `/complete`, async task polling (`GET /files/tasks/:id`) until outbox finalization completes (`status == "completed"`), and S3 `publicUrl` display.
+- `TestIntegration_StandardUploadHandlerE2E` passes: full TUS chunking (5 MiB), HEAD resumption, final chunk, application completion, completion idempotency, and background outbox finalization into storage with SHA-256 validation.
+- `make check`, `make test-surface`, and `make externalconsumer-local` pass with 0 lint issues and race detection enabled.
+
+### Constructor review follow-up
+
+The verified follow-up was committed as
+`2577d8cd713a9741f93aeb696725758ad6abf56e`, based on
+`6c4b7c7712017092b0023769df8e1aef3da0ac92`, on the same branch. The checks below
+ran on the worktree before that commit; its implementation and test diff matches
+the verified snapshot.
+
+- Nil and zero-value upload handlers return `ErrNilUploadHandler`; more than one
+  optional config returns `ErrInvalidStandardHandlerConfig`. Both errors occur
+  before Fiber construction. Existing 0/1-config behavior and nonpositive
+  body-limit defaults remain covered.
+- Removed the unused unpublished `MaxAutoBodyLimit` alias. The external-consumer
+  test now exercises actual constructor failures with `ErrorIs`.
+- `go test ./host ./reference/externalconsumer -run TestStandardUploadHandler
+  -count=1` passed, including the new regressions. Edited-file gopls diagnostics
+  and final `git diff --check` passed.
+- Complete `make source-readiness` passed with Go 1.27.1 on macOS/arm64 and
+  configured golangci-lint 2.13.1 (0 issues). This includes tidy/format/vet/lint,
+  the full race/coverage suite, both public-surface checks, PostgreSQL TUS fencing,
+  private S3 source URLs, S3 and local media E2Es, original-only and standard HTTP
+  adapter E2Es, clean local consumer (default and integration tags), anonymous
+  dependency downloads and sibling-host import policy.
+- The source gate used isolated disposable PostgreSQL 17.9 and MinIO
+  `RELEASE.2025-09-07T16-13-09Z`, with explicit environment values:
+
+  ```sh
+  TEST_PSQL_ADDRESS_LOCAL=127.0.0.1 TEST_PSQL_PORT_LOCAL=49437 \
+    TEST_S3_ENDPOINT=http://127.0.0.1:49438 make source-readiness
+  ```
+
+  These ports belonged to this run; both fixtures were removed after the
+  integration steps. Existing application containers were not changed.
+- Independent read-only review found no actionable defects in the final adapter,
+  regression tests, external consumer, README and changelog snapshot.
+
+No candidate tag was created. Published-version gates and production/browser
+acceptance were not run; the passing anonymous source probe checks dependency
+availability, not a published root-module consumer build.
+
 ## 2026-09-29 follow-up candidate
 
 Base: merged PR #6 (`e05fe44`). Branch: `tasks/standalone-decoupling`.

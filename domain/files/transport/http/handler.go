@@ -46,6 +46,32 @@ type (
 	URLComposer    func(path string) string
 )
 
+//nolint:containedctx // requestContext delegates to Fiber Locals when key is missing in Context
+type requestContext struct {
+	context.Context
+	c fiber.Ctx
+}
+
+func (r requestContext) Value(key any) any {
+	if val := r.Context.Value(key); val != nil {
+		return val
+	}
+	if r.c != nil {
+		return r.c.Locals(key)
+	}
+	return nil
+}
+
+func reqCtx(c fiber.Ctx) context.Context {
+	if c == nil {
+		return context.Background()
+	}
+	return requestContext{
+		Context: c.Context(),
+		c:       c,
+	}
+}
+
 type Handler struct {
 	taskUploader   TaskUploader
 	fileRepo       FileRepository
@@ -165,7 +191,7 @@ func (h *Handler) tusCreate(c fiber.Ctx, cmsOnly bool) error {
 	if filename == "" {
 		return h.jsonError(c, 400, "filename is required")
 	}
-	actor, err := h.contextBuilder(c, metadata)
+	actor, err := h.contextBuilder(reqCtx(c), metadata)
 	if err != nil {
 		return h.jsonError(c, 401, "upload identity is invalid")
 	}
@@ -188,12 +214,12 @@ func (h *Handler) tusCreate(c fiber.Ctx, cmsOnly bool) error {
 			return h.jsonError(c, 400, err.Error())
 		}
 	}
-	if err := h.authorize(c, actor, "upload", requestObject(objectType.String(), objectID.Int64())); err != nil {
+	if err := h.authorize(reqCtx(c), actor, "upload", requestObject(objectType.String(), objectID.Int64())); err != nil {
 		return h.writeRequestError(c, err)
 	}
 	fileTypeValue := normalizedContext(metadataValue(metadata, "file_type"))
 	skip := parseBoolFlag(metadataValue(metadata, "skip_resize"))
-	resolution, err := h.resolveUploadStrategy(c,
+	resolution, err := h.resolveUploadStrategy(reqCtx(c),
 		actor,
 		objectType,
 		objectID,
@@ -228,7 +254,7 @@ func (h *Handler) tusCreate(c fiber.Ctx, cmsOnly bool) error {
 		sessionMeta["entity_type"] = objectType.String()
 		sessionMeta["entity_id"] = objectID.String()
 	}
-	session, err := h.tusStore.Create(c,
+	session, err := h.tusStore.Create(reqCtx(c),
 		tusupload.CreateRequest{
 			UploadLength: length,
 			OriginalName: filename,
@@ -257,14 +283,14 @@ func (h *Handler) TusHead(c fiber.Ctx) error {
 	if err != nil {
 		return h.writeRequestError(c, err)
 	}
-	actor, err := h.contextBuilder(c, session.Metadata)
+	actor, err := h.contextBuilder(reqCtx(c), session.Metadata)
 	if err != nil {
 		return h.jsonError(c, 401, "upload identity is invalid")
 	}
 	if !h.isTusOwner(actor, session) {
 		return c.SendStatus(http.StatusForbidden)
 	}
-	if err := h.authorize(c, actor, "resume", tusObject(session)); err != nil {
+	if err := h.authorize(reqCtx(c), actor, "resume", tusObject(session)); err != nil {
 		return h.writeRequestError(c, err)
 	}
 	c.Set("Upload-Offset", strconv.FormatInt(session.Offset, 10))
@@ -278,7 +304,7 @@ func (h *Handler) loadTus(c fiber.Ctx) (tusupload.Session, error) {
 	if err != nil || parsed == uuid.Nil || parsed.String() != id {
 		return tusupload.Session{}, reject(404, "upload not found")
 	}
-	session, err := h.tusStore.Get(c, id)
+	session, err := h.tusStore.Get(reqCtx(c), id)
 	if err != nil {
 		if errors.Is(err, tusupload.ErrNotFound) {
 			return session, reject(404, "upload not found")
@@ -317,14 +343,14 @@ func (h *Handler) tusPatch(c fiber.Ctx, cmsOnly bool) error {
 	if err != nil {
 		return h.writeRequestError(c, err)
 	}
-	actor, err := h.contextBuilder(c, session.Metadata)
+	actor, err := h.contextBuilder(reqCtx(c), session.Metadata)
 	if err != nil {
 		return h.jsonError(c, 401, "upload identity is invalid")
 	}
 	if !h.isTusOwner(actor, session) {
 		return c.SendStatus(http.StatusForbidden)
 	}
-	if err := h.authorize(c, actor, "resume", tusObject(session)); err != nil {
+	if err := h.authorize(reqCtx(c), actor, "resume", tusObject(session)); err != nil {
 		return h.writeRequestError(c, err)
 	}
 	if offset != session.Offset {
@@ -345,7 +371,7 @@ func (h *Handler) tusPatch(c fiber.Ctx, cmsOnly bool) error {
 	if err != nil {
 		return h.writeRequestError(c, err)
 	}
-	newOffset, err := h.tusStore.Append(c, session.ID, offset, body, mimeType)
+	newOffset, err := h.tusStore.Append(reqCtx(c), session.ID, offset, body, mimeType)
 	if err != nil {
 		return h.handleTusAppendError(c, session, err)
 	}
@@ -364,7 +390,7 @@ func (h *Handler) handleTusAppendError(c fiber.Ctx, session tusupload.Session, e
 		errors.Is(err,
 			tusupload.ErrUploadFinalized):
 		offset := session.Offset
-		if current, getErr := h.tusStore.Get(c, session.ID); getErr == nil {
+		if current, getErr := h.tusStore.Get(reqCtx(c), session.ID); getErr == nil {
 			offset = current.Offset
 		}
 		c.Set("Upload-Offset", strconv.FormatInt(offset, 10))
@@ -393,7 +419,7 @@ func (h *Handler) TusComplete(c fiber.Ctx) error {
 	if err != nil {
 		return h.writeRequestError(c, err)
 	}
-	actor, err := h.contextBuilder(c, session.Metadata)
+	actor, err := h.contextBuilder(reqCtx(c), session.Metadata)
 	if err != nil {
 		return h.jsonError(c, 401, "upload identity is invalid")
 	}
@@ -407,10 +433,10 @@ func (h *Handler) TusComplete(c fiber.Ctx) error {
 	if err != nil {
 		return h.jsonError(c, 400, err.Error())
 	}
-	if err := h.authorize(c, actor, "upload", requestObject(objectType.String(), objectID.Int64())); err != nil {
+	if err := h.authorize(reqCtx(c), actor, "upload", requestObject(objectType.String(), objectID.Int64())); err != nil {
 		return h.writeRequestError(c, err)
 	}
-	resolution, err := h.resolveUploadStrategy(c,
+	resolution, err := h.resolveUploadStrategy(reqCtx(c),
 		actor,
 		objectType,
 		objectID,
@@ -427,11 +453,11 @@ func (h *Handler) TusComplete(c fiber.Ctx) error {
 	if err != nil {
 		return h.writeStrategyError(c, err)
 	}
-	managerID, userID, err := h.actorIDs(c, actor)
+	managerID, userID, err := h.actorIDs(reqCtx(c), actor)
 	if err != nil {
 		return h.writeRequestError(c, err)
 	}
-	complete, err := h.tusStore.Complete(c, session.ID)
+	complete, err := h.tusStore.Complete(reqCtx(c), session.ID)
 	if err != nil {
 		if errors.Is(err,
 			tusupload.ErrOffsetMismatch) || errors.Is(err,
@@ -484,7 +510,7 @@ func (h *Handler) uploadCompletedTus(
 ) (model.File, error) {
 	if complete.Reader != nil {
 		defer complete.Reader.Close()
-		return h.taskUploader.UploadReader(c,
+		return h.taskUploader.UploadReader(reqCtx(c),
 			req,
 			uploadservice.ReaderUploadInput{
 				OriginalName: complete.OriginalName,
@@ -496,7 +522,7 @@ func (h *Handler) uploadCompletedTus(
 	if err != nil {
 		return model.File{}, err
 	}
-	return h.taskUploader.UploadStored(c, req, uploaded)
+	return h.taskUploader.UploadStored(reqCtx(c), req, uploaded)
 }
 
 func uploadedFileFromCompleteResult(complete tusupload.CompleteResult) (uploadservice.UploadedFile, error) {
@@ -533,14 +559,14 @@ func (h *Handler) Upload(c fiber.Ctx) error {
 		"context":     contextName,
 		"file_type":   c.FormValue("file_type"),
 	}
-	actor, err := h.contextBuilder(c, metadata)
+	actor, err := h.contextBuilder(reqCtx(c), metadata)
 	if err != nil {
 		return h.jsonError(c, 401, "upload identity is invalid")
 	}
-	if err := h.authorize(c, actor, "upload", requestObject(objectType.String(), objectID.Int64())); err != nil {
+	if err := h.authorize(reqCtx(c), actor, "upload", requestObject(objectType.String(), objectID.Int64())); err != nil {
 		return h.writeRequestError(c, err)
 	}
-	resolution, err := h.resolveUploadStrategy(c,
+	resolution, err := h.resolveUploadStrategy(reqCtx(c),
 		actor,
 		objectType,
 		objectID,
@@ -554,7 +580,7 @@ func (h *Handler) Upload(c fiber.Ctx) error {
 	if err != nil {
 		return h.writeStrategyError(c, err)
 	}
-	managerID, userID, err := h.actorIDs(c, actor)
+	managerID, userID, err := h.actorIDs(reqCtx(c), actor)
 	if err != nil {
 		return h.writeRequestError(c, err)
 	}
@@ -580,7 +606,7 @@ func (h *Handler) Upload(c fiber.Ctx) error {
 	if len(headers) == 0 {
 		return h.jsonError(c, 400, "file is required")
 	}
-	files, err := h.taskUploader.UploadBatch(c,
+	files, err := h.taskUploader.UploadBatch(reqCtx(c),
 		uploadservice.BatchRequest{
 			UploaderUUID: req.UploaderUUID,
 			ManagerID:    req.ManagerID,
@@ -620,7 +646,7 @@ func publicUploadError(err error) string {
 }
 
 func (h *Handler) uploadSingleFile(c fiber.Ctx, req uploadservice.SingleRequest) error {
-	file, err := h.taskUploader.UploadSingle(c, req)
+	file, err := h.taskUploader.UploadSingle(reqCtx(c), req)
 	if err != nil {
 		h.logger.ErrorContext(c, "upload file", logger.Error(err))
 		return h.writeRequestError(c, err)
@@ -637,7 +663,7 @@ func (h *Handler) ListFiles(c fiber.Ctx) error {
 	if err != nil || objectID <= 0 {
 		return h.jsonError(c, 400, "entity_id is required")
 	}
-	actor, err := h.contextBuilder(c,
+	actor, err := h.contextBuilder(reqCtx(c),
 		map[string]string{
 			"entity_type": objectType.String(),
 			"entity_id": strconv.FormatInt(objectID,
@@ -646,7 +672,7 @@ func (h *Handler) ListFiles(c fiber.Ctx) error {
 	if err != nil {
 		return h.jsonError(c, 401, "upload identity is invalid")
 	}
-	if err := h.authorize(c, actor, "list", requestObject(objectType.String(), objectID)); err != nil {
+	if err := h.authorize(reqCtx(c), actor, "list", requestObject(objectType.String(), objectID)); err != nil {
 		return h.writeRequestError(c, err)
 	}
 	limit, offset := 50, 0
@@ -677,7 +703,7 @@ func (h *Handler) ListFiles(c fiber.Ctx) error {
 		}
 		filters.FileType = raw
 	}
-	files, _, err := h.fileRepo.List(c, filters)
+	files, _, err := h.fileRepo.List(reqCtx(c), filters)
 	if err != nil {
 		h.logger.ErrorContext(c, "list files", logger.Error(err))
 		return h.jsonError(c, 500, "failed to list files")
@@ -694,18 +720,18 @@ func (h *Handler) GetFile(c fiber.Ctx) error {
 	if err != nil || fileID <= 0 {
 		return h.jsonError(c, 400, "invalid task id")
 	}
-	actor, err := h.contextBuilder(c, nil)
+	actor, err := h.contextBuilder(reqCtx(c), nil)
 	if err != nil {
 		return h.jsonError(c, 401, "upload identity is invalid")
 	}
-	file, err := h.taskUploader.GetFile(c, fileID)
+	file, err := h.taskUploader.GetFile(reqCtx(c), fileID)
 	if err != nil {
 		if errors.Is(err, uploadservice.ErrTaskNotFound) || errors.Is(err, uploadservice.ErrFileNotFound) {
 			return h.jsonError(c, 404, "task not found")
 		}
 		return h.jsonError(c, 500, "failed to load task")
 	}
-	if err := h.authorize(c, actor, "read", file); err != nil {
+	if err := h.authorize(reqCtx(c), actor, "read", file); err != nil {
 		return h.writeRequestError(c, err)
 	}
 	return c.JSON(uploadFileResponse{File: h.mapFile(file)})
@@ -719,21 +745,24 @@ func (h *Handler) DeleteFile(c fiber.Ctx) error {
 	if !h.isConfirmed(c) {
 		return h.jsonError(c, 400, "confirmation required")
 	}
-	actor, err := h.contextBuilder(c, nil)
+	actor, err := h.contextBuilder(reqCtx(c), nil)
 	if err != nil {
 		return h.jsonError(c, 401, "upload identity is invalid")
 	}
-	file, err := h.fileRepo.GetByID(c, fileID)
+	file, err := h.fileRepo.GetByID(reqCtx(c), fileID)
 	if err != nil {
 		return h.jsonError(c, 500, "failed to load file")
 	}
 	if file.ID == 0 {
 		return h.jsonError(c, 404, "file not found")
 	}
-	if err := h.authorize(c, actor, "delete", file); err != nil {
+	if err := h.authorize(reqCtx(c), actor, "delete", file); err != nil {
 		return h.writeRequestError(c, err)
 	}
-	if err := h.taskUploader.DeleteFile(c, uploadservice.DeleteRequest{UserRequestID: actor.UserUUID, FileID: fileID}); err != nil {
+	if err := h.taskUploader.DeleteFile(
+		reqCtx(c),
+		uploadservice.DeleteRequest{UserRequestID: actor.UserUUID, FileID: fileID},
+	); err != nil {
 		h.logger.ErrorContext(c, "delete file", logger.Error(err))
 		return h.jsonError(c, 500, "failed to enqueue delete task")
 	}
@@ -828,7 +857,7 @@ type resolveUploadStrategyResult struct {
 }
 
 func (h *Handler) resolveUploadStrategy(
-	c fiber.Ctx,
+	ctx context.Context,
 	actor uploadstrategies.UploadContext,
 	objectType fileshared.FileObjectType,
 	objectID fileshared.FileObjectID,
@@ -847,7 +876,7 @@ func (h *Handler) resolveUploadStrategy(
 			}
 	}
 	if strategy != nil && options.checkCanUpload {
-		if err := strategy.CanUpload(c, actor); err != nil {
+		if err := strategy.CanUpload(ctx, actor); err != nil {
 			return resolveUploadStrategyResult{}, resolveUploadStrategyError{resolveUploadStrategyErrorForbidden, err}
 		}
 	}
@@ -856,10 +885,10 @@ func (h *Handler) resolveUploadStrategy(
 	if strategy == nil {
 		config = h.resolveConfig(objectType, objectID, name, fileType)
 	} else {
-		config = strategy.GetConfig(c, actor)
+		config = strategy.GetConfig(ctx, actor)
 		if options.includeAfterJobs {
 			var err error
-			jobs, err = strategy.GetAfterJobs(c, actor)
+			jobs, err = strategy.GetAfterJobs(ctx, actor)
 			if err != nil {
 				return resolveUploadStrategyResult{}, resolveUploadStrategyError{resolveUploadStrategyErrorInternal, err}
 			}
@@ -1022,11 +1051,11 @@ func (h *Handler) resolveTusPatchMimeType(
 			return "", reject(400, err.Error())
 		}
 	}
-	actor, err := h.contextBuilder(c, session.Metadata)
+	actor, err := h.contextBuilder(reqCtx(c), session.Metadata)
 	if err != nil {
 		return "", reject(401, "upload identity is invalid")
 	}
-	resolution, err := h.resolveUploadStrategy(c,
+	resolution, err := h.resolveUploadStrategy(reqCtx(c),
 		actor,
 		kind,
 		id,
@@ -1061,7 +1090,7 @@ func (h *Handler) resolveTusPatchMimeType(
 	}
 	var sniff []byte
 	if offset > 0 {
-		sniff, err = prefixReader.ReadPrefix(c, session.ID, offset)
+		sniff, err = prefixReader.ReadPrefix(reqCtx(c), session.ID, offset)
 		if err != nil {
 			return "", reject(409, "upload offset changed")
 		}
@@ -1292,3 +1321,12 @@ type validationResponse struct {
 }
 
 const deleteStatusPending = "pending"
+
+// TusChunkSize returns the configured chunk size of the underlying TUS store,
+// or 0 if not defined or if the store does not implement ChunkSize().
+func (h *Handler) TusChunkSize() int64 {
+	if store, ok := h.tusStore.(interface{ ChunkSize() int64 }); ok {
+		return store.ChunkSize()
+	}
+	return 0
+}

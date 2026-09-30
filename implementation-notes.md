@@ -558,3 +558,21 @@ and worktree. `GO_SHARED_CACHE_ROOT` and individual cache overrides remain
 configurable; intentional disposable consumer/release caches retain isolation.
 Verified cache defaults, alternate root and explicit build-cache override with
 Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
+
+## 2026-09-30: Public adapter constructor review follow-up
+
+- Scope: fix the adapter findings on `feat/public-readiness`, based on
+  `6c4b7c7712017092b0023769df8e1aef3da0ac92`, preserving the existing 0/1-config
+  constructor signature and body-limit behavior.
+- Acceptance: nil/zero-value handlers and multiple configs return explicit
+  public errors before Fiber construction; remove the unused unpublished
+  `MaxAutoBodyLimit` alias; make the external-consumer error checks meaningful.
+- Passed targeted adapter regressions, edited-file gopls diagnostics and complete
+  `make source-readiness` with isolated PostgreSQL 17.9/MinIO fixtures, then removed
+  the fixtures. Independent review of the final code, tests, README and changelog
+  found no actionable defects. Exact checks and limitations are recorded in
+  `docs/standalone-verification.md`.
+- Published-version verification requires a candidate tag and is outside this
+  branch-fix scope. The verified implementation was subsequently committed as
+  `2577d8cd713a9741f93aeb696725758ad6abf56e`; the verification session performed
+  no release tagging or deployment.
