@@ -19,9 +19,9 @@ portable-media E2E,
 external consumer manifest, local
 clean consumer probe, integration-tag clean consumer probe, import-policy
 checker, and the full module test suite.
-The Makefile uses repository-local `.go-cache` paths by default so the check is
-stable in sandboxed local environments without polluting scanned Go package
-roots.
+The Makefile uses shared Go caches outside the checkout, rooted at
+`$(HOME)/dev/projects/.cache/go`. `GO_SHARED_CACHE_ROOT` and individual cache
+variables remain overridable; sandboxed runs require permitted cache access.
 
 `make publish-readiness` intentionally runs mutating `make prepare` before the
 read-only checks and rejects any resulting diff. For normal development, use

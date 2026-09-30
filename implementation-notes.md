@@ -576,3 +576,18 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   branch-fix scope. The verified implementation was subsequently committed as
   `2577d8cd713a9741f93aeb696725758ad6abf56e`; the verification session performed
   no release tagging or deployment.
+
+## 2026-09-30: Stable v0.10.0 release preparation
+
+- The reviewed adapter and documentation are merged into `master` at
+  `0f926a857bfd872ad542bb4e51de1b177da19970`. Selected `v0.10.0` as the stable
+  continuation of the existing `v0.10.0-alpha.11`; existing tags remain unchanged.
+- `make publish-readiness VERSION=v0.10.0` passed on that clean source with
+  isolated PostgreSQL 17.9/MinIO, including generation, the complete source gate
+  and anonymous dependency downloads. Preparation left no generated/source diff.
+- Release metadata changes only: versioned changelog, exact installation pin,
+  current private-repository access requirement and corrected shared-cache docs.
+- Published-version checks run after the immutable tag is pushed. The root
+  repository is private; source verification does not establish anonymous
+  published-root availability. No host dependency pins or production services
+  are changed by this release.

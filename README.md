@@ -94,10 +94,12 @@ External tests may use `github.com/assurrussa/gouploads/hosttest`.
 implementation details, not an additional stable SDK.
 
 ```sh
-go get github.com/assurrussa/gouploads@<published-version>
+go get github.com/assurrussa/gouploads@v0.10.0
 ```
 
-Use a known accessible version. The dependency graph no longer includes
+The repository currently requires authorized GitHub access. Configure Git
+authentication and include `github.com/assurrussa/gouploads` in `GOPRIVATE` when
+consuming it privately. The dependency graph no longer includes
 `goshared`, `goredis` or `gowebsocket`. Runtime notifications use the narrow
 `host.EventPublisher` contract; the host owns any WebSocket adapter and lifecycle.
 See [anonymous consumer checks](docs/anonymous-consumer.md) for isolated source
@@ -159,7 +161,7 @@ public HEAD/GET/Range behavior, transport/cache metadata, deletion and cleanup.
 
 ## Development and release
 
-Use the declared Go/toolchain and repository-local Makefile caches:
+Use the declared Go/toolchain and the shared Go caches configured by the Makefile:
 
 ```sh
 make check

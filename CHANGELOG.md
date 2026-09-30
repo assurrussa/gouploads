@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.10.0 - 2026-09-30
+
 ### Added
 
 - Net/http-compatible upload adapter: `host.NewStandardUploadHandler` and
@@ -30,7 +32,7 @@
   media-resizer, callback routes, a Redis client or a WebSocket server at runtime.
 - `StorageConfig.ProcessingMode` (`STORAGE_PROCESSING_MODE`): the standalone
   constructor and configured DI default to `original_only`; `media_resizer`
-  is explicit. Private compile-time dependencies have not been removed.
+  is explicit.
 - A `finalize_original_file` outbox job that reads a persisted staging key,
   reuses artifact validation/checksum/finalization, and commits file metadata,
   after-jobs and cleanup under a row lock.
@@ -41,6 +43,12 @@
 
 ### Changed
 
+- The dependency graph no longer includes `goshared`, `goredis` or
+  `gowebsocket`. `host.UserID` and `host.EventID` are library-owned UUID types;
+  text/JSON and SQL formats are unchanged, but hosts must convert former shared
+  Go types at their boundary.
+- Live notifications use the narrow `host.EventPublisher` contract. Hosts own
+  transport adapters and lifecycle; `NewOriginalRuntime` accepts a nil publisher.
 - HTTP hooks now preserve host `context.Context`: `StandardUploadHandler` propagates
   standard request context to `ContextBuilder`, `UploadResourceAuthorizer`,
   `ResolveActor`, `UploadStrategy.CanUpload`, `GetConfig`, `GetAfterJobs`, and
