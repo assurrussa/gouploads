@@ -69,6 +69,15 @@ func (h *UploadHandler) RegisterStrategy(contextName string, strategy UploadStra
 	h.inner.RegisterStrategy(contextName, uploadStrategyAdapter{strategy: strategy})
 }
 
+// TusChunkSize returns the configured chunk size of the underlying TUS store,
+// or 0 if not defined.
+func (h *UploadHandler) TusChunkSize() int64 {
+	if h != nil && h.inner != nil {
+		return h.inner.TusChunkSize()
+	}
+	return 0
+}
+
 type FiberUploadHandler struct {
 	inner *uploadhttp.FiberUploadHandlerWrapper
 }

@@ -4,6 +4,20 @@
 
 ### Added
 
+- Net/http-compatible upload adapter: `host.NewStandardUploadHandler` and
+  `host.StandardUploadHandlerConfig` for mounting upload routes into standard Go
+  HTTP routers (net/http, Chi, Gin, Echo) with configurable body limit,
+  `host.DefaultBodyLimit` (32 MiB), and fail-fast `host.ErrIncompatibleBodyLimit`
+  validation when the effective body limit is smaller than the underlying TUS
+  store's chunk size. Missing or uninitialized upload handlers return
+  `host.ErrNilUploadHandler`; multiple optional configurations return
+  `host.ErrInvalidStandardHandlerConfig`.
+- Standard `log/slog` logger adapter: `host.NewSlogLogger` wrapping standard Go
+  `*slog.Logger` as a `gologger.Logger` for `OriginalRuntimeDeps`.
+- Standalone PostgreSQL + MinIO quickstart (`examples/standalone-quickstart`)
+  with Docker Compose, auto-migrations, transactional outbox finalization,
+  async task polling, and tus-js drag & drop Web UI.
+
 - Explicit `host.NewUploadHandlerWithPolicy` object authorization and actor
   mapping, optional `OriginalRuntimeDeps.ContentScanner`, partial-batch
   `host.BatchError`, and durable TUS `ReaderRequest.FinalizationKey`.
@@ -27,6 +41,10 @@
 
 ### Changed
 
+- HTTP hooks now preserve host `context.Context`: `StandardUploadHandler` propagates
+  standard request context to `ContextBuilder`, `UploadResourceAuthorizer`,
+  `ResolveActor`, `UploadStrategy.CanUpload`, `GetConfig`, `GetAfterJobs`, and
+  `ReadPrefix`.
 - TUS completion retains ready sessions until TTL for retries. MIME rejection
   stops PATCH writes; local uploads can accumulate a bounded private signature
   across small PATCH requests. Effective ingestion limits apply before TUS

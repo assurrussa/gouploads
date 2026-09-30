@@ -1,12 +1,19 @@
 # gouploads
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/assurrussa/gouploads.svg)](https://pkg.go.dev/github.com/assurrussa/gouploads)
-[![Go](https://github.com/assurrussa/gouploads/actions/workflows/go.yml/badge.svg)](https://github.com/assurrussa/gouploads/actions/workflows/go.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 `gouploads` is an embedded upload and storage orchestration library for Go
-applications. It supports multipart uploads, reader uploads, TUS, local/S3
-storage, durable finalization, cleanup and opt-in media processing.
+applications. It supports multipart uploads, reader uploads, resumable TUS, local/S3
+storage, durable finalization, safe cleanup and opt-in media processing.
+
+## Highlights
+
+- **Zero-Redis TUS Fencing**: PostgreSQL transactional advisory locks (`pg_advisory_xact_lock`) and monotonic revisions guarantee atomic chunk offset validation and lease fencing without race conditions or Redis dependency.
+- **Transactional Outbox Integrity**: Upload metadata, background staging-to-final processing jobs, and cleanup plans are recorded within a single ACID transaction.
+- **Standard `net/http` Adapter**: Mount upload routes into **net/http or Chi**, or via standard handler adapters in **Gin/Echo**, using `host.NewStandardUploadHandler`, alongside native Fiber v3 support (`host.NewFiberUploadHandler`).
+- **Standard `log/slog`**: Seamlessly wrap standard Go `*slog.Logger` with `host.NewSlogLogger(slog.Default())` or use `gologger`.
+- **Ready in 2 Minutes**: Try the runnable [Standalone Quickstart](examples/standalone-quickstart) with Docker Compose (PostgreSQL + MinIO + tus-js Web UI).
 
 ## Start without site or media-resizer
 
@@ -19,19 +26,28 @@ and persistent file storage; route mounting and authorization remain host-owned.
 ```go
 runtime, err := host.NewOriginalRuntime(host.StorageConfig{
     Driver: host.StorageDriverLocal,
-    Local: host.StorageLocalConfig{Root: "./var/files"},
+    Local:  host.StorageLocalConfig{Root: "./var/files"},
 }, host.OriginalRuntimeDeps{
-    Database: database,
+    Database:    database,
     Transaction: transactionManager,
-    Outbox: outboxService,
-    Logger: logger,
+    Outbox:      outboxService,
+    Logger:      host.NewSlogLogger(slog.Default()), // or gologger
 })
 if err != nil {
     return err
 }
-// Register runtime.Jobs with the outbox worker before accepting uploads.
-// Use runtime.Uploader, runtime.Files and runtime.TusStore with
-// host.NewUploadHandler and host.NewFiberUploadHandler.
+// 1. Register runtime.Jobs with your outbox worker before accepting uploads.
+// 2. Mount with standard net/http (or Chi):
+// Gin/Echo use their standard http.Handler adapters.
+stdHandler, err := host.NewStandardUploadHandler(uploadHandler, "/files")
+if err != nil {
+    return err
+}
+http.Handle("/files/", stdHandler)
+
+// Or mount with Fiber v3:
+fiberHandler := host.NewFiberUploadHandler(uploadHandler)
+fiberHandler.RegisterGroupRoutes("/files", fiberApp)
 ```
 
 This is an embedding snippet, not a complete executable. See
@@ -39,6 +55,15 @@ This is an embedding snippet, not a complete executable. See
 asynchronous completion, file types, safety limits and migration instructions.
 The constructor does not start a worker or serve a directory automatically.
 Do not expose temporary files or the entire storage root.
+
+`NewStandardUploadHandler` requires an initialized `UploadHandler` and accepts
+at most one optional `StandardUploadHandlerConfig`. Invalid inputs return
+`ErrNilUploadHandler` or `ErrInvalidStandardHandlerConfig`. Its default body limit
+is `DefaultBodyLimit` (32 MiB); for larger TUS chunks, configure
+`StandardUploadHandlerConfig.BodyLimit` explicitly. A body limit below the TUS
+chunk size returns `ErrIncompatibleBodyLimit` during construction.
+The body limit covers the entire HTTP request body. For multipart uploads, allow
+framing and part-header overhead beyond the strategy's `MaxFileSize`.
 
 An upload returns a queued record. `finalize_original_file` reads the staged
 object from storage, validates content/size, calculates SHA-256, writes the final

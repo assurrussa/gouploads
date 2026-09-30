@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>gouploads &bull; Resumable Upload Quickstart</title>
+  <script src="https://cdn.jsdelivr.net/npm/tus-js-client@4.3.1/dist/tus.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --primary: #38bdf8;
+      --primary-hover: #0ea5e9;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      max-width: 560px;
+      width: 100%;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      color: var(--primary);
+    }
+    p.subtitle {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+      line-height: 1.4;
+    }
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      padding: 2.5rem 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background-color 0.2s;
+    }
+    .dropzone.dragover {
+      border-color: var(--primary);
+      background: rgba(56, 189, 248, 0.05);
+    }
+    .dropzone input[type="file"] {
+      display: none;
+    }
+    .dropzone-label {
+      font-size: 0.95rem;
+      color: var(--muted);
+    }
+    .dropzone-label strong {
+      color: var(--primary);
+    }
+    .progress-container {
+      margin-top: 1.5rem;
+      display: none;
+    }
+    .progress-bar-bg {
+      width: 100%;
+      height: 10px;
+      background: var(--border);
+      border-radius: 5px;
+      overflow: hidden;
+      margin-bottom: 0.5rem;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--primary);
+      transition: width 0.15s ease-out;
+    }
+    .progress-info {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .actions {
+      margin-top: 1rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+    button {
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      border: none;
+      font-weight: 600;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-toggle {
+      background: var(--border);
+      color: var(--text);
+    }
+    .btn-toggle:hover {
+      background: #475569;
+    }
+    .status-msg {
+      margin-top: 1rem;
+      font-size: 0.9rem;
+      padding: 0.75rem;
+      border-radius: 6px;
+      display: none;
+    }
+    .status-msg.success {
+      display: block;
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid var(--success);
+      color: var(--success);
+    }
+    .status-msg.error {
+      display: block;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid var(--danger);
+      color: var(--danger);
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>gouploads demo</h1>
+    <p class="subtitle">Resumable TUS uploads with transactional PostgreSQL fencing and S3/MinIO storage.</p>
+
+    <div class="dropzone" id="dropzone">
+      <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.webm,.pdf">
+      <div class="dropzone-label">
+        Drag & drop a file here, or <strong>browse</strong>
+        <div style="font-size: 0.8rem; margin-top: 0.4rem; color: var(--muted);">Supported: Images, Videos, PDF (up to 500 MB)</div>
+      </div>
+    </div>
+
+    <div class="progress-container" id="progressContainer">
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progressBar"></div>
+      </div>
+      <div class="progress-info">
+        <span id="progressText">0%</span>
+        <span id="bytesText">0 / 0 MB</span>
+      </div>
+      <div class="actions">
+        <button class="btn-toggle" id="pauseBtn">Pause</button>
+      </div>
+    </div>
+
+    <div class="status-msg" id="statusMsg"></div>
+  </div>
+
+  <script>
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const bytesText = document.getElementById('bytesText');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const statusMsg = document.getElementById('statusMsg');
+
+    let currentUpload = null;
+    let isPaused = false;
+    let isUploading = false;
+
+    dropzone.addEventListener('click', () => fileInput.click());
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) {
+        startUpload(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        startUpload(e.target.files[0]);
+      }
+    });
+
+    function formatMB(bytes) {
+      return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+    }
+
+    function detectFileType(file) {
+      if (file.type) {
+        if (file.type.startsWith('image/')) return 'image';
+        if (file.type.startsWith('video/')) return 'video';
+        if (file.type === 'application/pdf') return 'pdf';
+      }
+      const name = file.name.toLowerCase();
+      if (name.endsWith('.pdf')) return 'pdf';
+      if (/\.(jpg|jpeg|png|webp|gif)$/.test(name)) return 'image';
+      if (/\.(mp4|webm)$/.test(name)) return 'video';
+      return null;
+    }
+
+    function startUpload(file) {
+      if (isUploading) {
+        alert('An upload is currently in progress. Please wait for it to finish.');
+        return;
+      }
+
+      const fileType = detectFileType(file);
+      if (!fileType) {
+        statusMsg.className = 'status-msg error';
+        statusMsg.style.display = 'block';
+        statusMsg.textContent = 'Unsupported file type. Please upload an image (.jpg, .png, .webp, .gif), video (.mp4, .webm), or PDF.';
+        return;
+      }
+
+      isUploading = true;
+      statusMsg.className = 'status-msg';
+      statusMsg.style.display = 'none';
+      progressContainer.style.display = 'block';
+      progressBar.style.width = '0%';
+      progressText.textContent = '0%';
+      bytesText.textContent = `0 / ${formatMB(file.size)}`;
+      isPaused = false;
+      pauseBtn.textContent = 'Pause';
+      pauseBtn.style.display = 'inline-block';
+
+      const upload = new tus.Upload(file, {
+        endpoint: '/files/tus',
+        retryDelays: [0, 1000, 3000, 5000],
+        chunkSize: 5 * 1024 * 1024,
+        metadata: {
+          filename: file.name,
+          file_type: fileType,
+          filetype: file.type || 'application/octet-stream',
+          context: 'default',
+          entity_type: 'demo',
+          entity_id: '1'
+        },
+        onError: function (error) {
+          isUploading = false;
+          statusMsg.className = 'status-msg error';
+          statusMsg.style.display = 'block';
+          statusMsg.textContent = 'Upload failed: ' + error.message;
+        },
+        onProgress: function (bytesUploaded, bytesTotal) {
+          const percentage = ((bytesUploaded / bytesTotal) * 100).toFixed(1);
+          progressBar.style.width = percentage + '%';
+          progressText.textContent = percentage + '%';
+          bytesText.textContent = `${formatMB(bytesUploaded)} / ${formatMB(bytesTotal)}`;
+        },
+        onSuccess: async function () {
+          statusMsg.className = 'status-msg';
+          statusMsg.style.display = 'block';
+          statusMsg.textContent = 'Chunks uploaded. Finalizing upload with server...';
+          pauseBtn.style.display = 'none';
+
+          try {
+            const resp = await fetch(upload.url + '/complete', {
+              method: 'POST',
+              headers: {
+                'Tus-Resumable': '1.0.0'
+              }
+            });
+
+            if (!resp.ok) {
+              const errData = await resp.json().catch(() => ({}));
+              throw new Error(errData.error || ('Finalization failed with status ' + resp.status));
+            }
+
+            const data = await resp.json();
+            const fileId = data.file && data.file.id ? data.file.id : null;
+            if (!fileId) {
+              throw new Error('Upload completed but server did not return a file ID');
+            }
+
+            statusMsg.className = 'status-msg';
+            statusMsg.textContent = `Upload accepted. Finalization queued. File ID: ${fileId}. Waiting for background processing...`;
+
+            // Poll GET /files/tasks/:id until finalization outbox job completes
+            const maxAttempts = 30;
+            const pollIntervalMs = 500;
+            let finalFile = data.file;
+
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+              if (finalFile && finalFile.status === 'completed') {
+                break;
+              }
+              await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+              try {
+                const pollResp = await fetch('/files/tasks/' + fileId);
+                if (pollResp.ok) {
+                  const pollData = await pollResp.json();
+                  if (pollData && pollData.file) {
+                    finalFile = pollData.file;
+                    if (finalFile.status === 'completed') {
+                      break;
+                    }
+                    if (finalFile.status === 'failed') {
+                      throw new Error('Background finalization failed on server');
+                    }
+                  }
+                }
+              } catch (pollErr) {
+                if (pollErr.message && pollErr.message.includes('failed on server')) {
+                  throw pollErr;
+                }
+              }
+            }
+
+            if (finalFile && finalFile.status === 'completed') {
+              const fileUrl = finalFile.url || finalFile.publicUrl || '';
+              const fileLink = fileUrl ? `<br><a href="${fileUrl}" target="_blank" rel="noopener noreferrer" style="color: var(--primary); text-decoration: underline; margin-top: 0.5rem; display: inline-block;">Open uploaded file in storage</a>` : '';
+              statusMsg.className = 'status-msg success';
+              statusMsg.innerHTML = `Upload finalized successfully! (File ID: ${fileId})${fileLink}`;
+            } else {
+              statusMsg.className = 'status-msg';
+              statusMsg.textContent = `Upload accepted. Finalization queued. File ID: ${fileId}. Finalization is still processing in background.`;
+            }
+          } catch (err) {
+            statusMsg.className = 'status-msg error';
+            statusMsg.textContent = 'Finalization failed: ' + err.message;
+          } finally {
+            isUploading = false;
+          }
+        }
+      });
+
+      currentUpload = upload;
+      upload.start();
+    }
+
+    pauseBtn.addEventListener('click', () => {
+      if (!currentUpload) return;
+      if (isPaused) {
+        currentUpload.start();
+        pauseBtn.textContent = 'Pause';
+        isPaused = false;
+      } else {
+        currentUpload.abort();
+        pauseBtn.textContent = 'Resume';
+        isPaused = true;
+      }
+    });
+  </script>
+</body>
+</html>

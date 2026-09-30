@@ -412,3 +412,194 @@ func waitLocks(t *testing.T, ctx context.Context, db *hosttest.PgsqlClient, want
 		return err == nil && count >= want
 	}, 5*time.Second, 10*time.Millisecond, "expected %d PostgreSQL row-lock waiters", want)
 }
+
+type e2eUploadStrategy struct {
+	maxSize int64
+}
+
+func (s *e2eUploadStrategy) CanUpload(_ context.Context, _ host.UploadContext) error {
+	return nil
+}
+
+func (s *e2eUploadStrategy) GetConfig(_ context.Context, _ host.UploadContext) *host.FileUploadConfig {
+	return &host.FileUploadConfig{
+		UploadDir:         "tmp/uploads",
+		MaxFileSize:       s.maxSize,
+		AllowedExtensions: []string{".pdf"},
+		AllowedMimeTypes: map[string][]string{
+			".pdf": {"application/pdf"},
+		},
+	}
+}
+
+func (s *e2eUploadStrategy) GetAfterJobs(_ context.Context, _ host.UploadContext) ([]host.FileEventAfterJob, error) {
+	return nil, nil
+}
+
+func TestIntegration_StandardUploadHandlerE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	database, _, cleanup := hosttest.PrepareDB(ctx, t, "e2e_std_handler")
+	defer cleanup(context.Background())
+
+	sqlDB := stdlib.OpenDBFromPool(database.DB().(storage.DBPgxEnginePool).Pool())
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS, goose.WithTableName("outbox_schema_versions"))
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	driver := host.StorageDriverLocal
+	if os.Getenv("TEST_S3_ENDPOINT") != "" {
+		driver = host.StorageDriverS3
+	}
+	cfg := storageConfig(t, ctx, driver)
+
+	worker := newQueue(t, database)
+	runtime, err := host.NewOriginalRuntime(cfg, host.OriginalRuntimeDeps{
+		Database:    database,
+		Transaction: transaction.New(database.DB()),
+		Outbox:      worker,
+	})
+	require.NoError(t, err)
+	require.NoError(t, worker.RegisterJobs(runtime.Jobs...))
+	stopWorker := startWorker(t, ctx, worker)
+	defer stopWorker()
+
+	user := host.NewUserID()
+	uploadHandler := host.NewUploadHandler(
+		runtime.Uploader,
+		runtime.Files,
+		runtime.TusStore,
+		gologger.Discard(),
+		func(_ context.Context, metadata map[string]string) (host.UploadContext, error) {
+			return host.UploadContext{
+				UserID:    101,
+				UserUUID:  user,
+				Metadata:  metadata,
+				SessionID: "e2e-session",
+			}, nil
+		},
+		func(path string) string { return "/files/" + path },
+	)
+	uploadHandler.RegisterStrategy("default", &e2eUploadStrategy{maxSize: 20 * 1024 * 1024})
+
+	stdHandler, err := host.NewStandardUploadHandler(uploadHandler, "/files")
+	require.NoError(t, err)
+
+	// Construct payload: > 5 MiB (5 MiB chunk 1 + trailing chunk 2)
+	pdfHead := []byte("%PDF-1.7\n")
+	pdfTail := []byte("\n%%EOF\n")
+	chunk1Size := 5 * 1024 * 1024 // 5 MiB exactly (standard TUS chunk)
+	chunk2Size := 1024 * 100      // 100 KiB
+	totalSize := chunk1Size + chunk2Size
+	filler := bytes.Repeat([]byte("0"), totalSize-len(pdfHead)-len(pdfTail))
+	payload := append(append(pdfHead, filler...), pdfTail...)
+	require.Len(t, payload, totalSize)
+
+	// Step 1: POST /files/tus (Create upload session)
+	metadata := map[string]string{
+		"filename":    "large.pdf",
+		"entity_type": "admin",
+		"entity_id":   "42",
+		"file_type":   "pdf",
+		"context":     "default",
+	}
+	parts := make([]string, 0, len(metadata))
+	for k, v := range metadata {
+		parts = append(parts, k+" "+base64.StdEncoding.EncodeToString([]byte(v)))
+	}
+
+	createReq := httptest.NewRequestWithContext(ctx, http.MethodPost, "/files/tus", nil)
+	createReq.Header.Set("Tus-Resumable", "1.0.0")
+	createReq.Header.Set("Upload-Length", strconv.Itoa(totalSize))
+	createReq.Header.Set("Upload-Metadata", strings.Join(parts, ","))
+	createRec := httptest.NewRecorder()
+	stdHandler.ServeHTTP(createRec, createReq)
+
+	require.Equal(t, http.StatusCreated, createRec.Code, createRec.Body.String())
+	location := createRec.Header().Get("Location")
+	require.NotEmpty(t, location)
+
+	// Step 2: PATCH Chunk 1 (5 MiB payload -> must NOT fail with 413!)
+	patch1Req := httptest.NewRequestWithContext(ctx, http.MethodPatch, location, bytes.NewReader(payload[:chunk1Size]))
+	patch1Req.Header.Set("Tus-Resumable", "1.0.0")
+	patch1Req.Header.Set("Content-Type", "application/offset+octet-stream")
+	patch1Req.Header.Set("Upload-Offset", "0")
+	patch1Rec := httptest.NewRecorder()
+	stdHandler.ServeHTTP(patch1Rec, patch1Req)
+
+	require.Equal(t, http.StatusNoContent, patch1Rec.Code, patch1Rec.Body.String())
+	require.Equal(t, strconv.Itoa(chunk1Size), patch1Rec.Header().Get("Upload-Offset"))
+
+	// Step 3: HEAD (Verify offset resumption)
+	headReq := httptest.NewRequestWithContext(ctx, http.MethodHead, location, nil)
+	headReq.Header.Set("Tus-Resumable", "1.0.0")
+	headRec := httptest.NewRecorder()
+	stdHandler.ServeHTTP(headRec, headReq)
+
+	require.Equal(t, http.StatusOK, headRec.Code)
+	require.Equal(t, strconv.Itoa(chunk1Size), headRec.Header().Get("Upload-Offset"))
+	require.Equal(t, strconv.Itoa(totalSize), headRec.Header().Get("Upload-Length"))
+
+	// Step 4: PATCH Chunk 2 (Final bytes)
+	patch2Req := httptest.NewRequestWithContext(ctx, http.MethodPatch, location, bytes.NewReader(payload[chunk1Size:]))
+	patch2Req.Header.Set("Tus-Resumable", "1.0.0")
+	patch2Req.Header.Set("Content-Type", "application/offset+octet-stream")
+	patch2Req.Header.Set("Upload-Offset", strconv.Itoa(chunk1Size))
+	patch2Rec := httptest.NewRecorder()
+	stdHandler.ServeHTTP(patch2Rec, patch2Req)
+
+	require.Equal(t, http.StatusNoContent, patch2Rec.Code, patch2Rec.Body.String())
+	require.Equal(t, strconv.Itoa(totalSize), patch2Rec.Header().Get("Upload-Offset"))
+
+	// Step 5: POST /complete
+	completeReq := httptest.NewRequestWithContext(ctx, http.MethodPost, location+"/complete", nil)
+	completeReq.Header.Set("Tus-Resumable", "1.0.0")
+	completeRec := httptest.NewRecorder()
+	stdHandler.ServeHTTP(completeRec, completeReq)
+
+	require.Equal(t, http.StatusAccepted, completeRec.Code, completeRec.Body.String())
+	var decoded struct {
+		File struct {
+			ID int64 `json:"id"`
+		} `json:"file"`
+	}
+	require.NoError(t, json.Unmarshal(completeRec.Body.Bytes(), &decoded))
+	require.Positive(t, decoded.File.ID)
+	fileID := decoded.File.ID
+
+	// Step 6: Idempotency of /complete (repeat must return same File ID)
+	repeatCompleteReq := httptest.NewRequestWithContext(ctx, http.MethodPost, location+"/complete", nil)
+	repeatCompleteReq.Header.Set("Tus-Resumable", "1.0.0")
+	repeatCompleteRec := httptest.NewRecorder()
+	stdHandler.ServeHTTP(repeatCompleteRec, repeatCompleteReq)
+
+	require.Equal(t, http.StatusAccepted, repeatCompleteRec.Code, repeatCompleteRec.Body.String())
+	var repeatDecoded struct {
+		File struct {
+			ID int64 `json:"id"`
+		} `json:"file"`
+	}
+	require.NoError(t, json.Unmarshal(repeatCompleteRec.Body.Bytes(), &repeatDecoded))
+	require.Equal(t, fileID, repeatDecoded.File.ID)
+
+	// Step 7: Wait for outbox worker to finalize file into storage
+	waitEmpty(t, ctx, worker)
+
+	// Step 8: Verify file in database and storage
+	file, err := runtime.Files.GetByID(ctx, fileID)
+	require.NoError(t, err)
+	require.Positive(t, file.ID)
+	require.Empty(t, file.GetData().Uploader)
+	require.Len(t, file.GetData().Presets, 1)
+
+	preset, found := file.GetData().Presets[host.PresetName("main")]
+	require.True(t, found)
+	sum := sha256.Sum256(payload)
+	require.Equal(t, hex.EncodeToString(sum[:]), preset.ChecksumSHA256)
+	require.EqualValues(t, len(payload), file.Size)
+
+	requireBytes(t, ctx, runtime.Storage, file.GetFullPath(), payload)
+}

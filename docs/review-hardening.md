@@ -171,11 +171,11 @@ make test-portable-media-e2e test-originals-integration
 make anonymous-source
 ```
 
-The added workflow pins Go 1.27.1 and golangci-lint 2.14.0, separates build, lint
-and integration jobs with bounded timeouts, and starts an isolated MinIO fixture.
-Feature branches use the pull-request trigger; master/release pushes and manual
-runs retain their triggers. Its image
-is a pinned historical test fixture, not a production deployment recommendation.
-A clean local replace probe still does not prove a published tag is anonymously
-installable. Run the published-consumer gates for the actual candidate tag after
-publication, and test consuming applications before rollout.
+The temporary CI workflow was removed prior to merging pending hosted runner setup.
+Verification is performed locally via `make check`, `make test-surface`,
+`make externalconsumer-local`, and integration gates against local PostgreSQL/MinIO fixtures.
+
+Note on publication gates: public code readiness and published release readiness are distinct
+states. While the repository remains private, anonymous `go get`, pkg.go.dev, and published-consumer
+gates (`make externalconsumer-published VERSION=...`) cannot resolve without credentials.
+Those gates are verified once public visibility is enabled and a candidate tag is pushed.

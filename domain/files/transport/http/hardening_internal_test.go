@@ -280,7 +280,7 @@ func TestHardeningStrategyConfigIsNotMutated(t *testing.T) {
 	handler.RegisterStrategy("private", sharedConfigStrategy{cfg: cfg})
 	app := fiber.New()
 	app.Get("/", func(c fiber.Ctx) error {
-		resolved, err := handler.resolveUploadStrategy(c, actor, fileshared.ObjectTypeExercise,
+		resolved, err := handler.resolveUploadStrategy(reqCtx(c), actor, fileshared.ObjectTypeExercise,
 			42, "private", model.FileTypeImage, true, resolveUploadStrategyOptions{
 				checkCanUpload: true,
 			})
