@@ -80,7 +80,7 @@ notes, and boundary checks together.
 
 ## Commands
 
-Use the Makefile targets because they set repository-local Go cache paths.
+Use the Makefile targets; their shared Go cache defaults remain overridable.
 
 - `make release-readiness`: main reusable-boundary gate.
 - `make prepare`: mutating tidy, generation, formatting, and lint fixes.
@@ -97,14 +97,11 @@ Use the Makefile targets because they set repository-local Go cache paths.
 - `go run ./cmd/importpolicy --repo-root .. --consumers site/backend,goadmin,site/fixtures/second-go-host`:
   strict host import boundary check when the sibling `../site` repo exists.
 
-Direct `go` commands may need local cache env vars in sandboxed environments:
-
-```bash
-GOCACHE="$PWD/.go-cache/gocache" GOPATH="$PWD/.go-cache/gopath" go test ./...
-```
-
-The first direct `go` command can fail if it uses the user-level Go build cache;
-prefer Makefile targets or the local cache env vars above.
+The Makefile uses shared Go build/module/toolchain/lint caches outside the
+checkout, rooted at `$(HOME)/dev/projects/.cache/go`. Override
+`GO_SHARED_CACHE_ROOT` or individual cache variables for a specific check.
+Existing GOPATH and toolchain settings are preserved. Sandbox restrictions
+require permitted shared-cache access; do not create per-checkout cache copies.
 
 During implementation, prefer tests for the affected package or public
 surface. Run `make check` once after a coherent batch; do not stack it with

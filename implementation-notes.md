@@ -550,3 +550,11 @@ A goadmin original-only PostgreSQL lifecycle probe exposed local `SavePersist` a
   advisories). Live handoff/cleanup commit-order contention passed three times.
 - Exact checks, environment and remaining acceptance limits are recorded in
   `docs/review-hardening-verification.md`. No release or production claim is made.
+
+## 2026-09-30: Shared Go cache defaults
+
+Ordinary local Go build/test/lint commands reuse shared caches outside checkout
+and worktree. `GO_SHARED_CACHE_ROOT` and individual cache overrides remain
+configurable; intentional disposable consumer/release caches retain isolation.
+Verified cache defaults, alternate root and explicit build-cache override with
+Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.

@@ -1,13 +1,16 @@
+GO_SHARED_CACHE_ROOT ?= $(HOME)/dev/projects/.cache/go
+GOCACHE ?= $(GO_SHARED_CACHE_ROOT)/build
+GOMODCACHE ?= $(GO_SHARED_CACHE_ROOT)/mod
+GOLANGCI_LINT_CACHE ?= $(GO_SHARED_CACHE_ROOT)/lint
+GOPATH ?= $(shell GOTOOLCHAIN=local go env GOPATH)
+export GOCACHE GOMODCACHE GOLANGCI_LINT_CACHE
+
 .DEFAULT_GOAL := check
 .PHONY: source-readiness test-originals-integration anonymous-source anonymous-published full prepare check publish-readiness release-readiness release-version-check tidy-check test-surface test-surface-integration test-tus-postgres-integration test-source-url-s3-integration test-portable-media-e2e test-portable-s3-media-e2e test-portable-local-media-e2e externalconsumer-local externalconsumer-published import-policy-site tidy generate fmt fmt-check lint lint-fix vet test test-full test-race bench-all cover-html
 GO_MODULE := $(shell go list -m)
 GO_FILES := $(shell find . -type f -name '*.go' -not -path './.cache/*' -not -path './.go-cache/*' -not -path './tmp/*' -not -path './vendor/*')
 IMPORT_POLICY_REPO_ROOT ?= ..
 IMPORT_POLICY_CONSUMERS ?= site/backend,goadmin,site/fixtures/second-go-host
-GOCACHE := $(CURDIR)/.go-cache/gocache
-GOMODCACHE := $(CURDIR)/.go-cache/gomodcache
-GOPATH := $(CURDIR)/.go-cache/gopath
-GOLANGCI_LINT_CACHE := $(CURDIR)/.cache/golangci-lint
 export GOCACHE
 export GOMODCACHE
 export GOPATH
