@@ -97,13 +97,14 @@ implementation details, not an additional stable SDK.
 go get github.com/assurrussa/gouploads@v0.10.0
 ```
 
-The repository currently requires authorized GitHub access. Configure Git
-authentication and include `github.com/assurrussa/gouploads` in `GOPRIVATE` when
-consuming it privately. The dependency graph no longer includes
+The repository and `v0.10.0` are publicly available through the Go module proxy
+and checksum database. Installation does not require GitHub authentication or a
+`GOPRIVATE` setting. The dependency graph no longer includes
 `goshared`, `goredis` or `gowebsocket`. Runtime notifications use the narrow
 `host.EventPublisher` contract; the host owns any WebSocket adapter and lifecycle.
 See [anonymous consumer checks](docs/anonymous-consumer.md) for isolated source
-and published-tag probes. Source availability does not publish the root module.
+and published-tag probes. The anonymous exact-tag probe passes for `v0.10.0`
+in both ordinary and integration-tag consumer builds.
 
 ## Storage and TUS contracts
 
