@@ -591,3 +591,17 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   repository is private; source verification does not establish anonymous
   published-root availability. No host dependency pins or production services
   are changed by this release.
+
+## 2026-10-02: Preserve identical S3 commit destinations
+
+- `StorageAdapter.Commit` now returns the successful source HEAD metadata when
+  its source and destination bucket/key are identical. Copying and then deleting
+  that same key could remove the destination if the provider accepts the copy.
+  Local storage already handles this operation as a no-op.
+- This changes no public signatures, object-key normalization, distinct-object
+  copy/delete flow, or missing-source/cancellation error propagation.
+- A synthetic S3-client regression failed before the fix and passes afterward;
+  no live cloud storage or credentials were used. `make check` passed with Go
+  1.27.1, including formatting, vet, lint and the full race/coverage test pass.
+- Real-provider semantics, database integration and release publication are not
+  established by this focused fix; they remain separate release gates.

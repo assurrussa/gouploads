@@ -108,6 +108,15 @@ func (s *StorageAdapter) Commit(ctx context.Context, input filestorage.CommitInp
 	if err != nil {
 		return filestorage.StoredFile{}, fmt.Errorf("head source object %s: %w", tempKey, err)
 	}
+	// Match local storage: committing an object onto itself must preserve it.
+	// Otherwise the source deletion below would also remove the destination.
+	if sourceBucket == destinationBucket && tempKey == destKey {
+		return filestorage.StoredFile{
+			RelativePath: destKey,
+			Size:         aws.ToInt64(head.ContentLength),
+			MimeType:     aws.ToString(head.ContentType),
+		}, nil
+	}
 
 	copySource := encodeCopySource(sourceBucket, tempKey)
 	_, err = s.client.CopyObject(ctx, &s3.CopyObjectInput{
