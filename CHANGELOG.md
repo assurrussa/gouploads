@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- S3 storage `Commit` preserves an existing object when the source and
+  destination resolve to the same bucket and key, matching local storage.
+
 ## v0.10.0 - 2026-09-30
 
 ### Added
