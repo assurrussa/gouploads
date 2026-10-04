@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- Opt-in MP3/WAV original uploads with stable `host.FileTypeAudio` (numeric
+  value 7), canonical audio MIME metadata, deterministic final extensions and
+  audio repository filters. Existing default policies and limits are unchanged.
+- Shared byte sniffing recognizes tagged and untagged MP3 and normalizes WAV
+  aliases consistently across reader, multipart, stored/TUS and finalization.
+  Incomplete TUS signatures remain private until recognized. Audio in
+  `media_resizer` mode fails before persistence; no resize job is scheduled.
+
 ### Fixed
 
 - Video previews and thumbnails are downloaded from their original video

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -169,8 +168,14 @@ func (u *UseCase) saveFileStorage(
 	if len(header) == 0 {
 		return fileStorageDTO{}, errors.New("artifact body is empty")
 	}
-	contentType, err := validateArtifactContentType(artifact.ContentType, response.ContentType, http.DetectContentType(header))
+	contentType, err := validateArtifactContentType(artifact.ContentType, response.ContentType, filepolicy.DetectContentType(header))
 	if err != nil {
+		return fileStorageDTO{}, err
+	}
+	if strings.HasPrefix(contentType, "audio/") && !u.allowAudioOriginal {
+		return fileStorageDTO{}, errors.New("audio artifacts require original_only finalization")
+	}
+	if err := filepolicy.ValidateAudioHeader(header, contentType, artifact.Size); err != nil {
 		return fileStorageDTO{}, err
 	}
 	directory, err := u.finalArtifactDir(file)
@@ -373,6 +378,12 @@ func artifactPresetFileName(artifact Artifact, contentType string) (string, erro
 }
 
 func validateArtifactContentType(webhookType, responseType, detectedType string) (string, error) {
+	if strings.HasPrefix(normalizeContentType(webhookType), "audio/") ||
+		strings.HasPrefix(normalizeContentType(responseType), "audio/") {
+		if !strings.HasPrefix(normalizeContentType(detectedType), "audio/") {
+			return "", errors.New("audio artifact content is not recognized")
+		}
+	}
 	selected := ""
 	for _, raw := range []string{webhookType, responseType, detectedType} {
 		value := normalizeContentType(raw)

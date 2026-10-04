@@ -121,3 +121,14 @@ resolves and compiles the actual tag with no local replacement. The latter is
 required by `release-readiness`; a private root repository blocks public
 reusability even when all dependencies are public. See
 [anonymous consumer checks](docs/anonymous-consumer.md).
+
+## Audio release acceptance
+
+The additive `host.FileTypeAudio` capability requires a new minor release.
+Keep default policies unchanged. Run audio policy/ingress/TUS regressions and
+`TestIntegrationAudioOriginals` on both local and S3 storage, with a real
+PostgreSQL outbox. These generated MP3/WAV fixtures must retain their bytes,
+canonical MIME, size and checksum after finalization and replay. Verify that
+media-resizer mode rejects audio without staging, metadata or resize jobs.
+After publication, compile `host.FileTypeAudio` from the exact published tag
+without a local replacement before updating consumer pins.

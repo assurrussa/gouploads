@@ -101,6 +101,7 @@ const (
 	FileTypeDocx    FileType = uploadmodel.FileTypeDocx
 	FileTypeLink    FileType = uploadmodel.FileTypeLink
 	FileTypeText    FileType = uploadmodel.FileTypeText
+	FileTypeAudio   FileType = uploadmodel.FileTypeAudio
 )
 
 // GetFileType возвращает строковое имя типа файла.

@@ -90,6 +90,8 @@ func (c Config) BuildProbeTest() (string, error) {
 	_, _ = builder.WriteString("\tif len(files) == 0 { t.Fatal(\"no gouploads migrations exposed\") }\n")
 	_, _ = builder.WriteString("\tif _, err := fs.ReadFile(migrationFS, files[0]); err != nil { t.Fatal(err) }\n")
 	_, _ = builder.WriteString("\t_ = host.StorageConfig{}\n")
+	_, _ = builder.WriteString("\tif host.FileTypeAudio.ToID() != 7 || host.GetFileTypeString(\"audio\") != host.FileTypeAudio {\n")
+	_, _ = builder.WriteString("\t\tt.Fatal(\"audio public contract mismatch\")\n\t}\n")
 	_, _ = builder.WriteString("\t_ = host.OutboxJobDeps{}\n")
 	_, _ = builder.WriteString("\t_ = host.NewFileRepo\n")
 	_, _ = builder.WriteString("\t_ = host.MustFileRepo\n")

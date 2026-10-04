@@ -351,3 +351,45 @@ should not import `domain/files/tests`.
 
 Identity, notification and HTTP-client migration is documented in
 [Standalone uploads](standalone-uploads.md#identity-and-notification-migration).
+
+## Opt-in audio originals
+
+`host.FileTypeAudio` has stable numeric ID 7 and string name `audio`; existing
+IDs 0–6 are unchanged. `ListFilters.FileType` accepts `audio`, `7`, or `audio/`.
+No database enum migration is required. Register a named `host.UploadStrategy`
+on the existing handler to opt in; keep object authorization in `CanUpload`.
+For example, a dedicated recording strategy can return:
+
+```go
+&host.FileUploadConfig{
+    MaxFileSize: 50 * 1024 * 1024,
+    AllowedExtensions: []string{".mp3", ".wav", ".mp4"},
+    AllowedMimeTypes: map[string][]string{
+        ".mp3": {"audio/mpeg"},
+        ".wav": {"audio/wav"},
+        ".mp4": {"video/mp4"},
+    },
+}
+```
+
+The 50 MiB limit is this host strategy's choice, not a new global default.
+Configure transport body/TUS limits consistently and preserve other strategies.
+The original runtime accepts only an explicit matching extension/MIME policy.
+Canonical stored and delivered MIME types are `audio/mpeg` and `audio/wav`,
+with deterministic `.mp3` and `.wav` final object suffixes. The original bytes,
+size and SHA-256 are retained in the sole `main` artifact. Browser MIME metadata
+is not trusted; reader, multipart, stored/TUS completion and finalization inspect
+content using one shared bounded sniffer. Tagged/untagged Layer III MP3 and RIFF
+WAVE are recognized; other audio formats need a separate supported policy.
+
+Supported aliases are `audio/mp3`, `audio/x-mp3`, `audio/mpeg3`,
+`audio/x-mpeg-3`, `audio/wave`, `audio/x-wav`, and `audio/vnd.wave`. Aliases must
+still agree with the detected format. Truncated headers/container declarations,
+wrong extensions and mismatched MIME are rejected. Format sniffing is not full
+audio decoding or malware scanning; optional content scanning remains separate.
+
+Audio currently requires `ProcessingOriginalOnly`. In `ProcessingMediaResizer`,
+reader/multipart audio fails before staging and stored audio fails before
+metadata or queue writes, even with `SkipResizer=true`. No image/video resize
+job is emitted. Run an original-only runtime for recording strategies rather
+than disabling an existing host's image/video pipeline silently.

@@ -78,7 +78,8 @@ type Options struct {
 type UseCase struct {
 	sharedjob.DefaultJob
 	Options
-	scanner filepolicy.Scanner
+	scanner            filepolicy.Scanner
+	allowAudioOriginal bool
 }
 
 func Must(opts Options) *UseCase {

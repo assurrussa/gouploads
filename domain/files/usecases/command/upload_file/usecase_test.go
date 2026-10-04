@@ -25,6 +25,7 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	"github.com/assurrussa/gouploads/internal/audiofixture"
 	"github.com/assurrussa/gouploads/internal/events"
 	"github.com/assurrussa/gouploads/internal/filepolicy"
 	"github.com/assurrussa/gouploads/internal/identity"
@@ -570,4 +571,17 @@ func sampleMP4Header() []byte {
 		0,
 		0,
 	}
+}
+
+func TestMediaCallbackRejectsAudioBeforeFinalStorage(t *testing.T) {
+	useCase, state, storage, download, request := newFinalization(t)
+	download.bodies["main"] = audiofixture.MP3
+	request.Artifacts[0].ContentType = "audio/mpeg"
+	request.Artifacts[0].Size = int64(len(audiofixture.MP3))
+	_, err := useCase.Handle(context.Background(), request)
+	require.ErrorContains(t, err, "audio artifacts require original_only finalization")
+	require.Empty(t, storage.objects)
+	require.Empty(t, state.jobs)
+	require.Empty(t, state.events)
+	require.NotEqual(t, model.FileTypeAudio, state.file.FileType)
 }
