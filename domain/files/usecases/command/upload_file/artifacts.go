@@ -37,13 +37,17 @@ func (u *UseCase) processFileModel(ctx context.Context, req Request, file model.
 		return file, nil, err
 	}
 	data := file.GetData()
+	// All outputs belong to the original processing job, even when a video
+	// produces image previews. Capture the origin before the main artifact can
+	// change the record's content type (for example, a video-to-GIF preset).
+	originMediaType := file.FileType.ToString()
 	presets := make(map[shared.PresetName]shared.FilePreset, len(req.Artifacts))
 	paths := make([]string, 0, len(req.Artifacts))
 	for index, artifact := range req.Artifacts {
 		if artifact.ExpireAt.Before(time.Now()) {
 			return file, paths, fmt.Errorf("artifact %q is expired", artifact.Preset)
 		}
-		stored, err := u.saveFileStorage(ctx, artifact, file)
+		stored, err := u.saveFileStorage(ctx, artifact, file, originMediaType)
 		if stored.RelativePath != "" {
 			paths = append(paths, stored.RelativePath)
 		}
@@ -136,11 +140,13 @@ func (u *UseCase) updateMainArtifact(
 	return nil
 }
 
-func (u *UseCase) saveFileStorage(ctx context.Context, artifact Artifact, file model.File) (fileStorageDTO, error) {
+func (u *UseCase) saveFileStorage(
+	ctx context.Context, artifact Artifact, file model.File, originMediaType string,
+) (fileStorageDTO, error) {
 	response, err := u.resizeClient.DownloadFile(ctx, clientresizer.RequestDownload{
 		Preset:    artifact.Preset,
 		URL:       artifact.URL,
-		TypeMedia: artifact.MediaType,
+		TypeMedia: originMediaType,
 	})
 	if err != nil {
 		return fileStorageDTO{}, fmt.Errorf("download file resize preset: %w", err)

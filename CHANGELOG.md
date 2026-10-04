@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Video previews and thumbnails are downloaded from their original video
+  processor's origin when image and video resizers use different addresses.
+  Their image media type, strict origin checks and credential-free downloads
+  are preserved.
+
 - S3 storage `Commit` preserves an existing object when the source and
   destination resolve to the same bucket and key, matching local storage.
 
