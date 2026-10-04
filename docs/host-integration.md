@@ -50,6 +50,12 @@ The media-resizer process is an external service. `gouploads` only needs its
 `/jobs` URL and API token, plus the callback URL that the media-resizer can
 reach.
 
+Image and video resizers may use different origins. All artifacts of a video
+job, including image previews and thumbnails, are downloaded from the video
+resizer's origin. Their `media_type` remains `image` for display and storage;
+it does not select a different download origin. Signed downloads still omit
+API credentials and reject unrelated origins and redirects.
+
 For private S3 objects, `host.NewSourceURLResolver` signs `GetObject` at
 dispatch time against the configured S3 endpoint and staging bucket. The URL
 is passed directly to media-resizer; host rewriting and a source proxy are not

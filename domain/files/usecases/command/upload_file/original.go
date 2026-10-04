@@ -145,7 +145,7 @@ func (u *OriginalUseCase) storeOriginal(ctx context.Context, file model.File) (m
 	}
 	// Local source artifacts do not have a callback URL or an expiry. The same
 	// content validation and checksum/save path is used as for processed media.
-	stored, err := u.core.saveFileStorage(ctx, artifact, file)
+	stored, err := u.core.saveFileStorage(ctx, artifact, file, artifact.MediaType)
 	if err != nil {
 		return model.File{}, fmt.Errorf("store original: %w", err)
 	}

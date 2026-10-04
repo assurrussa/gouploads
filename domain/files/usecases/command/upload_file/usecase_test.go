@@ -151,6 +151,7 @@ func (s *finalizationStorage) Delete(_ context.Context, key string) error {
 
 type finalizationDownload struct {
 	bodies     map[string][]byte
+	requests   []clientresizer.RequestDownload
 	failPreset string
 	nilBody    bool
 	downloads  int
@@ -163,6 +164,7 @@ func (s *finalizationDownload) DownloadFile(ctx context.Context,
 		return clientresizer.ResponseDownload{}, err
 	}
 	s.downloads++
+	s.requests = append(s.requests, req)
 	if req.Preset == s.failPreset {
 		return clientresizer.ResponseDownload{}, errInjected
 	}
@@ -308,6 +310,8 @@ func TestHandle_Success(t *testing.T) {
 
 func TestHandle_VideoPresets(t *testing.T) {
 	useCase, state, _, download, request := newFinalization(t)
+	state.file.FileType = model.FileTypeVideo
+	state.file.MimeType = "video/mp4"
 	download.bodies["video_mp4_main"] = sampleMP4Header()
 	download.bodies["video_mp4_main_thumbnail"] = pngBody(t)
 	download.bodies["video_mp4_main_preview"] = pngBody(t)

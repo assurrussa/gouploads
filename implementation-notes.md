@@ -605,3 +605,21 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   1.27.1, including formatting, vet, lint and the full race/coverage test pass.
 - Real-provider semantics, database integration and release publication are not
   established by this focused fix; they remain separate release gates.
+
+## 2026-10-04: Keep video previews on the producing resizer origin
+
+- Media finalization now selects the artifact origin from the original file's
+  processing type, matching dispatch. An image preview produced by a video
+  job no longer selects the independently configured image resizer.
+- Capture the processing type before the main output changes file MIME/type,
+  while retaining each artifact's own image/video metadata. The original-only
+  storage adapter keeps its previous inputs; same-origin validation, redirect
+  rejection and credential-free artifact downloads are unchanged.
+- A real two-origin HTTP regression failed on the baseline with the expected
+  origin mismatch and passes after the fix. A second regression checks a main
+  output that changes the record from video to image before preview import.
+- Both affected package suites and one complete `make check` passed with Go
+  1.27.1, including tidy/format, vet, lint and full race/coverage tests.
+  Independent source review found no blocking issues. No live storage,
+  database integration, media-resizer E2E or release-tag gate was run for this
+  narrowly scoped fix.

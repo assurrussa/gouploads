@@ -23,8 +23,10 @@ type Response struct {
 }
 
 type RequestDownload struct {
-	Preset    string `validate:"required"`
-	URL       string `validate:"required"`
+	Preset string `validate:"required"`
+	URL    string `validate:"required"`
+	// TypeMedia selects the resizer that owns the processing job, not the
+	// artifact's MIME type. A video's image preview still belongs to video.
 	TypeMedia string `validate:"required"`
 }
 
