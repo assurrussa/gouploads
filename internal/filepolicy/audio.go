@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -38,9 +40,6 @@ func DetectContentType(header []byte) string {
 // is the whole-file size, not the sniff prefix length. ExactReader separately
 // verifies that the private object supplies every declared byte.
 func ValidateAudioHeader(header []byte, contentType string, size int64) error {
-	if size <= 0 {
-		return nil // Unknown-size ingestion is checked again by finalization.
-	}
 	switch NormalizeMIME(contentType) {
 	case mimeMP3:
 		if err := validateMP3Size(header, size); err != nil {
@@ -51,33 +50,69 @@ func ValidateAudioHeader(header []byte, contentType string, size int64) error {
 			return errors.New("invalid WAVE header")
 		}
 		containerSize := int64(binary.LittleEndian.Uint32(header[4:8])) + 8
-		if containerSize < 44 || size < containerSize {
+		if containerSize < 44 || (size > 0 && size < containerSize) {
 			return errors.New("truncated WAVE container")
 		}
 	}
 	return nil
 }
 
-func validateMP3Size(header []byte, size int64) error {
-	var offset int64
-	if bytes.HasPrefix(header, []byte("ID3")) {
-		if len(header) < 10 {
-			return errors.New("truncated ID3 header")
-		}
-		tagSize := int64(header[6])<<21 | int64(header[7])<<14 | int64(header[8])<<7 | int64(header[9])
-		offset = 10 + tagSize
-		if header[3] == 4 && header[5]&0x10 != 0 {
-			offset += 10 // An ID3v2.4 footer is not included in its tag size.
-		}
+var errIncompleteMP3Header = errors.New("MP3 frame is outside the inspected prefix")
+
+// InspectAudioHeader validates the actual frame beyond an ID3 tag, if needed,
+// within HeaderBudget. reader starts at byte zero; replay preserves every byte
+// consumed during inspection for subsequent storage/scanning. Oversized metadata
+// fails closed instead of treating its declared MIME as proof of audio content.
+func InspectAudioHeader(reader io.Reader, header []byte, contentType string, size int64) (io.Reader, error) {
+	err := ValidateAudioHeader(header, contentType, size)
+	if !errors.Is(err, errIncompleteMP3Header) {
+		return reader, err
 	}
-	if size < offset+4 {
+	offset, err := mp3FrameOffset(header)
+	if err != nil {
+		return reader, err
+	}
+	if offset+4 > HeaderBudget {
+		return reader, errors.New("MP3 metadata exceeds the audio header inspection budget")
+	}
+	prefix := make([]byte, offset+4)
+	n, err := io.ReadFull(reader, prefix)
+	replay := io.MultiReader(bytes.NewReader(prefix[:n]), reader)
+	if err != nil {
+		return replay, fmt.Errorf("inspect MP3 frame after metadata: %w", err)
+	}
+	return replay, ValidateAudioHeader(prefix, contentType, size)
+}
+
+func mp3FrameOffset(header []byte) (int64, error) {
+	if !bytes.HasPrefix(header, []byte("ID3")) {
+		return 0, nil
+	}
+	if DetectContentType(header) != mimeMP3 {
+		return 0, errors.New("invalid ID3 header")
+	}
+	tagSize := int64(header[6])<<21 | int64(header[7])<<14 | int64(header[8])<<7 | int64(header[9])
+	offset := 10 + tagSize
+	if header[3] == 4 && header[5]&0x10 != 0 {
+		offset += 10 // An ID3v2.4 footer is not included in its tag size.
+	}
+	return offset, nil
+}
+
+func validateMP3Size(header []byte, size int64) error {
+	offset, err := mp3FrameOffset(header)
+	if err != nil {
+		return err
+	}
+	if size > 0 && size < offset+4 {
 		return errors.New("MP3 has no complete frame header after its ID3 tag")
 	}
-	if offset+4 <= int64(len(header)) {
-		length := mp3FrameSize(header[offset:])
-		if length == 0 || size < offset+int64(length) {
-			return errors.New("invalid or truncated MPEG Layer III frame")
-		}
+	if offset+4 > int64(len(header)) {
+		return errIncompleteMP3Header
+	}
+	length := mp3FrameSize(header[offset:])
+	if length == 0 || (size > 0 && size < offset+int64(length)) {
+		return errors.New("invalid or truncated MPEG Layer III frame")
 	}
 	return nil
 }

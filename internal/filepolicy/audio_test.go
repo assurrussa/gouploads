@@ -1,6 +1,8 @@
 package filepolicy_test
 
 import (
+	"bytes"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -49,4 +51,37 @@ func TestAudioRejectsTruncatedAndInvalidHeaders(t *testing.T) {
 	require.Error(t, filepolicy.ValidateAudioHeader([]byte("ID3\x03\x00\x00\x00\x00\x00\x00junk"), "audio/mpeg", 14))
 	require.Error(t, filepolicy.ValidateAudioHeader(audiofixture.WAV[:12], "audio/wav", 12))
 	require.Error(t, filepolicy.ValidateAudioHeader([]byte("not wave"), "audio/wav", 100))
+}
+
+func TestLargeID3FrameInspectionIsBoundedAndReplayed(t *testing.T) {
+	valid := audiofixture.MP3WithTag(4096)
+	invalid := bytes.Clone(valid)
+	copy(invalid[4106:], "junk")
+	for _, tc := range []struct {
+		name  string
+		body  []byte
+		valid bool
+	}{
+		{"valid", valid, true},
+		{"exact budget", audiofixture.MP3WithTag(int(filepolicy.HeaderBudget) - 14), true},
+		{"forged frame", invalid, false},
+		{"truncated frame", valid[:4110], false},
+		{"over budget", audiofixture.MP3WithTag(int(filepolicy.HeaderBudget)), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			header := tc.body[:512]
+			require.Error(t, filepolicy.ValidateAudioHeader(header, "audio/mpeg", int64(len(tc.body))))
+			counter := &countReader{reader: bytes.NewReader(tc.body)}
+			replay, err := filepolicy.InspectAudioHeader(counter, header, "audio/mpeg", int64(len(tc.body)))
+			require.LessOrEqual(t, counter.n, filepolicy.HeaderBudget)
+			if !tc.valid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			got, err := io.ReadAll(replay)
+			require.NoError(t, err)
+			require.Equal(t, tc.body, got)
+		})
+	}
 }

@@ -175,7 +175,8 @@ func (u *UseCase) saveFileStorage(
 	if strings.HasPrefix(contentType, "audio/") && !u.allowAudioOriginal {
 		return fileStorageDTO{}, errors.New("audio artifacts require original_only finalization")
 	}
-	if err := filepolicy.ValidateAudioHeader(header, contentType, artifact.Size); err != nil {
+	source, err := filepolicy.InspectAudioHeader(reader, header, contentType, artifact.Size)
+	if err != nil {
 		return fileStorageDTO{}, err
 	}
 	directory, err := u.finalArtifactDir(file)
@@ -190,7 +191,6 @@ func (u *UseCase) saveFileStorage(
 	if expected <= 0 && response.ContentLength > 0 {
 		expected = response.ContentLength
 	}
-	var source io.Reader = reader
 	if u.scanner != nil {
 		spool, err := u.scanArtifact(ctx, source, expected, file.OriginalFileName, contentType)
 		if err != nil {

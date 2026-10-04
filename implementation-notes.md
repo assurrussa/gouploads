@@ -646,3 +646,10 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   clean local consumer (normal and integration-tag) and GoAdmin/TSOP import
   boundary checks. Actual PostgreSQL/S3 acceptance and published-tag checks are
   pending separately; no published readiness is claimed from local replacements.
+
+- Codex review identified a large-ID3 gap outside the initial 512-byte sniff.
+  Original ingestion and finalization now inspect the actual frame after the
+  metadata with the existing 1 MiB header budget, replay all consumed bytes,
+  and fail closed beyond that limit. Regressions include valid large tags,
+  forged frames, truncated frames, exact byte/checksum replay, and no writes
+  from rejected reader/stored/finalizer paths.

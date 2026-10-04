@@ -255,13 +255,14 @@ func (s *Service) processReader(ctx context.Context, input ReaderUploadInput, cf
 					mimeType,
 					ext))
 	}
-	if err := filepolicy.ValidateAudioHeader(header[:n], mimeType, input.Size); err != nil {
+	reader = io.MultiReader(bytes.NewReader(header[:n]), reader)
+	reader, err = filepolicy.InspectAudioHeader(reader, header[:n], mimeType, input.Size)
+	if err != nil {
 		return UploadedFile{}, newUploadError(uploadErrorCodeMimeDenied, err)
 	}
 	if err := s.runValidatorsFromInput(ctx, input, ext, mimeType, header[:n]); err != nil {
 		return UploadedFile{}, err
 	}
-	reader = io.MultiReader(bytes.NewReader(header[:n]), reader)
 	reader, width, height := inspectImageDimensions(reader, mimeType)
 	kind, err := model.GetFileTypeFromMimeType(mimeType)
 	if err != nil {

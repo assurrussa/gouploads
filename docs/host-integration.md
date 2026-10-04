@@ -385,7 +385,10 @@ WAVE are recognized; other audio formats need a separate supported policy.
 Supported aliases are `audio/mp3`, `audio/x-mp3`, `audio/mpeg3`,
 `audio/x-mpeg-3`, `audio/wave`, `audio/x-wav`, and `audio/vnd.wave`. Aliases must
 still agree with the detected format. Truncated headers/container declarations,
-wrong extensions and mismatched MIME are rejected. Format sniffing is not full
+wrong extensions and mismatched MIME are rejected. The first MP3 frame after
+ID3 metadata is checked within the shared 1 MiB header-inspection budget;
+metadata that cannot fit that bounded inspection is rejected. Every inspected
+byte is replayed into the original storage path. Format sniffing is not full
 audio decoding or malware scanning; optional content scanning remains separate.
 
 Audio currently requires `ProcessingOriginalOnly`. In `ProcessingMediaResizer`,

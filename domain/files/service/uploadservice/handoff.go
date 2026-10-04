@@ -1,6 +1,7 @@
 package uploadservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -134,7 +135,8 @@ func (s *Service) validateStoredUpload(ctx context.Context, file *UploadedFile, 
 	if filepolicy.NormalizeMIME(file.MimeType) != filepolicy.NormalizeMIME(mimeType) {
 		return newUploadError(uploadErrorCodeMimeDenied, errors.New("stored upload MIME does not match its content"))
 	}
-	if err := filepolicy.ValidateAudioHeader(header[:n], mimeType, file.Size); err != nil {
+	if _, err := filepolicy.InspectAudioHeader(io.MultiReader(bytes.NewReader(header[:n]), reader),
+		header[:n], mimeType, file.Size); err != nil {
 		return newUploadError(uploadErrorCodeMimeDenied, err)
 	}
 	if err := s.runValidatorsFromInput(ctx,

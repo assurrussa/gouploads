@@ -60,6 +60,7 @@ func TestIntegrationAudioOriginals(t *testing.T) {
 			}{
 				{"tagged.mp3", "audio/mpeg", audiofixture.MP3},
 				{"untagged.mp3", "audio/mpeg", audiofixture.UntaggedMP3()},
+				{"large-tag.mp3", "audio/mpeg", audiofixture.MP3WithTag(4096)},
 				{"tone.wav", "audio/wav", audiofixture.WAV},
 			} {
 				t.Run(sample.name, func(t *testing.T) {
@@ -83,7 +84,7 @@ func TestIntegrationAudioOriginals(t *testing.T) {
 						require.Equal(t, host.FileTypeAudio, file.FileType)
 						require.Equal(t, sample.mime, file.MimeType)
 						require.Equal(t, sample.mime, file.Data.Presets["main"].MimeType)
-						response, body := fiberRequest(t, ctx, app, http.MethodGet, fmt.Sprintf("/files/%d", file.ID), nil, nil)
+						response, body := fiberRequest(t, ctx, app, http.MethodGet, fmt.Sprintf("/files/file/%d", file.ID), nil, nil)
 						require.Equal(t, http.StatusOK, response.StatusCode, string(body))
 						var decoded struct {
 							File struct {
@@ -106,8 +107,8 @@ func TestIntegrationAudioOriginals(t *testing.T) {
 			for _, filter := range []string{"audio", "7", "audio/"} {
 				files, total, err := runtime.Files.List(ctx, host.ListFilters{FileType: filter})
 				require.NoError(t, err)
-				require.Len(t, files, 6)
-				require.Equal(t, 6, total)
+				require.Len(t, files, 8)
+				require.Equal(t, 8, total)
 			}
 		})
 	}

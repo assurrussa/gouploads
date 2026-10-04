@@ -109,17 +109,17 @@ External tests may use `github.com/assurrussa/gouploads/hosttest`.
 implementation details, not an additional stable SDK.
 
 ```sh
-go get github.com/assurrussa/gouploads@v0.10.0
+go get github.com/assurrussa/gouploads@v0.11.0
 ```
 
-The repository and `v0.10.0` are publicly available through the Go module proxy
-and checksum database. Installation does not require GitHub authentication or a
+The public module resolves through the Go module proxy and checksum database.
+Installation does not require GitHub authentication or a
 `GOPRIVATE` setting. The dependency graph no longer includes
 `goshared`, `goredis` or `gowebsocket`. Runtime notifications use the narrow
 `host.EventPublisher` contract; the host owns any WebSocket adapter and lifecycle.
 See [anonymous consumer checks](docs/anonymous-consumer.md) for isolated source
-and published-tag probes. The anonymous exact-tag probe passes for `v0.10.0`
-in both ordinary and integration-tag consumer builds.
+and published-tag probes. Release readiness requires the actual published tag
+to pass both ordinary and integration-tag consumer builds without replacements.
 
 ## Storage and TUS contracts
 

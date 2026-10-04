@@ -34,6 +34,7 @@ func TestAudioReaderAndStoredUseOriginalFinalization(t *testing.T) {
 	}{
 		{"tagged", ".mp3", "audio/mpeg", "audio/mp3", audiofixture.MP3},
 		{"untagged", ".mp3", "audio/mpeg", "audio/mpeg", audiofixture.UntaggedMP3()},
+		{"large tag", ".mp3", "audio/mpeg", "audio/mpeg", audiofixture.MP3WithTag(4096)},
 		{"WAV", ".wav", "audio/wav", "audio/x-wav", audiofixture.WAV},
 	} {
 		for _, ingress := range []string{"reader", "stored"} {
@@ -147,6 +148,37 @@ func TestAudioMediaResizerRejectsBeforeAnyJobOrWrite(t *testing.T) {
 				})
 			}
 			require.ErrorContains(t, err, "audio uploads require original_only")
+		})
+	}
+}
+
+func TestLargeID3ForgeryIsRejectedByReaderAndStoredIngress(t *testing.T) {
+	body := audiofixture.MP3WithTag(4096)
+	copy(body[4106:], "junk")
+	for _, ingress := range []string{"reader", "stored"} {
+		t.Run(ingress, func(t *testing.T) {
+			ctx, cancel, ts := NewTestRepoSuite(t)
+			defer cancel()
+			storage := &readableStorage{MockfileStorage: ts.mockFileStorage, body: body}
+			svc, err := uploadservice.NewWithProcessing(uploadservice.NewOptions(ts.mockTransactor,
+				ts.mockOutboxPutter, ts.mockFileRepository, logger.Discard(), storage), config.ProcessingOriginalOnly)
+			require.NoError(t, err)
+			req := uploadservice.ReaderRequest{
+				UploaderUUID: identity.NewUserID(), ManagerID: 12,
+				ObjectType: shared.ObjectTypeAdmin, ObjectID: 12, Config: audioPolicy(),
+			}
+			if ingress == "stored" {
+				_, err = svc.UploadStored(ctx, req, uploadservice.UploadedFile{
+					OriginalName: "forged.mp3",
+					FileName:     "source.mp3", Path: "tmp/uploads/source.mp3", Size: int64(len(body)), MimeType: "audio/mpeg",
+				})
+			} else {
+				_, err = svc.UploadReader(ctx, req, uploadservice.ReaderUploadInput{
+					OriginalName: "forged.mp3",
+					Size:         int64(len(body)), Reader: bytes.NewReader(body),
+				})
+			}
+			require.Error(t, err) // No writes/transaction/jobs are permitted for the forged frame.
 		})
 	}
 }
