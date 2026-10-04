@@ -17,6 +17,7 @@ const (
 	FileTypeDocx    FileType = 4
 	FileTypeLink    FileType = 5
 	FileTypeText    FileType = 6
+	FileTypeAudio   FileType = 7
 )
 
 var fileTypes = map[FileType]string{
@@ -27,6 +28,7 @@ var fileTypes = map[FileType]string{
 	FileTypeDocx:    "docx",
 	FileTypeLink:    "link",
 	FileTypeText:    "text",
+	FileTypeAudio:   "audio",
 }
 
 var fileTypesReverse = map[string]FileType{
@@ -37,6 +39,7 @@ var fileTypesReverse = map[string]FileType{
 	"docx":    FileTypeDocx,
 	"link":    FileTypeLink,
 	"text":    FileTypeText,
+	"audio":   FileTypeAudio,
 }
 
 func (f *FileType) Scan(value any) error {
@@ -110,6 +113,8 @@ func GetFileTypeFromMimeType(mime string) (FileType, error) {
 		return FileTypeImage, nil
 	case isVideo(mime):
 		return FileTypeVideo, nil
+	case strings.HasPrefix(mime, "audio/"):
+		return FileTypeAudio, nil
 	case isText(mime):
 		return FileTypeText, nil
 	case isPdf(mime):

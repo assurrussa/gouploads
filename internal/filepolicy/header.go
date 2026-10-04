@@ -24,6 +24,10 @@ func IncompleteMIMEHeader(header []byte, contentType string) bool {
 		return incompleteWebP(header)
 	case "video/mp4":
 		return incompleteMP4(header)
+	case mimeMP3:
+		return incompleteMP3(header)
+	case mimeWAV:
+		return incompleteWAV(header)
 	default:
 		return false
 	}
@@ -33,6 +37,37 @@ func IncompleteMIMEHeader(header []byte, contentType string) bool {
 		}
 	}
 	return false
+}
+
+func incompleteMP3(header []byte) bool {
+	if len(header) < 3 && bytes.Equal(header, []byte("ID3")[:len(header)]) {
+		return true
+	}
+	if bytes.HasPrefix(header, []byte("ID3")) {
+		return len(header) < 10
+	}
+	if len(header) >= 4 {
+		return false
+	}
+	candidate := [4]byte{0xff, 0xfb, 0x90, 0}
+	copy(candidate[:], header)
+	return mp3FrameHeader(candidate[:])
+}
+
+func incompleteWAV(header []byte) bool {
+	const signature = "RIFF\x00\x00\x00\x00WAVE"
+	if len(header) >= len(signature) {
+		return false
+	}
+	for index, value := range header {
+		if index >= 4 && index < 8 {
+			continue
+		}
+		if value != signature[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func incompleteWebP(header []byte) bool {

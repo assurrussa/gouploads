@@ -1,6 +1,7 @@
 package uploadservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,11 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"path"
 	"path/filepath"
 	"strings"
 
+	uploadconfig "github.com/assurrussa/gouploads/config"
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/internal/filepolicy"
 	"github.com/assurrussa/gouploads/internal/filesanitize"
@@ -127,12 +128,16 @@ func (s *Service) validateStoredUpload(ctx context.Context, file *UploadedFile, 
 	if n == 0 {
 		return newUploadError(uploadErrorCodeFileEmpty, errors.New("stored upload is empty"))
 	}
-	mimeType := http.DetectContentType(header[:n])
+	mimeType := filepolicy.DetectContentType(header[:n])
 	if !s.isAllowedMime(ext, mimeType, cfg.AllowedMimeTypes) {
 		return newUploadError(uploadErrorCodeMimeDenied, errors.New("stored upload content is denied"))
 	}
 	if filepolicy.NormalizeMIME(file.MimeType) != filepolicy.NormalizeMIME(mimeType) {
 		return newUploadError(uploadErrorCodeMimeDenied, errors.New("stored upload MIME does not match its content"))
+	}
+	if _, err := filepolicy.InspectAudioHeader(io.MultiReader(bytes.NewReader(header[:n]), reader),
+		header[:n], mimeType, file.Size); err != nil {
+		return newUploadError(uploadErrorCodeMimeDenied, err)
 	}
 	if err := s.runValidatorsFromInput(ctx,
 		ReaderUploadInput{
@@ -145,5 +150,12 @@ func (s *Service) validateStoredUpload(ctx context.Context, file *UploadedFile, 
 		return err
 	}
 	file.FileType, err = model.GetFileTypeFromMimeType(mimeType)
-	return err
+	if err != nil {
+		return err
+	}
+	if file.FileType == model.FileTypeAudio && s.processingMode == uploadconfig.ProcessingMediaResizer {
+		return ClientError{Message: "audio uploads require original_only processing"}
+	}
+	file.MimeType = mimeType
+	return nil
 }

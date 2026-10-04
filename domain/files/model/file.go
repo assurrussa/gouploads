@@ -237,6 +237,8 @@ func (f *File) GetFolderPath() string {
 	switch f.FileType {
 	case FileTypeVideo:
 		return "videos"
+	case FileTypeAudio:
+		return FileTypeAudio.ToString()
 	case FileTypePdf:
 		return "documents/pdf"
 	case FileTypeDocx:

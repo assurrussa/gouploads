@@ -18,6 +18,8 @@ import (
 
 const (
 	mimeJPEG     = "image/jpeg"
+	mimeMP3      = "audio/mpeg"
+	mimeWAV      = "audio/wav"
 	MaxFileSize  = int64(10 << 30)
 	HeaderBudget = int64(1 << 20)
 )
@@ -49,7 +51,14 @@ func NormalizeMIME(raw string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.ToLower(value)
+	switch strings.ToLower(value) {
+	case "audio/mp3", "audio/x-mp3", "audio/mpeg3", "audio/x-mpeg-3":
+		return mimeMP3
+	case "audio/wave", "audio/x-wav", "audio/vnd.wave":
+		return mimeWAV
+	default:
+		return strings.ToLower(value)
+	}
 }
 
 // Extension is deliberately independent of the host OS MIME database: retries on
@@ -70,6 +79,10 @@ func Extension(contentType string) string {
 		return ".webm"
 	case "application/pdf":
 		return ".pdf"
+	case mimeMP3:
+		return ".mp3"
+	case mimeWAV:
+		return ".wav"
 	default:
 		return ""
 	}

@@ -18,6 +18,9 @@ func TestIncompleteHeadersRemainPrivateUntilSignatureIsComplete(t *testing.T) {
 		{"image/gif", "GIF89a"},
 		{"application/pdf", "%PDF-"},
 		{"image/webp", "RIFF\x18\x00\x00\x00WEBPVP"},
+		{"audio/mpeg", "ID3\x03\x00\x00\x00\x00\x00\x00"},
+		{"audio/mpeg", "\xff\xfb\x90\x00"},
+		{"audio/wav", "RIFF\x18\x00\x00\x00WAVE"},
 		{"video/webm", "\x1a\x45\xdf\xa3"},
 		{"video/mp4", "\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isommp42"},
 	} {

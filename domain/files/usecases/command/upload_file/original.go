@@ -75,6 +75,7 @@ func NewOriginal(opts OriginalOptions) (*OriginalUseCase, error) {
 			return nil, errors.New("original destination and staging prefixes must not overlap")
 		}
 	}
+	core.allowAudioOriginal = true
 	return &OriginalUseCase{core: core, repo: opts.Repository, prefixes: prefixes}, nil
 }
 

@@ -1099,7 +1099,7 @@ func (h *Handler) resolveTusPatchMimeType(
 		sniff = sniff[:tusupload.SniffLen]
 	}
 	sniff = append(sniff, body[:min(len(body), tusupload.SniffLen-len(sniff))]...)
-	mimeType := http.DetectContentType(sniff)
+	mimeType := filepolicy.DetectContentType(sniff)
 	if !isAllowedMimeType(ext, mimeType, resolution.config.AllowedMimeTypes) {
 		if canReadPrefix && offset+int64(len(body)) < session.UploadLength &&
 			hasIncompleteMIMEHeader(sniff, resolution.config.AllowedMimeTypes[ext]) {
@@ -1149,7 +1149,7 @@ func isAllowedExtension(ext string, allowed []string) bool {
 
 func isAllowedMimeType(ext, contentType string, allowed map[string][]string) bool {
 	ext = strings.ToLower(strings.TrimSpace(ext))
-	contentType = strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+	contentType = filepolicy.NormalizeMIME(contentType)
 	if contentType == "" {
 		return false
 	}
@@ -1157,7 +1157,7 @@ func isAllowedMimeType(ext, contentType string, allowed map[string][]string) boo
 		return true
 	}
 	for _, candidate := range allowed[ext] {
-		candidate = strings.ToLower(strings.TrimSpace(strings.SplitN(candidate, ";", 2)[0]))
+		candidate = filepolicy.NormalizeMIME(candidate)
 		if candidate == contentType {
 			return true
 		}

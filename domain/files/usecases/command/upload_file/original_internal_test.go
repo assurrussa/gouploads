@@ -20,6 +20,7 @@ import (
 	deletedfilejob "github.com/assurrussa/gouploads/domain/files/outbox/deleted_file"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
+	"github.com/assurrussa/gouploads/internal/audiofixture"
 	eventstream "github.com/assurrussa/gouploads/internal/events"
 	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
@@ -294,4 +295,34 @@ func TestOriginalDeletedFileIsNotResurrected(t *testing.T) {
 	require.NoError(t, u.HandleOriginal(t.Context(), 21))
 	require.Zero(t, f.saves)
 	require.Empty(t, f.jobs)
+}
+
+func TestOriginalLargeID3FrameValidationBeforePublication(t *testing.T) {
+	for _, valid := range []bool{true, false} {
+		t.Run(map[bool]string{true: "valid frame", false: "forged frame"}[valid], func(t *testing.T) {
+			u, f := newOriginalFixture(t)
+			body := audiofixture.MP3WithTag(4096)
+			if !valid {
+				copy(body[4106:], "junk")
+			}
+			f.file.FileName = "source.mp3"
+			f.file.OriginalFileName = "tagged.mp3"
+			f.file.MimeType = "audio/mpeg"
+			f.file.FileType = model.FileTypeAudio
+			f.file.Size = int64(len(body))
+			f.objects[f.file.GetFullPath()] = body
+			err := u.HandleOriginal(t.Context(), f.file.ID)
+			if !valid {
+				require.ErrorContains(t, err, "invalid or truncated MPEG Layer III frame")
+				require.Zero(t, f.saves)
+				require.Empty(t, f.jobs)
+				require.Zero(t, f.events)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, body, f.objects[f.file.GetFullPath()])
+			sum := sha256.Sum256(body)
+			require.Equal(t, hex.EncodeToString(sum[:]), f.file.GetData().Presets[shared.FilePresetMainName].ChecksumSHA256)
+		})
+	}
 }

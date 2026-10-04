@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
-	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	logger "github.com/assurrussa/gologger"
 	"github.com/google/uuid"
 
+	uploadconfig "github.com/assurrussa/gouploads/config"
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
@@ -247,7 +247,7 @@ func (s *Service) processReader(ctx context.Context, input ReaderUploadInput, cf
 	if n == 0 {
 		return UploadedFile{}, newUploadError(uploadErrorCodeFileEmpty, errors.New("file is empty"))
 	}
-	mimeType := http.DetectContentType(header[:n])
+	mimeType := filepolicy.DetectContentType(header[:n])
 	if !s.isAllowedMime(ext, mimeType, cfg.AllowedMimeTypes) {
 		return UploadedFile{},
 			newUploadError(uploadErrorCodeMimeDenied,
@@ -255,16 +255,23 @@ func (s *Service) processReader(ctx context.Context, input ReaderUploadInput, cf
 					mimeType,
 					ext))
 	}
+	reader = io.MultiReader(bytes.NewReader(header[:n]), reader)
+	reader, err = filepolicy.InspectAudioHeader(reader, header[:n], mimeType, input.Size)
+	if err != nil {
+		return UploadedFile{}, newUploadError(uploadErrorCodeMimeDenied, err)
+	}
 	if err := s.runValidatorsFromInput(ctx, input, ext, mimeType, header[:n]); err != nil {
 		return UploadedFile{}, err
 	}
-	reader = io.MultiReader(bytes.NewReader(header[:n]), reader)
 	reader, width, height := inspectImageDimensions(reader, mimeType)
 	kind, err := model.GetFileTypeFromMimeType(mimeType)
 	if err != nil {
 		return UploadedFile{}, err
 	}
 	fileName := uuid.NewString() + ext
+	if kind == model.FileTypeAudio && s.processingMode == uploadconfig.ProcessingMediaResizer {
+		return UploadedFile{}, ClientError{Message: "audio uploads require original_only processing"}
+	}
 	temporary, err := s.saveTempFile(ctx, cfg, fileName, input.Size, mimeType, reader)
 	if err != nil {
 		return UploadedFile{}, err

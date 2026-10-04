@@ -67,6 +67,7 @@ func TestBuildProbeTestImportsSupportedPackagesAndUsesMigrationContract(t *testi
 	require.Contains(t, content, "host.MigrationsFS()")
 	require.Contains(t, content, "host.MigrationFiles()")
 	require.Contains(t, content, "host.NewFileRepo")
+	require.Contains(t, content, "host.FileTypeAudio.ToID() != 7")
 	require.Contains(t, content, "hosttest.SaveFileInput{}")
 	require.Contains(t, content, "hosttest.NewListenResizeRequestMatcher")
 }

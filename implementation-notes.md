@@ -623,3 +623,33 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   Independent source review found no blocking issues. No live storage,
   database integration, media-resizer E2E or release-tag gate was run for this
   narrowly scoped fix.
+
+## 2026-10-04 — Opt-in MP3/WAV originals
+
+- Appended audio type ID 7 without changing existing IDs or default policies.
+  Hosts own explicit audio allowlists and bounded per-strategy size limits.
+- One byte sniffer covers multipart/reader, stored completion, TUS prefixes
+  and finalization. It supports tagged/untagged Layer III frames and RIFF WAVE,
+  canonicalizes MIME aliases, and bounds all header inspection. This is not a
+  complete audio decoder or malware scanner.
+- Audio stays on the existing original-only storage/outbox path. Media-mode
+  ingestion and media callback outputs reject audio before persistence, rather
+  than creating unsupported image/video resize work. The callback guard was
+  added following independent source review of the shared finalizer policy.
+- Synthetic tone fixtures carry no user recording. Tests cover policy isolation,
+  MIME/extension spoofing, truncated headers/frames, declared size boundaries,
+  reader and stored ingress, alias matching during TUS, public type access,
+  and media rejection. PostgreSQL local/S3 acceptance exercises tiny opening
+  TUS chunks, stored type/MIME/size/checksum, final response metadata and replay.
+- Cloud verification: Go 1.27.1 `make check` passed (tidy, format, vet, lint,
+  one full race/coverage run), followed by public-surface/integration-tag compile,
+  clean local consumer (normal and integration-tag) and GoAdmin/TSOP import
+  boundary checks. Actual PostgreSQL/S3 acceptance and published-tag checks are
+  pending separately; no published readiness is claimed from local replacements.
+
+- Codex review identified a large-ID3 gap outside the initial 512-byte sniff.
+  Original ingestion and finalization now inspect the actual frame after the
+  metadata with the existing 1 MiB header budget, replay all consumed bytes,
+  and fail closed beyond that limit. Regressions include valid large tags,
+  forged frames, truncated frames, exact byte/checksum replay, and no writes
+  from rejected reader/stored/finalizer paths.

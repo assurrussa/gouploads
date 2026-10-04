@@ -114,6 +114,7 @@ func fileTypeCondition(raw string) (squirrel.Sqlizer, error) {
 		model.FileTypeDocx,
 		model.FileTypeLink,
 		model.FileTypeText,
+		model.FileTypeAudio,
 	} {
 		if value == kind.String() || value == kind.ToString() {
 			return squirrel.Eq{columnFileType: kind}, nil
@@ -121,7 +122,7 @@ func fileTypeCondition(raw string) (squirrel.Sqlizer, error) {
 	}
 	// Keep the explicitly documented MIME-prefix form for repository consumers.
 	switch value {
-	case "image/", "video/", "text/", "application/":
+	case "image/", "video/", "audio/", "text/", "application/":
 		return squirrel.Like{columnMimeType: value + "%"}, nil
 	case "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
 		return squirrel.Eq{columnMimeType: value}, nil

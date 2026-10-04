@@ -71,6 +71,21 @@ artifact and commits metadata and cleanup tasks. It never calls a resizer.
 The single `main` artifact retains the original bytes. Completion is not
 moderation approval or a guarantee that untrusted content is safe to publish.
 
+## Opt in to MP3/WAV originals
+
+MP3 and WAV use `host.FileTypeAudio` (7) and the same original storage/outbox
+workflow. Register a host upload strategy with explicit `.mp3`/`.wav` extension
+and `audio/mpeg`/`audio/wav` MIME allowlists and a bounded `MaxFileSize`. The
+generic and rich-text defaults do not enable audio or increase their limits.
+WAV aliases (`audio/wave`, `audio/x-wav`, `audio/vnd.wave`) normalize to
+`audio/wav`; common MP3 aliases normalize to `audio/mpeg`. Type detection uses
+bytes, including untagged MPEG Layer III frames, rather than a supplied MIME.
+
+Audio requires `original_only`; `media_resizer`, even with `SkipResizer`,
+rejects audio without scheduling unsupported image/video processing. This
+capability preserves the original; it does not transcode or validate complete
+audio decoding. See [host audio policy](docs/host-integration.md#opt-in-audio-originals).
+
 ## Enable media processing explicitly
 
 Set `StorageConfig.ProcessingMode` to `host.ProcessingMediaResizer` (or map
@@ -94,17 +109,17 @@ External tests may use `github.com/assurrussa/gouploads/hosttest`.
 implementation details, not an additional stable SDK.
 
 ```sh
-go get github.com/assurrussa/gouploads@v0.10.0
+go get github.com/assurrussa/gouploads@v0.11.0
 ```
 
-The repository and `v0.10.0` are publicly available through the Go module proxy
-and checksum database. Installation does not require GitHub authentication or a
+The public module resolves through the Go module proxy and checksum database.
+Installation does not require GitHub authentication or a
 `GOPRIVATE` setting. The dependency graph no longer includes
 `goshared`, `goredis` or `gowebsocket`. Runtime notifications use the narrow
 `host.EventPublisher` contract; the host owns any WebSocket adapter and lifecycle.
 See [anonymous consumer checks](docs/anonymous-consumer.md) for isolated source
-and published-tag probes. The anonymous exact-tag probe passes for `v0.10.0`
-in both ordinary and integration-tag consumer builds.
+and published-tag probes. Release readiness requires the actual published tag
+to pass both ordinary and integration-tag consumer builds without replacements.
 
 ## Storage and TUS contracts
 
