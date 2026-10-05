@@ -112,7 +112,9 @@ func TestIntegrationLiveAdmissionClientChain(t *testing.T) {
 	resolver := &liveAdmissionResolver{current: liveSourceResolver(t, fixture.URL, 15*time.Minute)}
 	outbox := &outboxCollector{}
 	listener := listenresizefile.Must(listenresizefile.NewOptions(repo, outbox, eventstream.Discard{}, logger.Discard()))
-	sender := sendresizefile.Must(sendresizefile.NewOptions(repo, resizer, resolver, eventstream.Discard{}, cfg.Image, cfg.Video, logger.Discard(), outbox, listener))
+	sender := sendresizefile.Must(sendresizefile.NewOptions(
+		repo, resizer, resolver, eventstream.Discard{}, cfg.Image, cfg.Video, logger.Discard(), outbox, listener,
+	))
 	sendJob := sendresizefilejob.Must(sendresizefilejob.NewOptions(sender, logger.Discard()))
 	finalizer := uploadfile.Must(uploadfile.NewOptions(tx, repo, resizer, eventstream.Discard{}, logger.Discard(), storage, outbox,
 		uploadfile.WithBaseFolder("media/v1"), uploadfile.WithDeliveryBaseURL(fixture.URL)))
@@ -184,7 +186,9 @@ func TestIntegrationLiveAdmissionClientChain(t *testing.T) {
 
 	t.Run("real video and image preview through polling", func(t *testing.T) {
 		videoPath := filepath.Join(t.TempDir(), "source.mp4")
-		command := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=32x24:d=1", "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-movflags", "+faststart", videoPath)
+		command := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error",
+			"-f", "lavfi", "-i", "color=c=blue:s=32x24:d=1", "-c:v", "libx264", "-threads", "1",
+			"-pix_fmt", "yuv420p", "-movflags", "+faststart", videoPath)
 		output, err := command.CombinedOutput()
 		require.NoError(t, err, "real video fixture: %s", output)
 		video, err := os.ReadFile(videoPath)
@@ -319,11 +323,14 @@ func TestLiveSourceResolverFixture(t *testing.T) {
 	}
 }
 
-func seedLiveMediaFile(t *testing.T, ctx context.Context, repo *host.FileRepo, root, relative string, body []byte, kind model.FileType, mime string) model.File {
+func seedLiveMediaFile(
+	t *testing.T, ctx context.Context, repo *host.FileRepo,
+	root, relative string, body []byte, kind model.FileType, mime string,
+) model.File {
 	t.Helper()
 	abs := filepath.Join(root, filepath.FromSlash(relative))
 	require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o755))
-	require.NoError(t, os.WriteFile(abs, body, 0o600))
+	require.NoError(t, os.WriteFile(abs, body, 0o600)) //nolint:gosec // Test-owned root and fixed fixture paths, never user input.
 	file := testshelpers.CreateFile(t)
 	file.ID, file.URL, file.FileName, file.FolderPath = 0, "", path.Base(relative), path.Dir(relative)
 	file.OriginalFileName, file.Size, file.FileType, file.MimeType = file.FileName, int64(len(body)), kind, mime
@@ -335,7 +342,10 @@ func seedLiveMediaFile(t *testing.T, ctx context.Context, repo *host.FileRepo, r
 	return file
 }
 
-func waitLiveMediaStatus(t *testing.T, ctx context.Context, resizer *clientresizer.Service, id outboxtypes.JobID, mediaType, want string) {
+func waitLiveMediaStatus(
+	t *testing.T, ctx context.Context, resizer *clientresizer.Service,
+	id outboxtypes.JobID, mediaType, want string,
+) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {
@@ -355,7 +365,9 @@ func waitLiveMediaStatus(t *testing.T, ctx context.Context, resizer *clientresiz
 	t.Fatalf("logical job did not reach %s within the bounded live test", want)
 }
 
-func assertLiveFinalFile(t *testing.T, ctx context.Context, repo *host.FileRepo, root string, id int64, names ...string) model.File {
+func assertLiveFinalFile(
+	t *testing.T, ctx context.Context, repo *host.FileRepo, root string, id int64, names ...string,
+) model.File {
 	t.Helper()
 	file, err := repo.GetByID(ctx, id)
 	require.NoError(t, err)
@@ -394,14 +406,14 @@ type liveAdmissionTransport struct {
 
 func (c *liveAdmissionTransport) Do(request *http.Request) (*http.Response, error) {
 	if request.Method != http.MethodPost {
-		return c.client.Do(request)
+		return c.client.Do(request) //nolint:gosec // Acceptance setup requires the caller-owned loopback runtime.
 	}
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		return nil, err
 	}
 	request.Body = io.NopCloser(bytes.NewReader(body))
-	response, err := c.client.Do(request)
+	response, err := c.client.Do(request) //nolint:gosec // Acceptance setup requires the caller-owned loopback runtime.
 	if err != nil || response.StatusCode != http.StatusAccepted {
 		return response, err
 	}
@@ -433,8 +445,8 @@ func (c *liveAdmissionTransport) last(t *testing.T) liveAdmissionObservation {
 }
 
 type liveAdmissionWebhook struct {
-	JobID          outboxtypes.JobID           `json:"job_id"`
-	IdempotencyKey string                      `json:"idempotency_key"`
+	JobID          outboxtypes.JobID           `json:"job_id"`          //nolint:tagliatelle // External resizer wire contract.
+	IdempotencyKey string                      `json:"idempotency_key"` //nolint:tagliatelle // External resizer wire contract.
 	Status         string                      `json:"status"`
 	Metadata       map[string]any              `json:"metadata"`
 	Artifacts      []clientresizer.JobArtifact `json:"artifacts"`
@@ -450,7 +462,8 @@ func (event liveAdmissionWebhook) request(t *testing.T) listenresizefile.Request
 	for _, artifact := range event.Artifacts {
 		request.Artifacts = append(request.Artifacts, listenresizefile.Artifact{
 			Preset: artifact.Preset, URL: artifact.URL,
-			MediaType: artifact.MediaType, ContentType: artifact.ContentType, Size: artifact.Size, ExpireAt: artifact.ExpireAt, Metadata: artifact.Metadata,
+			MediaType: artifact.MediaType, ContentType: artifact.ContentType, Size: artifact.Size,
+			ExpireAt: artifact.ExpireAt, Metadata: artifact.Metadata,
 		})
 	}
 	return request
