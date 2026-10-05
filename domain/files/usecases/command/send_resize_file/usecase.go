@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"time"
 
 	logger "github.com/assurrussa/gologger"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
@@ -15,6 +16,7 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/model"
 	clientresizer "github.com/assurrussa/gouploads/domain/files/service/client_resizer"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	listenresizefile "github.com/assurrussa/gouploads/domain/files/usecases/command/listen_resize_file"
 	eventstream "github.com/assurrussa/gouploads/internal/events"
 	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
@@ -27,6 +29,14 @@ type fileRepository interface {
 
 type resizeClient interface {
 	SendResize(ctx context.Context, req clientresizer.Request) (clientresizer.Response, error)
+	GetJob(ctx context.Context, req clientresizer.JobRequest) (clientresizer.JobResponse, error)
+}
+
+type outboxPutter interface {
+	Put(ctx context.Context, name, payload string, availableAt time.Time) (outboxtypes.JobID, error)
+}
+type resultHandler interface {
+	Handle(ctx context.Context, req listenresizefile.Request) (listenresizefile.Response, error)
 }
 
 type sourceURLResolver interface {
@@ -42,6 +52,8 @@ type Options struct {
 	imagePipeline  config.ImagePipelineConfig `option:"mandatory" validate:"required"`
 	videoPipeline  config.VideoPipelineConfig `option:"mandatory" validate:"required"`
 	logger         logger.Logger              `option:"mandatory" validate:"required"`
+	outbox         outboxPutter               `option:"mandatory" validate:"required"`
+	resultHandler  resultHandler              `option:"mandatory" validate:"required"`
 }
 
 type UseCase struct {
@@ -83,22 +95,17 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 		slog.String("status", fileModel.GetData().Uploader.Status.String()),
 	)
 
-	if fileModel.GetData().Uploader.Status == shared.FileUploadTaskStatusCompleted {
+	if fileModel.ID == 0 || fileModel.IsUploadCompleted() {
 		taskLogger.DebugContext(ctx, "fileModel already completed")
 		return Response{}, nil
 	}
 
-	var jobID outboxtypes.JobID
-	var jobStatus string
-	defer func() {
-		if errReturn == nil {
-			return
-		}
+	if req.JobID != nil {
+		return u.poll(ctx, fileModel, req)
+	}
 
-		u.publish(ctx, fileModel.GetData().Uploader.UserUUID, createEvent(
-			fileModel, jobID, jobStatus, shared.FileUploadTaskStatusFailed,
-		))
-	}()
+	// Dispatch uncertainty is not a terminal media failure. Return the error
+	// to the durable worker; retry the same key without publishing Failed.
 
 	sourceURL, err := u.sourceResolver.Resolve(ctx, req.FilePath)
 	if err != nil {
@@ -124,11 +131,25 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 		return Response{}, fmt.Errorf("resize request: %w", err)
 	}
 
-	jobID = respClient.JobID
-	jobStatus = respClient.Status
-	u.publish(ctx, fileModel.GetData().Uploader.UserUUID, createEvent(
-		fileModel, jobID, jobStatus, shared.FileUploadTaskStatusProcessing,
-	))
+	jobID := respClient.JobID
+	jobStatus := respClient.Status
+	deadline := time.Now().Add(7 * 24 * time.Hour)
+	req.JobID = &jobID
+	req.PollDeadline = &deadline
+	// Drop the signed source URL. Polling never resolves or submits it again.
+	// An old worker also fails source-path validation rather than re-submitting.
+	req.FilePath = ""
+	if err := u.schedulePoll(ctx, req); err != nil {
+		return Response{}, err
+	}
+	// A retained failed admission also replies 202/queued. Replaying it cannot
+	// restart this upload or move its notification back to Processing; the
+	// idempotent failed poll would not publish a second corrective Failed event.
+	if fileModel.GetData().Uploader.Status != shared.FileUploadTaskStatusFailed {
+		u.publish(ctx, fileModel.GetData().Uploader.UserUUID, createEvent(
+			fileModel, jobID, jobStatus, shared.FileUploadTaskStatusProcessing,
+		))
+	}
 
 	return Response{
 		JobID:  respClient.JobID,

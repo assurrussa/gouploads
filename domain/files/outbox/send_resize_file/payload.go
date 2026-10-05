@@ -4,13 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/assurrussa/gouploads/domain/files/shared"
 )
 
-type Payload struct {
-	FileID          int64  `json:"fileId"`
-	FilePath        string `json:"filePath"`
-	SkipResizeVideo bool   `json:"skipResize"`
-}
+type Payload = shared.MediaDispatchPayload
 
 func NewPayload(
 	fileID int64,

@@ -308,10 +308,10 @@ func TestSendResizeCancellationAndInvalidJSON(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	service := clientresizer.Must(clientresizer.NewOptions(server.Client(), server.URL, server.URL, logger.Discard()))
-	_, err := service.SendResize(t.Context(), clientresizer.Request{Data: []byte(`{}`)})
+	_, err := service.SendResize(t.Context(), clientresizer.Request{TypeMedia: "image", Data: []byte(`{}`)})
 	require.ErrorContains(t, err, "decode resize response")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = service.SendResize(ctx, clientresizer.Request{Data: []byte(`{}`)})
+	_, err = service.SendResize(ctx, clientresizer.Request{TypeMedia: "image", Data: []byte(`{}`)})
 	require.ErrorIs(t, err, context.Canceled)
 }

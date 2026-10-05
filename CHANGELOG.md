@@ -14,6 +14,12 @@
 
 ### Fixed
 
+- Media admission now persists job-ID polling continuations, reconciles missed
+  success callbacks and terminal failures, honors transient Retry-After, and
+  keeps uncertain outcomes out of the terminal-failed state. Finalized rows
+  with cleared uploader metadata cannot be downgraded by late failure notices.
+  Upgrade all workers together; see `docs/media-admission.md`.
+
 - Video previews and thumbnails are downloaded from their original video
   processor's origin when image and video resizers use different addresses.
   Their image media type, strict origin checks and credential-free downloads

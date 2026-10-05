@@ -653,3 +653,30 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   and fail closed beyond that limit. Regressions include valid large tags,
   forged frames, truncated frames, exact byte/checksum replay, and no writes
   from rejected reader/stored/finalizer paths.
+
+## 2026-10-05: durable media admission client reconciliation
+
+- Keep file ID as the logical attempt key; re-signing a source does not refresh
+  an admitted payload. Intentional reprocessing needs a fresh upload/file ID.
+- Persist polling continuations in the existing send-resize outbox job, using
+  the returned logical job ID. Required constructor dependencies prevent a
+  silently callback-only client, since the server has no failed callback.
+- Stop polling after completed file state; handle failed GET via row-locked
+  persistence that cannot downgrade completion. Unknown/expired evidence stays
+  an operator-visible outbox error, never an automatic new logical attempt.
+- Admission/network errors no longer publish a fabricated terminal failure.
+- Verification passed: generated options/mocks plus repository formatting are
+  reproducible; focused tests, integration-tag compilation, `make check`
+  (format, vet, lint and full race/coverage), public surface and clean local
+  external-consumer gates pass. Real PostgreSQL checks pass for durable failure
+  persistence/completion fencing, TUS and portable local-media finalization.
+- The local-media harness now delivers the persisted poll after callback
+  completion and verifies that it schedules no further work.
+- Independent review caught a retained failed admission replay incorrectly
+  emitting a Processing notification. Terminal-failure replays now suppress
+  that misleading event while preserving same-key reconciliation.
+- Live admission acceptance is prepared but not yet run: native Picodata
+  26.1.3 cannot create its mandatory Unix admin socket in the cloud sandbox.
+  Real libvips 8.16.1 thumbnail conversion passed independently. No live-chain,
+  scheduler, S3-provider, published-version or release-readiness pass is claimed.
+  No production cutover or enablement was performed.

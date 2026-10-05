@@ -203,6 +203,8 @@ func provideUseCaseDeleteFile(
 }
 
 func provideUseCaseSendResizeFile(
+	outboxSvc *outbox.Service,
+	listener *listenresizefile.UseCase,
 	repo *filerepo.Repo,
 	resizer *clientresizer.Service,
 	sourceResolver sourceurl.Resolver,
@@ -218,6 +220,8 @@ func provideUseCaseSendResizeFile(
 		uploadCfg.Image,
 		uploadCfg.Video,
 		lg,
+		outboxSvc,
+		listener,
 	))
 }
 

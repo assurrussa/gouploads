@@ -67,3 +67,12 @@ func TestIdentityAndEventSurface(t *testing.T) {
 	deps := host.OriginalRuntimeDeps{Events: publisher{}}
 	require.NotNil(t, deps.Events)
 }
+
+func TestMediaCompletionAndFailureSurface(t *testing.T) {
+	file := host.File{Data: &host.FileData{Presets: map[host.PresetName]host.FilePreset{"main": {}}}}
+	require.True(t, file.IsUploadCompleted())
+	require.NoError(t, (host.ListenResizeRequest{ExternalID: 1, Status: "failed"}).Validate())
+	require.Error(t, (host.ListenResizeRequest{ExternalID: 1, Status: "done"}).Validate())
+	var repo *host.FileRepo
+	_ = repo.MarkMediaFailed
+}
