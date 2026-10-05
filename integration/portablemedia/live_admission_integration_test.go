@@ -284,7 +284,7 @@ func liveSourceResolver(t *testing.T, endpoint string, ttl time.Duration) host.S
 	t.Helper()
 	resolver, err := host.NewSourceURLResolver(host.StorageConfig{
 		Driver: host.StorageDriverS3,
-		Public: host.StoragePublicConfig{Prefix: "media/v1"},
+		Public: host.StoragePublicConfig{Prefix: "media/v1", BaseURL: endpoint},
 		S3: host.StorageS3Config{
 			Endpoint: endpoint, Region: "us-east-1", Bucket: "final", StagingBucket: "source",
 			AccessKey: "SYNTHETIC", SecretKey: "synthetic-local-fixture-only", ForcePathStyle: true,
@@ -294,6 +294,29 @@ func liveSourceResolver(t *testing.T, endpoint string, ttl time.Duration) host.S
 	})
 	require.NoError(t, err)
 	return resolver
+}
+
+func TestLiveSourceResolverFixture(t *testing.T) {
+	const endpoint = "http://127.0.0.1:18085"
+	var previous *url.URL
+	for _, ttl := range []time.Duration{15 * time.Minute, 16 * time.Minute} {
+		resolver := liveSourceResolver(t, endpoint, ttl)
+		signed, err := resolver.Resolve(context.Background(), "tmp/live-image.png")
+		require.NoError(t, err)
+		parsed, err := url.Parse(signed)
+		require.NoError(t, err)
+		require.Equal(t, "http", parsed.Scheme)
+		require.Equal(t, "127.0.0.1:18085", parsed.Host)
+		require.Equal(t, "/source/tmp/live-image.png", parsed.Path)
+		require.Equal(t, "AWS4-HMAC-SHA256", parsed.Query().Get("X-Amz-Algorithm"))
+		require.Equal(t, strconv.Itoa(int(ttl.Seconds())), parsed.Query().Get("X-Amz-Expires"))
+		require.NotEmpty(t, parsed.Query().Get("X-Amz-Signature"))
+		if previous != nil {
+			require.Equal(t, previous.Path, parsed.Path)
+			require.NotEqual(t, previous.Query().Get("X-Amz-Signature"), parsed.Query().Get("X-Amz-Signature"))
+		}
+		previous = parsed
+	}
 }
 
 func seedLiveMediaFile(t *testing.T, ctx context.Context, repo *host.FileRepo, root, relative string, body []byte, kind model.FileType, mime string) model.File {
