@@ -167,6 +167,7 @@ func TestIntegrationLocalMedia(t *testing.T) {
 		cfg.Image,
 		cfg.Video,
 		logger.Discard(),
+		outbox, listener,
 	))
 	uploadService := uploadservice.Must(uploadservice.NewOptions(tx, outbox, repo, logger.Discard(), storage))
 	userID := host.NewUserID()
@@ -305,6 +306,14 @@ func processLocalUpload(
 	require.NoError(t, err)
 	require.Empty(t, completed.GetData().Uploader)
 	require.Empty(t, completed.URL)
+	// Admission dispatch persists a status continuation. Once the callback has
+	// finalized the row, delivering it must stop without contacting the resizer
+	// or scheduling another continuation.
+	pollPayloads := runtime.outbox.TakeAll(sendresizefilejob.JobName)
+	require.Len(t, pollPayloads, 1)
+	require.NoError(t, runtime.sendJob.Handle(ctx, pollPayloads[0]))
+	require.Empty(t, runtime.outbox.TakeAll(sendresizefilejob.JobName))
+	require.Empty(t, runtime.outbox.TakeAll(uploadfilejob.JobName))
 	return completed
 }
 

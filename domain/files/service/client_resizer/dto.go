@@ -9,7 +9,7 @@ import (
 )
 
 type Request struct {
-	TypeMedia string `validate:"required"`
+	TypeMedia string `validate:"required,oneof=image video"`
 	Data      []byte `validate:"required"`
 }
 

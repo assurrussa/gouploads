@@ -2,6 +2,7 @@ package listenresizefile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -64,8 +65,12 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 		return Response{}, fmt.Errorf("validate request: %w", err)
 	}
 
+	if req.Status == "failed" {
+		return u.handleFailure(ctx, req)
+	}
+
 	if req.Status != "done" {
-		u.logger.InfoContext(ctx, "listen resize file another state", slog.Any("request", req))
+		u.logger.InfoContext(ctx, "listen resize file another state", slog.String("status", req.Status))
 
 		return Response{}, nil
 	}
@@ -74,6 +79,10 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 	fileModel, err := u.fileRepository.GetByID(ctx, fileID)
 	if err != nil {
 		return Response{}, fmt.Errorf("get fileModel %d: %w", fileID, err)
+	}
+
+	if fileModel.ID == 0 || fileModel.IsUploadCompleted() {
+		return Response{}, nil
 	}
 
 	tmNow := time.Now()
@@ -146,4 +155,25 @@ func buildEventFileEnvelope(fileModel model.File) *shared.FileUploadEventFile {
 		Height:       fileModel.GetHeight(),
 		IsPrimary:    fileModel.IsPrimary,
 	}
+}
+
+// failureRepository is an optional capability for older custom repositories.
+// Failed callbacks fail closed unless durable, completion-fenced updates exist.
+type failureRepository interface {
+	MarkMediaFailed(ctx context.Context, fileID int64) (model.File, bool, error)
+}
+
+func (u *UseCase) handleFailure(ctx context.Context, req Request) (Response, error) {
+	repo, ok := u.fileRepository.(failureRepository)
+	if !ok {
+		return Response{}, errors.New("failed media callback requires a failure-capable file repository")
+	}
+	file, changed, err := repo.MarkMediaFailed(ctx, req.ExternalID)
+	if err != nil {
+		return Response{}, fmt.Errorf("persist media failure: %w", err)
+	}
+	if changed {
+		u.publish(ctx, file.GetData().Uploader.UserUUID, createEvent(file, req, shared.FileUploadTaskStatusFailed))
+	}
+	return Response{}, nil
 }

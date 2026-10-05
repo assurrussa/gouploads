@@ -23,6 +23,8 @@ func NewOptions(
 	imagePipeline config.ImagePipelineConfig,
 	videoPipeline config.VideoPipelineConfig,
 	logger logger.Logger,
+	outbox outboxPutter,
+	resultHandler resultHandler,
 	options ...OptOptionsSetter,
 ) Options {
 	var o Options
@@ -36,6 +38,8 @@ func NewOptions(
 	o.imagePipeline = imagePipeline
 	o.videoPipeline = videoPipeline
 	o.logger = logger
+	o.outbox = outbox
+	o.resultHandler = resultHandler
 
 	for _, opt := range options {
 		opt(&o)
@@ -52,6 +56,8 @@ func (o *Options) Validate() error {
 	errs.Add(errors461e464ebed9.NewValidationError("imagePipeline", _validate_Options_imagePipeline(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("videoPipeline", _validate_Options_videoPipeline(o)))
 	errs.Add(errors461e464ebed9.NewValidationError("logger", _validate_Options_logger(o)))
+	errs.Add(errors461e464ebed9.NewValidationError("outbox", _validate_Options_outbox(o)))
+	errs.Add(errors461e464ebed9.NewValidationError("resultHandler", _validate_Options_resultHandler(o)))
 	return errs.AsError()
 }
 
@@ -100,6 +106,20 @@ func _validate_Options_videoPipeline(o *Options) error {
 func _validate_Options_logger(o *Options) error {
 	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.logger, "required"); err != nil {
 		return fmt461e464ebed9.Errorf("field `logger` did not pass the test: %w", err)
+	}
+	return nil
+}
+
+func _validate_Options_outbox(o *Options) error {
+	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.outbox, "required"); err != nil {
+		return fmt461e464ebed9.Errorf("field `outbox` did not pass the test: %w", err)
+	}
+	return nil
+}
+
+func _validate_Options_resultHandler(o *Options) error {
+	if err := validator461e464ebed9.GetValidatorFor(o).Var(o.resultHandler, "required"); err != nil {
+		return fmt461e464ebed9.Errorf("field `resultHandler` did not pass the test: %w", err)
 	}
 	return nil
 }

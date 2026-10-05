@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	logger "github.com/assurrussa/gologger"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
@@ -34,6 +35,9 @@ type TestSuite struct {
 	resizeClientMock   *sendresizefilemocks.MockresizeClient
 	sourceResolverMock *sendresizefilemocks.MocksourceURLResolver
 	eventStreamMock    *eventstreammocks.MockPublisher
+	outboxMock         *sendresizefilemocks.MockoutboxPutter
+	resultMock         *sendresizefilemocks.MockresultHandler
+	queuedPolls        *[]string
 
 	imagePipeline config.ImagePipelineConfig
 	videoPipeline config.VideoPipelineConfig
@@ -55,6 +59,14 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 		resizeClientMock := sendresizefilemocks.NewMockresizeClient(ctrl)
 		sourceResolverMock := sendresizefilemocks.NewMocksourceURLResolver(ctrl)
 		eventStreamMock := eventstreammocks.NewMockPublisher(ctrl)
+		outboxMock := sendresizefilemocks.NewMockoutboxPutter(ctrl)
+		queuedPolls := []string{}
+		outboxMock.EXPECT().Put(gomock.Any(), "send_resize_file", gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, _ string, payload string, _ time.Time) (outboxtypes.JobID, error) {
+				queuedPolls = append(queuedPolls, payload)
+				return outboxtypes.NewJobID(), nil
+			}).AnyTimes()
+		resultMock := sendresizefilemocks.NewMockresultHandler(ctrl)
 		sourceResolverMock.EXPECT().
 			Resolve(gomock.Any(), gomock.Any()).
 			DoAndReturn(func(_ context.Context, source string) (string, error) { return source, nil }).
@@ -126,6 +138,7 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 			imagePipeline,
 			videoPipeline,
 			log,
+			outboxMock, resultMock,
 		))
 
 		return &TestSuite{
@@ -134,9 +147,10 @@ func NewTestSuite(t *testing.T) (context.Context, context.CancelFunc, *TestSuite
 			resizeClientMock:   resizeClientMock,
 			sourceResolverMock: sourceResolverMock,
 			eventStreamMock:    eventStreamMock,
-			imagePipeline:      imagePipeline,
-			videoPipeline:      videoPipeline,
-			expectedError:      errors.New("expected error"),
+			outboxMock:         outboxMock, resultMock: resultMock, queuedPolls: &queuedPolls,
+			imagePipeline: imagePipeline,
+			videoPipeline: videoPipeline,
+			expectedError: errors.New("expected error"),
 		}
 	})
 }
@@ -145,7 +159,7 @@ func TestHandle_MustInit(t *testing.T) {
 	assert.Panics(t, func() {
 		sendresizefile.Must(sendresizefile.NewOptions(
 			nil, nil, nil, nil,
-			config.ImagePipelineConfig{}, config.VideoPipelineConfig{}, nil,
+			config.ImagePipelineConfig{}, config.VideoPipelineConfig{}, nil, nil, nil,
 		))
 	})
 }
@@ -159,7 +173,7 @@ func TestHandle_Success(t *testing.T) {
 		JobID:  jobID,
 		Status: "queued",
 	}
-	eventFileSendResizer := createEvent(fileModel, respClient, shared.FileUploadTaskStatusProcessing)
+	eventFileSendResizer := createEvent(fileModel, respClient)
 	//nolint:lll // tests
 	dataSend := `{"idempotency_key":"123456","type":"image","skip_resize":false,"notify_webhook_url":"https://webhook.example.com/hook/videos/resizer","metadata":{"fileId":"123456"},"presets":[{"format":"jpg","height":320,"name":"thumbnail_jpg","target":"image","fit":"cover","width":320,"quality":82,"video_bitrate":0,"audio_bitrate":0},{"format":"webp","height":320,"name":"thumbnail_webp","target":"image","fit":"cover","width":320,"quality":82,"video_bitrate":0,"audio_bitrate":0}],"source":{"url":"https://resizer.example.com/src/tmp/image.jpg"}}`
 
@@ -195,7 +209,7 @@ func TestHandle_SuccessSkipResizeVideo(t *testing.T) {
 		JobID:  jobID,
 		Status: "queued",
 	}
-	eventFileSendResizer := createEvent(fileModel, respClient, shared.FileUploadTaskStatusProcessing)
+	eventFileSendResizer := createEvent(fileModel, respClient)
 	//nolint:lll // tests
 	dataSend := `{"idempotency_key":"123456","type":"video","skip_resize":true,"notify_webhook_url":"https://webhook.example.com/hook/images/resizer","metadata":{"fileId":"123456"},"presets":[{"format":"mp4","height":320,"name":"small","target":"video","fit":"","width":320,"quality":82,"video_bitrate":0,"audio_bitrate":0,"thumbnail":{"enabled":true,"timestamp":1,"width":160,"height":90,"format":"webp"},"preview":{"enabled":true,"width":320,"height":180,"format":"jpg"}}],"source":{"url":"https://resizer.example.com/src/tmp/image.jpg"}}`
 
@@ -230,7 +244,7 @@ func TestHandle_SuccessVideo(t *testing.T) {
 		JobID:  jobID,
 		Status: "queued",
 	}
-	eventFileSendResizer := createEvent(fileModel, respClient, shared.FileUploadTaskStatusProcessing)
+	eventFileSendResizer := createEvent(fileModel, respClient)
 
 	var capturedRequest clientresizer.Request
 	ts.fileRepositoryMock.EXPECT().GetByID(ctx, fileModel.ID).Return(fileModel, nil).Times(1)
@@ -279,7 +293,7 @@ func TestHandle_ErrorPublish(t *testing.T) {
 		JobID:  jobID,
 		Status: "queued",
 	}
-	eventFileSendResizer := createEvent(fileModel, respClient, shared.FileUploadTaskStatusProcessing)
+	eventFileSendResizer := createEvent(fileModel, respClient)
 
 	ts.fileRepositoryMock.EXPECT().GetByID(ctx, fileModel.ID).Return(fileModel, nil).Times(1)
 	ts.resizeClientMock.EXPECT().SendResize(ctx, gomock.Any()).Return(respClient, nil).Times(1)
@@ -303,15 +317,9 @@ func TestHandle_ErrorSendResize(t *testing.T) {
 
 	fileModel := testshelpers.CreateFile(t)
 	respClient := clientresizer.Response{}
-	eventFileSendResizer := createEvent(fileModel, respClient, shared.FileUploadTaskStatusFailed)
 
 	ts.fileRepositoryMock.EXPECT().GetByID(ctx, fileModel.ID).Return(fileModel, nil).Times(1)
 	ts.resizeClientMock.EXPECT().SendResize(ctx, gomock.Any()).Return(respClient, ts.expectedError).Times(1)
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, fileModel.GetData().Uploader.UserUUID, testsmatcher.NewEventPublishMatcher(
-			"file publish send resize matcher", eventFileSendResizer,
-		)).
-		Return(nil).Times(1)
 
 	resp, err := ts.useCase.Handle(ctx, sendresizefile.Request{
 		FilePath: sourceURL,
@@ -328,14 +336,8 @@ func TestHandle_ErrorPayloadType(t *testing.T) {
 	fileModel := testshelpers.CreateFile(t)
 	fileModel.MimeType = "unknown/type"
 	respClient := clientresizer.Response{}
-	eventFileSendResizer := createEvent(fileModel, respClient, shared.FileUploadTaskStatusFailed)
 
 	ts.fileRepositoryMock.EXPECT().GetByID(ctx, fileModel.ID).Return(fileModel, nil).Times(1)
-	ts.eventStreamMock.EXPECT().
-		Publish(ctx, fileModel.GetData().Uploader.UserUUID, testsmatcher.NewEventPublishMatcher(
-			"file publish send resize matcher", eventFileSendResizer,
-		)).
-		Return(nil).Times(1)
 
 	resp, err := ts.useCase.Handle(ctx, sendresizefile.Request{
 		FilePath: sourceURL,
@@ -388,9 +390,8 @@ func TestHandle_Empty(t *testing.T) {
 func createEvent(
 	fileModel model.File,
 	respClient clientresizer.Response,
-	status shared.FileUploadTaskStatus,
 ) shared.FileUploadStatusEvent {
-	eventFileSendResizer := shared.NewFileUploadStatusEvent(fileModel.ID, status)
+	eventFileSendResizer := shared.NewFileUploadStatusEvent(fileModel.ID, shared.FileUploadTaskStatusProcessing)
 	eventFileSendResizer.Metadata = map[string]any{
 		"jobId":        respClient.JobID,
 		"jobStatus":    respClient.Status,

@@ -396,3 +396,12 @@ reader/multipart audio fails before staging and stored audio fails before
 metadata or queue writes, even with `SkipResizer=true`. No image/video resize
 job is emitted. Run an original-only runtime for recording strategies rather
 than disabling an existing host's image/video pipeline silently.
+
+### Durable media admission
+
+The media dispatch worker persists the accepted logical job ID and reconciles
+GET status through the existing outbox registration, including terminal failure
+and missed success callbacks. All client workers must understand the polling
+continuation payload before new producers run. See [media admission and
+cutover](media-admission.md) for key scope, signed-source TTL, failure semantics,
+intentional reprocessing, and migration requirements.

@@ -199,3 +199,8 @@ media pipeline; use the standalone guide first for the new default.
 ## License
 
 MIT
+
+Media-resizer admission and durable client reconciliation follow the
+[media admission contract](docs/media-admission.md). A 202 is not completion;
+all client workers must be upgraded together before continuation-producing
+clients are enabled.

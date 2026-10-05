@@ -26,7 +26,7 @@ release-version-check:
 	@printf '%s\n' "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' || \
 		(echo "VERSION must be an exact semver tag" && exit 2)
 
-source-readiness: check test-surface test-surface-integration test-tus-postgres-integration test-source-url-s3-integration test-portable-media-e2e test-originals-integration externalconsumer-local anonymous-source import-policy-site
+source-readiness: check test-surface test-surface-integration test-tus-postgres-integration test-media-continuation-postgres-integration test-source-url-s3-integration test-portable-media-e2e test-originals-integration externalconsumer-local anonymous-source import-policy-site
 
 publish-readiness: release-version-check prepare source-readiness
 	@git diff --exit-code
@@ -44,6 +44,10 @@ test-surface-integration:
 
 test-tus-postgres-integration:
 	sh ./scripts/with-integration-postgres.sh go test -tags integration ./domain/files/service/tusupload -run TestIntegration_PostgresSessionRepository -count=1
+
+.PHONY: test-media-continuation-postgres-integration
+test-media-continuation-postgres-integration:
+	sh ./scripts/with-integration-postgres.sh go test -race -tags integration ./integration/portablemedia -run '^TestIntegrationAdmissionContinuationRestart$$' -count=1
 
 test-source-url-s3-integration:
 	go test -tags integration ./infrastructure/storage/files/sourceurl -run TestIntegrationPrivateS3SourceDirectPresignedGET -count=1

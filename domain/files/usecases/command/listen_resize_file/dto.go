@@ -1,19 +1,20 @@
 package listenresizefile
 
 import (
+	"errors"
 	"time"
 
 	validator "github.com/assurrussa/gouploads/internal/validation"
 )
 
 type Request struct {
-	ExternalID int64
+	ExternalID int64  `validate:"gt=0"`
 	Status     string `validate:"required"`
 	Error      string
 	Attempt    uint32
 	Metadata   map[string]any
 	Timestamp  time.Time
-	Artifacts  []Artifact `validate:"required,dive"`
+	Artifacts  []Artifact `validate:"dive"`
 }
 
 type Artifact struct {
@@ -27,7 +28,13 @@ type Artifact struct {
 }
 
 func (r Request) Validate() error {
-	return validator.Validator.Struct(r)
+	if err := validator.Validator.Struct(r); err != nil {
+		return err
+	}
+	if r.Status == "done" && len(r.Artifacts) == 0 {
+		return errors.New("completed media job requires artifacts")
+	}
+	return nil
 }
 
 type Response struct{}

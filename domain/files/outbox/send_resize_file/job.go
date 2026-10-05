@@ -2,11 +2,15 @@ package sendresizefilejob
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	logger "github.com/assurrussa/gologger"
+	"github.com/assurrussa/outbox/outbox"
 	sharedjob "github.com/assurrussa/outbox/shared/job"
 
+	clientresizer "github.com/assurrussa/gouploads/domain/files/service/client_resizer"
 	sendresizefile "github.com/assurrussa/gouploads/domain/files/usecases/command/send_resize_file"
 )
 
@@ -63,12 +67,24 @@ func (j *Job) Handle(ctx context.Context, payload string) (errReturn error) {
 
 	_, err = j.sendResizeFileUseCase.Handle(ctx, sendresizefile.Request{
 		FilePath:        data.FilePath,
+		JobID:           data.JobID,
+		PollDeadline:    data.PollDeadline,
 		FileID:          data.FileID,
 		SkipResizeVideo: data.SkipResizeVideo,
 	})
-	if err != nil {
-		return fmt.Errorf("send resile file %d: %w", data.FileID, err)
+	if err == nil {
+		return nil
 	}
-
-	return nil
+	wrapped := fmt.Errorf("send resize file %d: %w", data.FileID, err)
+	var admission *clientresizer.AdmissionError
+	if !errors.As(err, &admission) {
+		return wrapped
+	}
+	if !admission.Retryable() {
+		return outbox.Permanent(wrapped)
+	}
+	if admission.RetryAfter > 0 {
+		return outbox.RetryAt(wrapped, time.Now().Add(admission.RetryAfter))
+	}
+	return wrapped
 }

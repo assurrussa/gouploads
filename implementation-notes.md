@@ -653,3 +653,52 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   and fail closed beyond that limit. Regressions include valid large tags,
   forged frames, truncated frames, exact byte/checksum replay, and no writes
   from rejected reader/stored/finalizer paths.
+
+## 2026-10-05: durable media admission client reconciliation
+
+- Keep file ID as the logical attempt key; re-signing a source does not refresh
+  an admitted payload. Intentional reprocessing needs a fresh upload/file ID.
+- Persist polling continuations in the existing send-resize outbox job, using
+  the returned logical job ID. Required constructor dependencies prevent a
+  silently callback-only client, since the server has no failed callback.
+- Stop polling after completed file state; handle failed GET via row-locked
+  persistence that cannot downgrade completion. Unknown/expired evidence stays
+  an operator-visible outbox error, never an automatic new logical attempt.
+- Admission/network errors no longer publish a fabricated terminal failure.
+- Verification passed: generated options/mocks plus repository formatting are
+  reproducible; focused tests, integration-tag compilation, `make check`
+  (format, vet, lint and full race/coverage), public surface and clean local
+  external-consumer gates pass. Real PostgreSQL checks pass for durable failure
+  persistence/completion fencing, TUS and portable local-media finalization.
+- The local-media harness now delivers the persisted poll after callback
+  completion and verifies that it schedules no further work.
+- Independent review caught a retained failed admission replay incorrectly
+  emitting a Processing notification. Terminal-failure replays now suppress
+  that misleading event while preserving same-key reconciliation.
+- Live admission acceptance is prepared but not yet run: native Picodata
+  26.1.3 cannot create its mandatory Unix admin socket in the cloud sandbox.
+  Real libvips 8.16.1 thumbnail conversion passed independently. No live-chain,
+  scheduler, S3-provider, published-version or release-readiness pass is claimed.
+  No production cutover or enablement was performed.
+
+## 2026-10-05: live admission and persisted continuation acceptance
+
+- The isolated real media-resizer/Picodata chain subsequently passed with
+  PostgreSQL file state, real image/video/preview artifacts, lost POST response,
+  re-signed source replay, callback/poll ordering, retained terminal failure and
+  fresh-upload identity. Race detection was enabled; no cases were skipped.
+- A separate PostgreSQL acceptance now runs the real outbox scheduler, observes
+  the source-less continuation and its 30-second availability in SQL, rebuilds
+  worker services and verifies the same job/payload/deadline across a two-second
+  Retry-After before durable failure. The queue and DLQ end empty; no second POST
+  is made. The source is retained. Its HTTP endpoint is an explicit fixture.
+- This proves service reconstruction, not abrupt process-crash recovery. The
+  live media chain still manually delivers collected callback/outbox payloads;
+  neither test claims exactly-once processing, full TUS ingress, or a soak test.
+- The new PostgreSQL gate passed with race detection. Changed-line integration
+  lint, integration compilation, the SDK signing helper and strict host import
+  policy passed. Older unchanged integration-helper lint findings remain outside
+  that changed-line pass. The cloud anonymous-source probe was blocked by direct
+  DNS/network access and must run on a supported network before release.
+- MinIO/provider and exact-published-version gates remain separate. No release
+  tag, merge, deployment or production admission enablement is implied.

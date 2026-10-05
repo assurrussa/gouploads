@@ -15,7 +15,8 @@ make publish-readiness VERSION="$VERSION"
 This verifies `go.mod`/`go.sum` tidiness, the host facade, host test-support
 package, integration-tag `hosttest` surface, PostgreSQL TUS fencing test,
 direct-source S3 integration, mandatory local-filesystem and MinIO/PostgreSQL
-portable-media E2E,
+portable-media E2E, real PostgreSQL media-continuation persistence,
+worker-service reconstruction and Retry-After scheduling,
 external consumer manifest, local
 clean consumer probe, integration-tag clean consumer probe, import-policy
 checker, and the full module test suite.
@@ -99,6 +100,13 @@ cross-repository visibility, and competing finalize exclusion.
 
 Outbox storage migrations are not owned by `gouploads`; document them as a host
 requirement for whichever outbox backend the host uses.
+
+Run `make test-media-continuation-postgres-integration` for the source-less
+media polling wire contract. It uses the real PostgreSQL queue and scheduler,
+reconstructs worker services before the persisted 30-second continuation is due,
+and verifies unchanged identity/deadline through a transient GET retry before
+durable terminal failure. Its HTTP endpoint is a fixture; this complements the
+live media-chain gate and does not prove abrupt process-crash recovery.
 
 ## Published-Version Gate
 

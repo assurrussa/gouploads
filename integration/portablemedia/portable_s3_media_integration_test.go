@@ -807,7 +807,10 @@ func (c *outboxCollector) TakeAll(name string) []string {
 type noopTransport struct{}
 
 func (noopTransport) Do(*http.Request) (*http.Response, error) {
-	return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	return &http.Response{
+		StatusCode: http.StatusAccepted,
+		Body:       io.NopCloser(strings.NewReader(`{"job_id":"9d435a36-6fad-4a52-a0a7-d474d3393ab3","status":"queued"}`)),
+	}, nil
 }
 
 type artifactHTTPServer struct {

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	logger "github.com/assurrussa/gologger"
 	"github.com/gofiber/fiber/v3"
@@ -72,6 +73,9 @@ func New(opts Options) (*Service, error) {
 }
 
 func (s *Service) SendResize(ctx context.Context, req Request) (Response, error) {
+	if err := req.Validate(); err != nil {
+		return Response{}, fmt.Errorf("validate resize request: %w", err)
+	}
 	rawToken := s.tokenForType(ctx, req.TypeMedia)
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.getMediaResizerURL(req), bytes.NewReader(req.Data))
@@ -85,24 +89,33 @@ func (s *Service) SendResize(ctx context.Context, req Request) (Response, error)
 	}
 	response, err := s.client.Do(request)
 	if err != nil {
-		return Response{}, fmt.Errorf("send resize request: %w", err)
+		return Response{}, fmt.Errorf("send resize request: %w", redactTransportURL(err))
 	}
 	if response == nil || response.Body == nil {
 		return Response{}, errors.New("send resize request: empty response")
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusAccepted {
-		return Response{}, fmt.Errorf("send resize request: unexpected status %d", response.StatusCode)
+		return Response{}, &AdmissionError{
+			StatusCode: response.StatusCode,
+			RetryAfter: retryAfter(response.Header.Get("Retry-After"), time.Now()),
+		}
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := io.ReadAll(io.LimitReader(response.Body, 64*1024+1))
 	if err != nil {
 		return Response{}, fmt.Errorf("read resize response: %w", err)
+	}
+	if len(body) > 64*1024 {
+		return Response{}, errors.New("resize response exceeds 64 KiB")
 	}
 	var resp Response
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return Response{}, fmt.Errorf("decode resize response: %w", err)
 	}
 
+	if resp.JobID.IsZero() || resp.Status != "queued" {
+		return Response{}, errors.New("invalid resize admission response")
+	}
 	return resp, nil
 }
 
