@@ -728,3 +728,24 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   The MIME fuzz run completed 65,565 executions. Independent source review has
   no remaining blockers. Real S3/provider and exact published-version gates
   remain separate; no release-readiness pass, release or deployment is claimed.
+
+
+## 2026-10-06: additive S3 multi-delete compatibility
+
+- A real pinned-MinIO gate exposed a pre-existing SDK/provider mismatch after
+  successful artifact finalization: modern SDK DeleteObjects sent CRC32 while
+  the older provider required Content-MD5. Baseline and candidate wire captures
+  were identical; this was separate from MIME and admission changes.
+- Added the public Smithy content-checksum middleware only to DeleteObjects,
+  retaining CRC32 and SigV4, with the same compatibility option for fixture
+  teardown. No dependency version or global integrity setting changes.
+- Wire regressions start red for missing MD5 and cover one key with XML escaping,
+  1001-key batching and body/checksum replay after a retryable response.
+- The test stand records the latest official non-prerelease Community source pin
+  separately from production. Its upstream archive/support status is explicit;
+  updating the stand never replaces legacy compatibility or real S3 acceptance.
+- Local verification passed after the compatibility change: all `make check`
+  stages, full race/coverage, public/integration-tag surfaces, normal/integration
+  local consumers and compilation of both real-service integration packages.
+  Independent scoped source review has no remaining blockers. Real-provider
+  reruns remain mandatory and are tracked separately from these local checks.

@@ -198,7 +198,7 @@ func TestStorageAdapter_Commit(t *testing.T) {
 		})
 
 	mockClient.EXPECT().
-		DeleteObjects(gomock.Any(), gomock.AssignableToTypeOf(&s3.DeleteObjectsInput{})).
+		DeleteObjects(gomock.Any(), gomock.AssignableToTypeOf(&s3.DeleteObjectsInput{}), gomock.Any()).
 		DoAndReturn(func(_ context.Context, input *s3.DeleteObjectsInput, _ ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 			assert.Equal(t, "staging-bucket", aws.ToString(input.Bucket))
 			return &s3.DeleteObjectsOutput{}, nil
@@ -266,7 +266,7 @@ func TestStorageAdapter_Delete(t *testing.T) {
 	require.NoError(t, err)
 
 	mockClient.EXPECT().
-		DeleteObjects(gomock.Any(), gomock.AssignableToTypeOf(&s3.DeleteObjectsInput{})).
+		DeleteObjects(gomock.Any(), gomock.AssignableToTypeOf(&s3.DeleteObjectsInput{}), gomock.Any()).
 		Return(&s3.DeleteObjectsOutput{}, nil)
 
 	require.NoError(t, storage.Delete(context.Background(), "tmp/uploads/example.txt"))
@@ -282,7 +282,7 @@ func TestStorageAdapter_DeleteReportsPerObjectErrors(t *testing.T) {
 	require.NoError(t, err)
 
 	mockClient.EXPECT().
-		DeleteObjects(gomock.Any(), gomock.AssignableToTypeOf(&s3.DeleteObjectsInput{})).
+		DeleteObjects(gomock.Any(), gomock.AssignableToTypeOf(&s3.DeleteObjectsInput{}), gomock.Any()).
 		Return(&s3.DeleteObjectsOutput{Errors: []types.Error{{
 			Key:     aws.String("media/v1/post/1/file/main.png"),
 			Code:    aws.String("AccessDenied"),

@@ -140,3 +140,8 @@ canonical MIME, size and checksum after finalization and replay. Verify that
 media-resizer mode rejects audio without staging, metadata or resize jobs.
 After publication, compile `host.FileTypeAudio` from the exact published tag
 without a local replacement before updating consumer pins.
+
+
+The source-built S3 test stand's exact MinIO release/commit/checksums are recorded
+in `integration/test-services/minio-source.json`; see `docs/s3-compatibility.md`.
+Keep the legacy MD5 compatibility regression when checking a newer provider.

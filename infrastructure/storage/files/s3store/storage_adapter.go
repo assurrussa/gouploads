@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	filestorage "github.com/assurrussa/gouploads/infrastructure/storage/files"
 	"github.com/assurrussa/gouploads/internal/filesanitize"
@@ -243,6 +244,10 @@ func (s *StorageAdapter) deleteObjects(ctx context.Context, bucket string, keys 
 		output, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: aws.String(bucket),
 			Delete: &types.Delete{Objects: objects},
+		}, func(options *s3.Options) {
+			// Legacy S3 providers require Content-MD5 for multi-delete. Add it
+			// for this operation only; retain SDK checksums and request signing.
+			options.APIOptions = append(options.APIOptions, smithyhttp.AddContentChecksumMiddleware)
 		})
 		if err != nil {
 			if len(keys) == 1 {

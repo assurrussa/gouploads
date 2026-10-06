@@ -33,6 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -316,7 +317,11 @@ func storageConfig(t *testing.T, ctx context.Context, driver string) host.Storag
 			for _, object := range listed.Contents {
 				objects = append(objects, s3types.ObjectIdentifier{Key: object.Key})
 			}
-			_, err = client.DeleteObjects(cleanupCtx, &s3.DeleteObjectsInput{Bucket: aws.String(bucket), Delete: &s3types.Delete{Objects: objects}})
+			_, err = client.DeleteObjects(cleanupCtx, &s3.DeleteObjectsInput{
+				Bucket: aws.String(bucket), Delete: &s3types.Delete{Objects: objects},
+			}, func(options *s3.Options) {
+				options.APIOptions = append(options.APIOptions, smithyhttp.AddContentChecksumMiddleware)
+			})
 		}
 		require.NoError(t, err)
 		_, err = client.DeleteBucket(cleanupCtx, &s3.DeleteBucketInput{Bucket: aws.String(bucket)})

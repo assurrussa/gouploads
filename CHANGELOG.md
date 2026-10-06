@@ -14,6 +14,11 @@
 
 ### Fixed
 
+- S3 multi-object deletion now includes the legacy Content-MD5 header required by
+  older compatible providers while preserving the SDK CRC32 checksum and signing.
+  The exact source-built integration service pin and regression contract are
+  documented in `docs/s3-compatibility.md`; production providers are not upgraded.
+
 - File image/video predicates no longer panic on short MIME strings.
 - Generic TUS creation preflights the built-in uploader's effective original-only
   policy before allocating storage. Client MIME metadata remains optional;
