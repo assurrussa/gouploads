@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -168,12 +169,12 @@ func (a *FileData) Scan(value any) error {
 
 // IsImage проверяет, является ли файл изображением.
 func (f *File) IsImage() bool {
-	return f.MimeType != "" && (f.MimeType[:6] == "image/" || f.MimeType == "image/svg+xml")
+	return strings.HasPrefix(f.MimeType, "image/")
 }
 
 // IsVideo проверяет, является ли файл видео.
 func (f *File) IsVideo() bool {
-	return f.MimeType != "" && f.MimeType[:6] == "video/"
+	return strings.HasPrefix(f.MimeType, "video/")
 }
 
 // IsDocument проверяет, является ли файл документом.

@@ -76,3 +76,14 @@ func TestMediaCompletionAndFailureSurface(t *testing.T) {
 	var repo *host.FileRepo
 	_ = repo.MarkMediaFailed
 }
+
+// Optional admission validation remains available through the supported facade.
+var _ interface {
+	ValidateUploadConfig(cfg *host.FileUploadConfig) error
+} = (*host.UploadService)(nil)
+
+func TestShortMIMEThroughHostFile(t *testing.T) {
+	file := host.File{MimeType: "x"}
+	require.False(t, file.IsImage())
+	require.False(t, file.IsVideo())
+}

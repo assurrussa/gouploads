@@ -702,3 +702,50 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   DNS/network access and must run on a supported network before release.
 - MinIO/provider and exact-published-version gates remain separate. No release
   tag, merge, deployment or production admission enablement is implied.
+
+## 2026-10-06: original-policy preflight and short MIME predicates
+
+- Image/video predicates use bounded prefix checks; table and fuzz regressions
+  cover empty, short and arbitrary MIME values without changing classification.
+- Generic TUS admission asks the built-in uploader to validate the already
+  resolved policy before `Store.Create`. The optional method preserves custom
+  `TaskUploader` implementations; adapters can forward it. CMS quarantine and
+  media-mode policies retain their separate contracts.
+- The validator deliberately does not merge defaults a second time. Independent
+  review found that doing so could restore defaults for a normalized blank-only
+  extension list while the handler still treated that empty list as unrestricted.
+  A red-to-green regression now rejects it before storage allocation.
+- MIME metadata and `file_type` remain optional. Prefix tests cover every current
+  default extension, rich-text images and explicitly enabled MP3/WAV using
+  one-byte PATCH chunks. These fixtures verify admission, not complete decoding.
+- A real HTTP/FileStore completion regression rejects a forged frame after a
+  large MP3 ID3 tag, changed stored bytes and changed policy after admission.
+  Existing final content, scanner, storage and reconciliation checks are retained.
+- Go 1.27.1 verification passed: `make check` (including full race/coverage),
+  public/integration-tag surfaces, clean local normal/integration consumers,
+  PostgreSQL TUS fencing, persisted media continuation/restart/Retry-After,
+  local portable media and local originals/audio acceptance with race detection.
+  The MIME fuzz run completed 65,565 executions. Independent source review has
+  no remaining blockers. Real S3/provider and exact published-version gates
+  remain separate; no release-readiness pass, release or deployment is claimed.
+
+
+## 2026-10-06: additive S3 multi-delete compatibility
+
+- A real pinned-MinIO gate exposed a pre-existing SDK/provider mismatch after
+  successful artifact finalization: modern SDK DeleteObjects sent CRC32 while
+  the older provider required Content-MD5. Baseline and candidate wire captures
+  were identical; this was separate from MIME and admission changes.
+- Added the public Smithy content-checksum middleware only to DeleteObjects,
+  retaining CRC32 and SigV4, with the same compatibility option for fixture
+  teardown. No dependency version or global integrity setting changes.
+- Wire regressions start red for missing MD5 and cover one key with XML escaping,
+  1001-key batching and body/checksum replay after a retryable response.
+- The test stand records the latest official non-prerelease Community source pin
+  separately from production. Its upstream archive/support status is explicit;
+  updating the stand never replaces legacy compatibility or real S3 acceptance.
+- Local verification passed after the compatibility change: all `make check`
+  stages, full race/coverage, public/integration-tag surfaces, normal/integration
+  local consumers and compilation of both real-service integration packages.
+  Independent scoped source review has no remaining blockers. Real-provider
+  reruns remain mandatory and are tracked separately from these local checks.

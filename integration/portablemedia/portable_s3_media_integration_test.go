@@ -28,6 +28,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -937,6 +938,8 @@ func cleanupBucket(t *testing.T, ctx context.Context, client *s3.Client, bucket 
 		_, err = client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: aws.String(bucket),
 			Delete: &s3types.Delete{Objects: objects},
+		}, func(options *s3.Options) {
+			options.APIOptions = append(options.APIOptions, smithyhttp.AddContentChecksumMiddleware)
 		})
 	}
 	if err != nil {

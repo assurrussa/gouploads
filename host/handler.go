@@ -10,6 +10,10 @@ import (
 	"github.com/assurrussa/gouploads/shared/uploadstrategies"
 )
 
+// TaskUploader is the required upload port. An adapter may additionally forward
+// ValidateUploadConfig(*FileUploadConfig) error from UploadService so generic TUS
+// creation checks the effective processing policy before allocating storage.
+// Completion and final content validation remain required.
 type TaskUploader interface {
 	UploadBatch(ctx context.Context, req BatchRequest) ([]File, error)
 	UploadSingle(ctx context.Context, req SingleRequest) (File, error)
@@ -45,6 +49,10 @@ type UploadHandler struct {
 	inner *uploadhttp.Handler
 }
 
+// NewUploadHandler is the legacy compatibility constructor. It trusts external
+// route guards: the host must enforce object-level read, upload/resume and delete
+// authorization; authentication alone is insufficient. New integrations should
+// use NewUploadHandlerWithPolicy, whose zero policy denies access.
 func NewUploadHandler(
 	taskUploader TaskUploader,
 	fileRepo FileRepository,
