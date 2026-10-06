@@ -10,7 +10,7 @@ host applications a stable embedding facade for file uploads, TUS resumable
 and upload-related outbox jobs.
 
 The module path is `github.com/assurrussa/gouploads`; `go.mod` currently uses
-Go `1.26`.
+Go `1.27.0` with toolchain `go1.27.1`.
 
 ## Stable Consumer Surface
 

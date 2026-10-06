@@ -14,6 +14,13 @@
 
 ### Fixed
 
+- File image/video predicates no longer panic on short MIME strings.
+- Generic TUS creation preflights the built-in uploader's effective original-only
+  policy before allocating storage. Client MIME metadata remains optional;
+  completion and final content/scanner checks remain in place. Custom uploader
+  adapters can forward `ValidateUploadConfig(*host.FileUploadConfig) error`.
+  Media-mode and CMS quarantine policy behavior is unchanged.
+
 - Media admission now persists job-ID polling continuations, reconciles missed
   success callbacks and terminal failures, honors transient Retry-After, and
   keeps uncertain outcomes out of the terminal-failed state. Finalized rows

@@ -109,7 +109,7 @@ External tests may use `github.com/assurrussa/gouploads/hosttest`.
 implementation details, not an additional stable SDK.
 
 ```sh
-go get github.com/assurrussa/gouploads@v0.11.0
+go get github.com/assurrussa/gouploads@v0.12.0
 ```
 
 The public module resolves through the Go module proxy and checksum database.
@@ -155,7 +155,12 @@ transports. `UploadRouteGuards` separates read, create/resume and delete policy.
 
 Use `host.NewUploadHandlerWithPolicy` to authorize operations on the actual
 object. Its zero policy denies access; `TrustRouteGuards` is an explicit host
-responsibility. `OriginalRuntimeDeps.ContentScanner` optionally scans the same
+responsibility. The legacy `host.NewUploadHandler` trusts external route guards:
+authentication alone is insufficient. Hosts using it must enforce object-level
+read, upload/resume and delete authorization. Prefer the explicit policy
+constructor for new integrations; the legacy default is unchanged.
+
+`OriginalRuntimeDeps.ContentScanner` optionally scans the same
 private bytes subsequently published. TUS completion carries a durable
 `ReaderRequest.FinalizationKey` and retains ready sessions until TTL for retries.
 Batch failures return the accepted prefix and `*host.BatchError` (HTTP 207).

@@ -286,20 +286,37 @@ func (s *Service) GetFile(ctx context.Context, id int64) (model.File, error) {
 	return file, nil
 }
 
+// ValidateUploadConfig checks an effective policy against this uploader's
+// processing mode without accepting bytes or creating an upload. The caller must
+// resolve defaults first; nil is invalid. It does not merge or mutate cfg.
+// Admission never replaces ingestion or finalization content validation.
+func (s *Service) ValidateUploadConfig(cfg *FileUploadConfig) error {
+	if cfg == nil {
+		return errors.New("upload config is required")
+	}
+	if cfg.MaxFileSize < 0 {
+		return errors.New("upload size limit must not be negative")
+	}
+	if s.processingMode != uploadconfig.ProcessingMediaResizer {
+		return filepolicy.ValidateOriginalConfig(cfg.MaxFileSize, cfg.AllowedExtensions, cfg.AllowedMimeTypes)
+	}
+	return nil
+}
+
 func (s *Service) prepareConfig(req SingleRequest) (*FileUploadConfig, error) {
 	if req.Config != nil && req.Config.MaxFileSize < 0 {
 		return nil, errors.New("upload size limit must not be negative")
 	}
 	cfg := s.mergeConfig(req.Config)
+	if err := s.ValidateUploadConfig(cfg); err != nil {
+		return nil, err
+	}
 	if s.processingMode != uploadconfig.ProcessingMediaResizer {
 		if req.ObjectID <= 0 {
 			return nil, ClientError{Message: "original upload requires a positive object id"}
 		}
 		if err := req.ObjectType.Validate(); err != nil {
 			return nil, fmt.Errorf("validate original object type: %w", err)
-		}
-		if err := filepolicy.ValidateOriginalConfig(cfg.MaxFileSize, cfg.AllowedExtensions, cfg.AllowedMimeTypes); err != nil {
-			return nil, err
 		}
 	}
 	prefixDir, err := s.uploadDir(slices.Clone(s.listDirTempPrefix), req.ObjectType.String(), req.ObjectID.String())

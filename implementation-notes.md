@@ -702,3 +702,29 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   DNS/network access and must run on a supported network before release.
 - MinIO/provider and exact-published-version gates remain separate. No release
   tag, merge, deployment or production admission enablement is implied.
+
+## 2026-10-06: original-policy preflight and short MIME predicates
+
+- Image/video predicates use bounded prefix checks; table and fuzz regressions
+  cover empty, short and arbitrary MIME values without changing classification.
+- Generic TUS admission asks the built-in uploader to validate the already
+  resolved policy before `Store.Create`. The optional method preserves custom
+  `TaskUploader` implementations; adapters can forward it. CMS quarantine and
+  media-mode policies retain their separate contracts.
+- The validator deliberately does not merge defaults a second time. Independent
+  review found that doing so could restore defaults for a normalized blank-only
+  extension list while the handler still treated that empty list as unrestricted.
+  A red-to-green regression now rejects it before storage allocation.
+- MIME metadata and `file_type` remain optional. Prefix tests cover every current
+  default extension, rich-text images and explicitly enabled MP3/WAV using
+  one-byte PATCH chunks. These fixtures verify admission, not complete decoding.
+- A real HTTP/FileStore completion regression rejects a forged frame after a
+  large MP3 ID3 tag, changed stored bytes and changed policy after admission.
+  Existing final content, scanner, storage and reconciliation checks are retained.
+- Go 1.27.1 verification passed: `make check` (including full race/coverage),
+  public/integration-tag surfaces, clean local normal/integration consumers,
+  PostgreSQL TUS fencing, persisted media continuation/restart/Retry-After,
+  local portable media and local originals/audio acceptance with race detection.
+  The MIME fuzz run completed 65,565 executions. Independent source review has
+  no remaining blockers. Real S3/provider and exact published-version gates
+  remain separate; no release-readiness pass, release or deployment is claimed.

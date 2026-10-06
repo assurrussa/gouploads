@@ -230,6 +230,16 @@ func (h *Handler) tusCreate(c fiber.Ctx, cmsOnly bool) error {
 	if err != nil {
 		return h.writeStrategyError(c, err)
 	}
+	// CMS owns its quarantine/promotion policy. Generic admission delegates to
+	// the uploader so media mode and custom TaskUploader implementations retain
+	// their contracts. This checks server policy, never a client-declared MIME.
+	if validator, ok := h.taskUploader.(interface {
+		ValidateUploadConfig(cfg *uploadservice.FileUploadConfig) error
+	}); ok && !cmsOnly {
+		if err := validator.ValidateUploadConfig(resolution.config); err != nil {
+			return h.writeStrategyError(c, err)
+		}
+	}
 	if length > resolution.config.MaxFileSize || length > filepolicy.MaxFileSize {
 		return h.jsonError(c, 413, "file is too large")
 	}

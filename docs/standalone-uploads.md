@@ -37,15 +37,18 @@ if err != nil {
 }
 
 // Register runtime.Jobs with your outbox worker before accepting uploads.
-// Construct host.NewUploadHandler with runtime.Uploader, runtime.Files and
-// runtime.TusStore plus your logger, auth context builder and URL composer.
+// Construct host.NewUploadHandlerWithPolicy with runtime.Uploader, runtime.Files
+// and runtime.TusStore plus your logger, auth context builder, URL composer
+// and an explicit object-level authorization policy.
 // Run host.MigrationFiles and your outbox backend migrations first.
 ```
 
 The snippet illustrates the constructor; the infrastructure values belong to
 the embedding application. It is not an independent executable starter. The
 runtime does not close externally supplied clients, start workers or expose
-routes. Its `Storage` is also available for an appropriately authorized read
+routes. The legacy `host.NewUploadHandler` trusts host route guards and requires
+object-level authorization for reads, uploads/resume and deletes; an authenticated
+actor alone does not supply those guards. Its `Storage` is also available for an appropriately authorized read
 route. Never serve the entire storage root or expose staging directories.
 
 For S3, use the existing explicit endpoint, region, credentials, bucket,
@@ -74,8 +77,27 @@ metadata update, after-job payload construction and staging cleanup. No media
 transformation is performed. The single `main` artifact contains the original
 bytes; the client filename, known dimensions and moderation fields are retained.
 The current finalizer accepts JPEG, PNG, GIF, WebP, MP4, WebM and PDF, matching
-the standard upload allowlist. This does not promise arbitrary document types.
-An original upload requires a valid object type and a positive object ID.
+the standard upload allowlist. MP3 and WAV originals are supported only through
+an explicit host strategy with `.mp3`/`.wav` extensions, `audio/mpeg`/`audio/wav`
+MIME allowlists and a bounded size limit. They use `host.FileTypeAudio`; default
+and rich-text policies do not enable audio. This does not promise arbitrary
+document types. An original upload requires a valid object type and a positive
+object ID.
+
+Generic TUS creation checks the effective server policy against the uploader's
+processing mode before allocating storage. The built-in `host.UploadService`
+provides `ValidateUploadConfig`; custom `TaskUploader` adapters can forward this
+optional method to preserve the same preflight without changing their required
+interface. This validator receives an already resolved policy and neither merges
+defaults nor changes it; a nil policy is invalid. Original-only restrictions are not imposed on media-mode or CMS
+quarantine admission.
+
+Client MIME metadata and `file_type` are optional. Creation still requires a
+filename with an allowed extension and a declared upload length; generic routes
+also require the target object type and ID. These are admission checks only.
+PATCH inspects bytes as they arrive, completion rechecks the current policy and
+actual content, and the finalizer validates the staged bytes before publication.
+Successful admission does not approve the file or bypass a configured scanner.
 
 Configured derived presets or enabled watermarking in `original_only` produce
 `host.ErrProcessingDisabled`; they are not silently ignored. Completion does
