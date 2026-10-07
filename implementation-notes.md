@@ -807,3 +807,17 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   complete 17-leaf existing/missing matrix and queued owned fixture scope are in
   `docs/file-diagnostics-readiness.md`. Aggregate checks wait behind Outbox's
   active heavy lane. No tag/published probe is authorized for this candidate.
+
+- Final required untagged aggregate `make source-readiness` passed once at
+  `b8b44efe34ca105a850536bf2decfd43a3c440e1`. All 17 leaves passed, including
+  whole-module tidy/format/vet/lint (0 issues), full race/atomic coverage,
+  public/integration surfaces, PG diagnostics/TUS/continuation, pinned actual
+  MinIO source/media/originals/audio gates, both clean consumer modes, anonymous
+  dependency downloads and strict three-host import scan. `make check` ran as
+  part of the aggregate, without a duplicate pass. Source/manifests unchanged.
+- Owned PG18.6 and checksum-verified pinned MinIO fixtures were cleaned after the
+  pass; zero diagnostic schemas and only bootstrap databases remained before
+  removing the owned PG container. Verified owned MinIO PID stopped, owned new
+  data removed, shared/prior resources preserved. Full matrix is recorded in
+  `docs/file-diagnostics-readiness.md`. Lane released; requesting one final
+  review. No tag, published probe, production or recovery mutation.
