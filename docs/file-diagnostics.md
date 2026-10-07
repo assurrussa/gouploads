@@ -72,6 +72,11 @@ Compaction and reconciliation remain separate decisions.
 
 ## Sequenced follow-up PRs
 
+Completed on master: lifecycle diagnostics (#15), recovery dependency design
+(#16), local-driver storage injection (#17), and read-only retention inventory
+(#18). The implementation dependencies and extensions below remain separate work;
+the design does not ship a recovery-preview API, and the inventory does not compact.
+
 1. **Recovery contracts and preview first.** The current contract gap and
    proposed minimum are documented in [recovery preview dependency design](recovery-preview-contract.md).
    No preview API is shipped until that dependency exists. Define a host-supplied, authorized,
