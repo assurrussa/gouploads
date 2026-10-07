@@ -887,5 +887,22 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
 - Minimal completed tombstone fixtures retain FileID/object binding and exercise
   the existing decoder and same/wrong-binding no-op behavior without adding a
   compactor. Future policy must resolve actor/audit fields and holds first.
-- Validation pending the coordinated local lane; no hosted CI dispatch or new
-  workflow/settings change is part of this bounded implementation.
+- Required source-readiness constituent checks completed at `dfdb0b7`: tidy,
+  format, vet/lint, full race/coverage, public/PG/TUS/provider/original/audio
+  integrations, both clean consumers and strict host import scan. One test lint
+  correction and one fixture URL correction resumed only unfinished targets.
+  Scoped integration vet/new-code lint also passed with zero issues.
+- The original anonymous download command exited nonzero on a lone public-proxy
+  HTTP/2 lz4 ZIP error. Its failure is retained, not relabelled aggregate PASS.
+  Go 1.27.1 source proves download-all waits for all downloads and reports each
+  module error; no per-module success manifest survived the existing cleanup.
+  One fresh credential-free HTTP/1 corrective download of the same immutable
+  lz4 version passed with public proxy/sumdb checksum verification and TLS intact.
+  Dependency manifests are byte-identical to merged PR17's passed anonymous gate.
+  Parent accepted this explicit combined constituent evidence for draft review;
+  no full graph/aggregate rerun or validation-script change was made.
+- Owned PG/MinIO were cleaned with no leftover test databases. The CPU lane was
+  safely lent during network-only download after pausing the owned make scheduler,
+  then returned before subsequent checks. No hosted CI dispatch, workflow/settings
+  change, release or deployment. A separate local recommendation proposes retaining
+  path-free per-module download evidence on failures; it is outside this PR.
