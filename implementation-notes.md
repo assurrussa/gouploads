@@ -770,3 +770,12 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   schema each, apply the real embedded migration SQL and clean up only that
   schema, including pending-plan and missing-table cases. Execution remains
   pending the explicit heavy-lane release; no recovery mutation was added.
+
+- After DataGrid released the heavy lane, the focused non-race host/repository/
+  externalconsumer test run passed. Scoped vet and lint passed for host, model,
+  repository and externalconsumer; integration-tagged repository vet/lint also
+  passed (zero lint issues), proving the new integration source compiles. Checks
+  ran sequentially using shared caches. The lane was released afterward.
+- Live PostgreSQL diagnostic execution remains pending a permitted fixture/window;
+  this window excluded containers and the DataGrid PostgreSQL fixture was stopped.
+  No live SQL, race, container or full release-readiness result is claimed.
