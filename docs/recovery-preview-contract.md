@@ -15,7 +15,7 @@ retry, and pending deletion metadata is never permission to delete**.
 
 | Source | Actual contract | What it cannot prove |
 | --- | --- | --- |
-| `host.UploadOutbox` / upload producers | `Put` returns a JobID; `createUploadedTask` discards it for original/media enqueue | Which active/failed job belongs to a requested FileID |
+| `host.UploadOutbox` / upload producers | `Put` returns a JobID; `Service.uploadFile` discards it for original/media enqueue | Which active/failed job belongs to a requested FileID |
 | Outbox `v0.12.0` `JobsRepository` | Fenced claim/extend/release/ack/reschedule, using lease token and time | Read-only FileID lookup or a recovery claim |
 | PG `jobsrepo.GetByID` | Reads an active job by a known JobID | Binding to FileID, prior success, or a retained terminal outcome when absent |
 | PG `jobsfailedrepo.GetByID` | Reads by failed-row ID; failed row has a separate original `JobID` | Lookup by original JobID through that method, complete per-file failure history |
