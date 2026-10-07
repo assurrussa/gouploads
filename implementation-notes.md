@@ -749,3 +749,17 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   local consumers and compilation of both real-service integration packages.
   Independent scoped source review has no remaining blockers. Real-provider
   reruns remain mandatory and are tracked separately from these local checks.
+
+## FileID diagnostics (2026-10-07)
+
+- Based on master `2914fab`. Added one read-only repository snapshot and the
+  supported host diagnostic facade. No runtime/worker, schema or dependency
+  changes. Existing outbox only supports Put; job state stays unavailable.
+- Handoff tombstone presence is independent of upload completion; retained
+  deletion evidence survives a missing file row. The report deliberately omits
+  payloads, paths, identity metadata and raw errors. Hosts authorize first.
+- State and failure regressions use synthetic owned readers/driver doubles; no
+  external data or broad cleanup. Heavy Go checks wait for DataGrid lane release.
+- Follow-up contracts and recovery/deletion-retention/storage/performance order
+  are in `docs/file-diagnostics.md`; mutation work requires its own reviewed
+  contracts and fencing proof.
