@@ -124,10 +124,21 @@ flow remains pass-through.
    }
    ```
 
-   Final files remain below `uploads/...` and use `BaseURL` or
-   `AppDomainURL`. Only temporary `tmp/uploads/...` paths use
-   `SourceBaseURL`. The host must serve both `/uploads` and `/tmp` from the
-   configured local root.
+   Serve finalized files according to their persisted relative keys and configured
+   delivery URL. Current finalization uses canonical `media/v1/...` keys by default;
+   do not assume every final artifact is below the legacy `uploads/...` prefix.
+   `SourceBaseURL` is only for the explicit local media-processing source flow:
+   relative `tmp/uploads/...` source paths are resolved beneath that base URL.
+   The host owns the source route and its access restrictions; the resolver does
+   not install or authorize a route. Do not expose the whole storage root or
+   publicly serve `/tmp` or the TUS spool. Original-only mode reads storage directly
+   and does not need a source HTTP route.
+
+   With local-driver `OriginalRuntimeDeps.Storage` injection (merged but unreleased),
+   the TUS spool still uses `cfg.Local.Root`, while supplied persistence can live
+   elsewhere. An authorized host read route can use `runtime.Storage`; do not
+   derive final-file locations from the protocol spool root. See
+   [caller-owned storage](standalone-uploads.md#caller-owned-storage).
 
    Provider profiles are ordinary values of that same struct, not presets:
 

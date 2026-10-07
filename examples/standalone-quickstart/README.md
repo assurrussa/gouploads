@@ -12,6 +12,16 @@ This example demonstrates running `gouploads` as an embedded upload orchestratio
 
 ## Quick Start (in 2 minutes)
 
+Use a source checkout and run every command below from the example directory:
+
+```bash
+cd /path/to/gouploads/examples/standalone-quickstart
+```
+
+The example uses that checkout's root `go.mod`, not a separately installed
+`gouploads` release. Use the Go version/toolchain declared there (currently
+Go `1.27.0`, toolchain `go1.27.1`) and have Docker Compose available.
+
 ### 1. Start PostgreSQL and MinIO
 
 ```bash
@@ -43,4 +53,4 @@ Open [http://localhost:8080](http://localhost:8080) in your browser:
 - Drag and drop an image (`.jpg`, `.png`, `.webp`, `.gif`), video (`.mp4`, `.webm`), or document (`.pdf`) up to 500 MB.
 - Observe real-time chunked TUS upload (5 MiB chunks) with progress bar.
 - Click **Pause** and **Resume** to verify resumable uploads.
-- Upon completion, the client triggers `POST /complete` (202 Accepted), polls `GET /files/tasks/:id` until outbox finalization is complete, and displays the direct public storage link to the finalized artifact.
+- Upon completion, the client posts to the returned TUS upload URL plus `/complete` (202 Accepted), polls `GET /files/tasks/:id` until outbox finalization is complete, and displays the direct public storage link to the finalized artifact.

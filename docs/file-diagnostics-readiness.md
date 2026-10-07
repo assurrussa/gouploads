@@ -1,17 +1,24 @@
 # Diagnostic candidate readiness matrix
 
+Status: historical verification record for [PR #15](https://github.com/assurrussa/gouploads/pull/15),
+merged on 2026-10-07 as `314ea8e9327b95ed05a5d26527d1fdbf7dee11f0`.
+The fixture instructions and timings below describe that completed candidate
+window, not pending work or a verification claim for the current master.
+The diagnostic API remains merged but unreleased, outside `v0.12.0`.
+
 The diagnostic API has focused implementation evidence and **the complete
 untagged `make source-readiness` aggregate passed once** at
 `b8b44efe34ca105a850536bf2decfd43a3c440e1` on 2026-10-07.
 This includes all five `make check` constituents; no duplicate check was run.
-Final reviewer approval remains the next step. `AGENTS.md` requests release-readiness for public API
-changes. For this untagged candidate, `RELEASING.md` specifies:
+Final reviewer approval was the next step at that point. `AGENTS.md` requests
+release-readiness for public API changes. For this untagged candidate,
+`RELEASING.md` specifies:
 
 > For an untagged candidate, run `make source-readiness` with the integration
 > services available.
 
-The authorized endpoint is an untagged draft PR. Do not create a tag, run a
-published-version probe against another tag, or claim published reusability.
+The authorized endpoint for that window was an untagged draft PR. Do not create
+a tag, run a published-version probe against another tag, or claim published reusability.
 `source-readiness` includes `check`: tidy, format, whole-module vet/lint and one
 full race/coverage pass. Run that aggregate with one heavy command at a time.
 Its `check` constituent is the final required `make check` evidence for the

@@ -819,8 +819,9 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   pass; zero diagnostic schemas and only bootstrap databases remained before
   removing the owned PG container. Verified owned MinIO PID stopped, owned new
   data removed, shared/prior resources preserved. Full matrix is recorded in
-  `docs/file-diagnostics-readiness.md`. Lane released; requesting one final
-  review. No tag, published probe, production or recovery mutation.
+  `docs/file-diagnostics-readiness.md`. Lane released; one final review was
+  requested at that stage. Subsequently merged as PR #15 at `314ea8e`.
+  No tag, published probe, production or recovery mutation.
 
 ## Recovery preview dependency design (2026-10-07)
 
@@ -836,7 +837,8 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   candidates. No ceremonial API, new job source, correlation mutation, schema,
   dependency, runtime or route change. Existing guarantee/source evidence is
   unchanged. Documentation-only validation is `git diff --check`; no heavy lane
-  or repeated previously passed Go gates are needed. One final review requested.
+  or repeated previously passed Go gates are needed. One final review was requested
+  at that stage. Subsequently merged as PR #16 at `019e35d`; this remains design only.
 
 ## Original runtime storage injection (2026-10-07)
 
@@ -869,7 +871,8 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   removed. Runtime/public consumer code is identical to the aggregate-tested
   implementation. Preserve that evidence; do not repeat the aggregate for this
   test assertion and documentation-only follow-up. Existing integration lint
-  findings are outside this bounded change.
+  findings are outside this bounded change. Subsequently merged as PR #17 at
+  `552e273`; the supplied-storage capability remains local-driver only.
 
 
 ## Read-only deletion-retention inventory (2026-10-07)
@@ -923,3 +926,5 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   The PostgreSQL year-limit parameter and original nanosecond echo passed too.
   Exact owned PG fixture removed with no leftover test databases; lane released
   to Outbox. No repeated provider/anonymous/full aggregate or hosted CI.
+- Subsequently merged as PR #18 at `8439aa4`. The recorded verification remains
+  accepted constituent evidence; the original aggregate is not relabelled PASS.
