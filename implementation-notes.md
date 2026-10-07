@@ -749,3 +749,75 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   local consumers and compilation of both real-service integration packages.
   Independent scoped source review has no remaining blockers. Real-provider
   reruns remain mandatory and are tracked separately from these local checks.
+
+## FileID diagnostics (2026-10-07)
+
+- Based on master `2914fab`. Added one read-only repository snapshot and the
+  supported host diagnostic facade. No runtime/worker, schema or dependency
+  changes. Existing outbox only supports Put; job state stays unavailable.
+- Handoff tombstone presence is independent of upload completion; retained
+  deletion evidence survives a missing file row. The report deliberately omits
+  payloads, paths, identity metadata and raw errors. Hosts authorize first.
+- State and failure regressions use synthetic owned readers/driver doubles; no
+  external data or broad cleanup. Heavy Go checks wait for DataGrid lane release.
+- Follow-up contracts and recovery/deletion-retention/storage/performance order
+  are in `docs/file-diagnostics.md`; mutation work requires its own reviewed
+  contracts and fencing proof.
+
+- Independent source review at `42b23fd` found no implementation issue but noted
+  the mock driver does not execute SQL. Added real-PG diagnostic cases and a
+  focused Make target (also part of source-readiness). Fixtures own one random
+  schema each, apply the real embedded migration SQL and clean up only that
+  schema, including pending-plan and missing-table cases. Execution remains
+  pending the explicit heavy-lane release; no recovery mutation was added.
+
+- After DataGrid released the heavy lane, the focused non-race host/repository/
+  externalconsumer test run passed. Scoped vet and lint passed for host, model,
+  repository and externalconsumer; integration-tagged repository vet/lint also
+  passed (zero lint issues), proving the new integration source compiles. Checks
+  ran sequentially using shared caches. The lane was released afterward.
+- Live PostgreSQL diagnostic execution remains pending a permitted fixture/window;
+  this window excluded containers and the DataGrid PostgreSQL fixture was stopped.
+  No live SQL, race, container or full release-readiness result is claimed.
+
+- Final diagnostics verification executed at exact
+  `228293264f49c988dd3132de39db0d0a1e9cacfa` after the parent granted a dedicated
+  sequential live-PG window. PostgreSQL 18.6 ran in one uniquely named,
+  loopback-only, CPU/memory-bounded tmpfs fixture. JSON test events confirmed
+  **19 subcases and 3 groups passed, 0 skips and 0 failures**.
+
+  | Check | Result |
+  | --- | --- |
+  | Metadata/soft-deletion SQL + pgx decoding | 15 subcases passed (NULL, empty/nonobject presets, known/future states) |
+  | Missing rows with retained deletion/finalization evidence | 2 subcases passed (pending/completed, two keys each) |
+  | Missing lifecycle tables -> sanitized unavailable | Both table cases passed |
+  | `make test-surface` | Passed all public/boundary/probe packages |
+  | `make externalconsumer-local` | Both clean local probe modes passed |
+  | Scoped non-race tests, vet/lint and integration-tagged vet/lint | Previously passed on identical implementation source |
+
+- Cleanup query confirmed zero diagnostic schemas remained, then only the
+  task-owned tmpfs PostgreSQL container was removed. Lane released to Outbox;
+  no production, storage, recovery, release or registry mutation. Live SQL
+  execution gap is closed. Full race/provider/published release readiness is
+  outside this bounded diagnostic change and is not claimed.
+
+- Readiness review clarified that focused source/API verification is insufficient
+  for aggregate merge readiness. The untagged candidate must pass unchanged
+  `make source-readiness`, including its final `make check` constituent. The
+  complete 17-leaf existing/missing matrix and queued owned fixture scope are in
+  `docs/file-diagnostics-readiness.md`. Aggregate checks wait behind Outbox's
+  active heavy lane. No tag/published probe is authorized for this candidate.
+
+- Final required untagged aggregate `make source-readiness` passed once at
+  `b8b44efe34ca105a850536bf2decfd43a3c440e1`. All 17 leaves passed, including
+  whole-module tidy/format/vet/lint (0 issues), full race/atomic coverage,
+  public/integration surfaces, PG diagnostics/TUS/continuation, pinned actual
+  MinIO source/media/originals/audio gates, both clean consumer modes, anonymous
+  dependency downloads and strict three-host import scan. `make check` ran as
+  part of the aggregate, without a duplicate pass. Source/manifests unchanged.
+- Owned PG18.6 and checksum-verified pinned MinIO fixtures were cleaned after the
+  pass; zero diagnostic schemas and only bootstrap databases remained before
+  removing the owned PG container. Verified owned MinIO PID stopped, owned new
+  data removed, shared/prior resources preserved. Full matrix is recorded in
+  `docs/file-diagnostics-readiness.md`. Lane released; requesting one final
+  review. No tag, published probe, production or recovery mutation.

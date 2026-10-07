@@ -405,3 +405,12 @@ and missed success callbacks. All client workers must understand the polling
 continuation payload before new producers run. See [media admission and
 cutover](media-admission.md) for key scope, signed-source TTL, failure semantics,
 intentional reprocessing, and migration requirements.
+
+## Read-only lifecycle diagnostics
+
+Use `host.DiagnoseFile(ctx, runtime.Files, fileID)` after host authorization.
+`host.FileDiagnosticReader` is satisfied by `*host.FileRepo`; its
+`GetFileLifecycle` method reads retained lifecycle evidence without write locks
+or storage calls. Results preserve unknown and unavailable observations. No
+job-state source or recovery action is inferred from upload metadata. See
+[the state contract and sequenced recovery roadmap](file-diagnostics.md).

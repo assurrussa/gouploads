@@ -4,6 +4,11 @@
 
 ### Added
 
+- Read-only `host.DiagnoseFile` and `FileRepo.GetFileLifecycle` provide a
+  path-free snapshot by FileID, including retained finalization/deletion evidence,
+  explicit unknown/unavailable states and sanitized source failures. Job lookup
+  remains unavailable; authorization and any recovery remain host-owned.
+
 - Opt-in MP3/WAV original uploads with stable `host.FileTypeAudio` (numeric
   value 7), canonical audio MIME metadata, deterministic final extensions and
   audio repository filters. Existing default policies and limits are unchanged.

@@ -71,6 +71,14 @@ artifact and commits metadata and cleanup tasks. It never calls a resizer.
 The single `main` artifact retains the original bytes. Completion is not
 moderation approval or a guarantee that untrusted content is safe to publish.
 
+## Inspect file lifecycle safely
+
+`host.DiagnoseFile` reads a path-free lifecycle snapshot by FileID through
+`host.FileRepo`, reporting file, upload, finalization handoff and deletion states.
+Job state is explicitly unavailable because the public outbox contract has no
+lookup. Hosts authorize the FileID before calling; the API installs no route and
+performs no recovery or deletion. See [diagnostics and recovery roadmap](docs/file-diagnostics.md).
+
 ## Opt in to MP3/WAV originals
 
 MP3 and WAV use `host.FileTypeAudio` (7) and the same original storage/outbox

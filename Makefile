@@ -6,7 +6,7 @@ GOPATH ?= $(shell GOTOOLCHAIN=local go env GOPATH)
 export GOCACHE GOMODCACHE GOLANGCI_LINT_CACHE
 
 .DEFAULT_GOAL := check
-.PHONY: source-readiness test-originals-integration anonymous-source anonymous-published full prepare check publish-readiness release-readiness release-version-check tidy-check test-surface test-surface-integration test-tus-postgres-integration test-source-url-s3-integration test-portable-media-e2e test-portable-s3-media-e2e test-portable-local-media-e2e externalconsumer-local externalconsumer-published import-policy-site tidy generate fmt fmt-check lint lint-fix vet test test-full test-race bench-all cover-html
+.PHONY: test-diagnostics-postgres-integration source-readiness test-originals-integration anonymous-source anonymous-published full prepare check publish-readiness release-readiness release-version-check tidy-check test-surface test-surface-integration test-tus-postgres-integration test-source-url-s3-integration test-portable-media-e2e test-portable-s3-media-e2e test-portable-local-media-e2e externalconsumer-local externalconsumer-published import-policy-site tidy generate fmt fmt-check lint lint-fix vet test test-full test-race bench-all cover-html
 GO_MODULE := $(shell go list -m)
 GO_FILES := $(shell find . -type f -name '*.go' -not -path './.cache/*' -not -path './.go-cache/*' -not -path './tmp/*' -not -path './vendor/*')
 IMPORT_POLICY_REPO_ROOT ?= ..
@@ -26,7 +26,7 @@ release-version-check:
 	@printf '%s\n' "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' || \
 		(echo "VERSION must be an exact semver tag" && exit 2)
 
-source-readiness: check test-surface test-surface-integration test-tus-postgres-integration test-media-continuation-postgres-integration test-source-url-s3-integration test-portable-media-e2e test-originals-integration externalconsumer-local anonymous-source import-policy-site
+source-readiness: check test-surface test-diagnostics-postgres-integration test-surface-integration test-tus-postgres-integration test-media-continuation-postgres-integration test-source-url-s3-integration test-portable-media-e2e test-originals-integration externalconsumer-local anonymous-source import-policy-site
 
 publish-readiness: release-version-check prepare source-readiness
 	@git diff --exit-code
@@ -41,6 +41,9 @@ test-surface:
 
 test-surface-integration:
 	go test -tags integration ./hosttest -count=1
+
+test-diagnostics-postgres-integration:
+	sh ./scripts/with-integration-postgres.sh go test -tags integration ./domain/files/repositories/filerepo -run '^TestIntegrationDiagnostics' -count=1
 
 test-tus-postgres-integration:
 	sh ./scripts/with-integration-postgres.sh go test -tags integration ./domain/files/service/tusupload -run TestIntegration_PostgresSessionRepository -count=1
