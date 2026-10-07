@@ -34,7 +34,7 @@ func TestInspectDeletionRetentionAvailableEmptyAndCutoff(t *testing.T) {
 			t.Parallel()
 			reader := &retentionReader{}
 			var cutoff *time.Time
-			value := time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("fixture", 3600))
+			value := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.FixedZone("fixture", 3600))
 			if withCutoff {
 				cutoff = &value
 			}

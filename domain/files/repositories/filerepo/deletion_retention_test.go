@@ -91,3 +91,38 @@ func TestGetDeletionRetentionRejectsInvalidCutoffBeforeDatabase(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, model.DeletionRetentionSnapshot{}, result)
 }
+
+func TestGetDeletionRetentionPreservesNanosecondCutoff(t *testing.T) {
+	t.Parallel()
+	anchor := time.Date(2026, 1, 2, 0, 0, 0, 123456000, time.UTC)
+	for _, tc := range []struct {
+		name          string
+		cutoff, bound time.Time
+	}{
+		{"equal", anchor, anchor},
+		{"one nanosecond before", anchor.Add(-time.Nanosecond), anchor},
+		{"one nanosecond after", anchor.Add(time.Nanosecond), anchor.Add(time.Microsecond)},
+		{"before Unix epoch", time.Unix(-1, 1), time.Unix(-1, 1000).UTC()},
+		{
+			"UTC year boundary", time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC),
+			time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := gomock.NewController(t)
+			client := pgsqlmocks.NewMockClient(ctrl)
+			db := pgsqlmocks.NewMockDBEngine(ctrl)
+			tx := pgsqlmocks.NewMockTxManager(ctrl)
+			client.EXPECT().DB().Return(db)
+			db.EXPECT().QueryRow(t.Context(), "filerepo.GetDeletionRetention", gomock.Any(), tc.bound).
+				Return(retentionRow{})
+			repo := filerepo.Must(filerepo.NewOptions(client, tx))
+			original := tc.cutoff
+			result, err := repo.GetDeletionRetention(t.Context(), &tc.cutoff)
+			require.NoError(t, err)
+			require.Equal(t, tc.cutoff.UTC(), result.Projection.CompletedBefore)
+			require.Equal(t, original, tc.cutoff, "cutoff is not mutated")
+		})
+	}
+}

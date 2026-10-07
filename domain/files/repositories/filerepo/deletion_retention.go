@@ -19,7 +19,15 @@ func (r *Repo) GetDeletionRetention(ctx context.Context, completedBefore *time.T
 			return model.DeletionRetentionSnapshot{}, errors.New("filerepo.GetDeletionRetention: invalid cutoff")
 		}
 		cutoffUTC = completedBefore.UTC()
-		cutoff = cutoffUTC
+		// Stored timestamptz values are on a microsecond grid. For any such x,
+		// x < requested is exactly x < ceil(requested to a microsecond).
+		// Bind that ceiling so pgx cannot truncate away a strict boundary;
+		// retain the original UTC cutoff in the projection.
+		bound := cutoffUTC.Truncate(time.Microsecond)
+		if bound.Before(cutoffUTC) {
+			bound = bound.Add(time.Microsecond)
+		}
+		cutoff = bound
 	}
 	const query = `with evidence as (
  select completed_at, created_at,

@@ -21,7 +21,8 @@ type DeletionRetentionSnapshot struct {
 }
 
 // DeletionRetentionProjection counts completed_at strictly before the caller's
-// cutoff, with known ages. It is a what-if, never permission to mutate a row.
+// original UTC cutoff, including nanosecond boundaries, with known ages.
+// It is a what-if, never permission to mutate a row.
 type DeletionRetentionProjection struct {
 	CompletedBefore              time.Time `json:"completedBefore"`
 	CompletedCount               int64     `json:"completedCount"`

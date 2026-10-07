@@ -24,7 +24,11 @@ _ = counts.TotalCount
 
 A caller-supplied, nonzero cutoff in UTC years 1 through 9999 enables a what-if
 projection. Input is copied and normalized to UTC; the caller's value is not
-mutated. `completed_at < completedBefore` is strict: equality is excluded. Only
+mutated. `completed_at < completedBefore` is strict: equality is excluded.
+Nanosecond cutoffs retain exact comparison semantics: the SQL parameter is rounded
+up to the next representable microsecond when necessary, while the projection
+reports the original UTC cutoff. Since stored timestamps are microsecond-aligned,
+this includes a row at T for a cutoff T+1ns, and excludes it for T or T-1ns. Only
 completed rows with known ages are counted. Malformed envelopes and unrecognized
 bindings can still appear in the projection: it describes age, **not eligibility
 for compaction or deletion**. A nil projection differs from a requested projection

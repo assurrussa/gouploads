@@ -906,3 +906,15 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   then returned before subsequent checks. No hosted CI dispatch, workflow/settings
   change, release or deployment. A separate local recommendation proposes retaining
   path-free per-module download evidence on failures; it is outside this PR.
+
+
+### Cutoff precision correction
+
+- Preserve the caller's exact nanosecond cutoff in the projection and bind its
+  microsecond ceiling to PostgreSQL. For stored microsecond-aligned timestamps,
+  strict comparison against that ceiling equals strict comparison against the
+  original cutoff; pgx truncation cannot silently exclude T at cutoff T+1ns.
+- Add unit parameter/echo cases including a pre-Unix-epoch timestamp and the UTC
+  year boundary, plus real-PG T/T±1ns and microsecond-edge cases with read-only
+  execution and unchanged persisted evidence. Focused validation pending the
+  coordinated AuthHub window; no repeated provider/anonymous/full aggregate.

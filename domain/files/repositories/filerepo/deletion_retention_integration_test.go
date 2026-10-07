@@ -162,3 +162,51 @@ values (123, '{"file":{"id":123,"objectType":"admin","objectId":456}}', clock_ti
 		return nil
 	}))
 }
+
+func TestIntegrationDiagnosticsDeletionRetentionNanosecondCutoff(t *testing.T) {
+	database, repo := newDiagnosticPostgres(t)
+	anchor := time.Date(2026, 1, 2, 0, 0, 0, 123456000, time.UTC)
+	var payloadText string
+	require.NoError(t, database.DB().QueryRow(t.Context(), "retention.InsertOwnedCutoffBoundary", `
+insert into file_deletions(file_id, payload, created_at, completed_at)
+values (123, '{"file":{"id":123,"objectType":"admin","objectId":456}}', $1, $2)
+returning payload::text`, anchor.Add(-time.Hour), anchor).Scan(&payloadText))
+	_, err := database.DB().Exec(t.Context(), "retention.InsertOwnedNextMicrosecond", `
+insert into file_deletions(file_id, payload, created_at, completed_at)
+values (124, '{"file":{"id":124,"objectType":"admin","objectId":456}}', $1, $2)`,
+		anchor.Add(-time.Hour), anchor.Add(time.Microsecond))
+	require.NoError(t, err)
+	var before, after string
+	const persisted = "select jsonb_agg(to_jsonb(d) order by file_id)::text from file_deletions d"
+	require.NoError(t, database.DB().QueryRow(t.Context(), "retention.CutoffBefore", persisted).Scan(&before))
+	_, err = database.DB().Exec(t.Context(), "retention.CutoffReadOnly", "set default_transaction_read_only = on")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		cutoff time.Time
+		count  int64
+	}{
+		{"T minus 1ns", anchor.Add(-time.Nanosecond), 0},
+		{"T", anchor, 0},
+		{"T plus 1ns", anchor.Add(time.Nanosecond), 1},
+		{"T plus 1us minus 1ns", anchor.Add(time.Microsecond - time.Nanosecond), 1},
+		{"T plus 1us", anchor.Add(time.Microsecond), 1},
+		{"T plus 1us plus 1ns", anchor.Add(time.Microsecond + time.Nanosecond), 2},
+		{"T plus 1ns with offset", anchor.Add(time.Nanosecond).In(time.FixedZone("fixture", 9*3600)), 1},
+		{"before Unix epoch", time.Unix(-1, 1), 0},
+		{"UTC year boundary", time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := tc.cutoff
+			result, err := host.InspectDeletionRetention(t.Context(), repo, &tc.cutoff)
+			require.NoError(t, err)
+			require.Equal(t, host.DiagnosticPresent, result.Source)
+			require.Equal(t, original.UTC(), result.Snapshot.Projection.CompletedBefore)
+			require.Equal(t, original, tc.cutoff)
+			require.Equal(t, tc.count, result.Snapshot.Projection.CompletedCount)
+			require.Equal(t, tc.count*int64(len(payloadText)), result.Snapshot.Projection.PayloadJSONTextBytesEstimate)
+		})
+	}
+	require.NoError(t, database.DB().QueryRow(t.Context(), "retention.CutoffAfter", persisted).Scan(&after))
+	require.Equal(t, before, after)
+}
