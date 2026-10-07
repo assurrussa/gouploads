@@ -23,6 +23,10 @@ another application. Configured DI uses the same default. The application still
 supplies PostgreSQL, a compatible transaction manager, a durable outbox worker
 and persistent file storage; route mounting and authorization remain host-owned.
 
+For local-driver runtimes, optional `OriginalRuntimeDeps.Storage` accepts
+caller-owned storage wrappers. See [storage injection and instrumentation](docs/standalone-uploads.md#caller-owned-storage)
+for TUS handoff, ownership and compatibility limits.
+
 ```go
 runtime, err := host.NewOriginalRuntime(host.StorageConfig{
     Driver: host.StorageDriverLocal,

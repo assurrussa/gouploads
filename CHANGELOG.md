@@ -4,6 +4,12 @@
 
 ### Added
 
+- Optional caller-owned `OriginalRuntimeDeps.Storage` for local-driver runtimes,
+  shared by staging, finalization/scanning and deletion. Local TUS keeps its
+  protocol spool and hands completed bytes to the supplied store. S3 overrides
+  and typed nil values fail early; omitted storage preserves existing defaults.
+  See `docs/standalone-uploads.md` for ownership and instrumentation.
+
 - Read-only `host.DiagnoseFile` and `FileRepo.GetFileLifecycle` provide a
   path-free snapshot by FileID, including retained finalization/deletion evidence,
   explicit unknown/unavailable states and sanitized source failures. Job lookup

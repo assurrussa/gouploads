@@ -94,12 +94,14 @@ truncates tables or runs migration downs. No live storage or worker is invoked.
    coordinated worker rollout. Reconciliation needs bounded pagination,
    claim/lease fencing, backoff, host audit and proof of completed artifact
    deletion; a missing job or stale timestamp does not justify deleting data.
-4. **Storage injection.** Add optional storage injection to the original-runtime
-   constructor, preserving defaults and ownership: caller-owned storage is not
-   closed by the runtime. Validate the supplied public `Storage` contract and
-   required TUS/session capabilities; document which operations still depend on
-   config-built storage. Exercise local/S3 adapters and fault-injected doubles.
-   Do not rewrite the runtime or create a second lifecycle path.
+4. **Storage injection.** Optional local-driver injection is implemented through
+   `OriginalRuntimeDeps.Storage`; see the [ownership and instrumentation contract](standalone-uploads.md#caller-owned-storage).
+   Defaults and caller ownership are preserved. Local TUS retains its config-built
+   protocol spool and hands completed bytes to the supplied persistence store.
+   S3 overrides remain blocked on a compatible TUS dependency contract: prove
+   multipart/session and key-handoff compatibility before adding that override.
+   Keep the existing lifecycle path and test both default adapters and supplied
+   wrappers when extending this contract.
 5. **Measure streaming and transaction duration.** Benchmark representative
    original sizes and media fanout, observing peak memory, spool bytes, I/O,
    transaction/lock durations and failure windows. Use bounded fixtures owned by

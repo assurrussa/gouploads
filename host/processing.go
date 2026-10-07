@@ -28,7 +28,11 @@ const (
 	ProcessingMediaResizer = uploadconfig.ProcessingMediaResizer
 )
 
-var ErrProcessingDisabled = uploadconfig.ErrProcessingDisabled
+var (
+	ErrProcessingDisabled              = uploadconfig.ErrProcessingDisabled
+	ErrInvalidOriginalStorage          = errors.New("original storage override must not be typed nil")
+	ErrOriginalStorageRequiresLocalTus = errors.New("original storage override requires local TUS reader handoff")
+)
 
 type UploadOutbox interface {
 	Put(ctx context.Context, name, payload string, availableAt time.Time) (outboxtypes.JobID, error)
@@ -42,6 +46,11 @@ type OriginalRuntimeDeps struct {
 	Outbox      UploadOutbox
 	Logger      logger.Logger
 	Events      EventPublisher
+	// Storage optionally supplies caller-owned persistence for local-driver
+	// runtimes. TUS spools locally and hands its reader to this same storage.
+	// S3 overrides are rejected: key-only TUS handoff cannot prove compatibility.
+	// The runtime never calls Close, including on construction failure.
+	Storage Storage
 	// ContentScanner is optional. When supplied, the finalizer privately spools
 	// and scans the same bounded bytes it will publish. Nil is not approval.
 	ContentScanner ContentScanner
@@ -81,6 +90,12 @@ func NewOriginalRuntime(cfg StorageConfig, deps OriginalRuntimeDeps) (*OriginalR
 	if cfg.Driver == "" {
 		cfg.Driver = StorageDriverLocal
 	}
+	if deps.Storage != nil && nilRuntimeDependency(deps.Storage) {
+		return nil, ErrInvalidOriginalStorage
+	}
+	if deps.Storage != nil && cfg.Driver == StorageDriverS3 {
+		return nil, ErrOriginalStorageRequiresLocalTus
+	}
 	if cfg.Driver != StorageDriverLocal && cfg.Driver != StorageDriverS3 {
 		return nil, errors.New("original runtime storage driver must be local or s3")
 	}
@@ -91,9 +106,12 @@ func NewOriginalRuntime(cfg StorageConfig, deps OriginalRuntimeDeps) (*OriginalR
 	if err != nil {
 		return nil, err
 	}
-	storage, err := NewStorage(cfg)
-	if err != nil {
-		return nil, err
+	storage := deps.Storage
+	if storage == nil {
+		storage, err = NewStorage(cfg)
+		if err != nil {
+			return nil, err
+		}
 	}
 	repo, err := NewFileRepo(deps.Database, deps.Transaction)
 	if err != nil {
