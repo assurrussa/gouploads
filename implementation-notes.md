@@ -916,5 +916,10 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   original cutoff; pgx truncation cannot silently exclude T at cutoff T+1ns.
 - Add unit parameter/echo cases including a pre-Unix-epoch timestamp and the UTC
   year boundary, plus real-PG T/T±1ns and microsecond-edge cases with read-only
-  execution and unchanged persisted evidence. Focused validation pending the
-  coordinated AuthHub window; no repeated provider/anonymous/full aggregate.
+  execution and unchanged persisted evidence.
+- At source `3e5876e318cd7a3f7b83590204384b44596c0f74`, affected non-race
+  host/repository/externalconsumer retention tests, the real-PG cutoff regression,
+  scoped integration vet and new-code lint passed sequentially (zero lint issues).
+  The PostgreSQL year-limit parameter and original nanosecond echo passed too.
+  Exact owned PG fixture removed with no leftover test databases; lane released
+  to Outbox. No repeated provider/anonymous/full aggregate or hosted CI.
