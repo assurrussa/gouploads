@@ -22,7 +22,7 @@ func (exampleRetentionReader) GetDeletionRetention(_ context.Context, cutoff *ti
 	return snapshot, nil
 }
 
-func ExampleInspectDeletionRetention() {
+func Example_deletionRetentionInventory() {
 	// The host must authorize the inventory's entire scope before this call.
 	cutoff := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	inventory, err := host.InspectDeletionRetention(context.Background(), exampleRetentionReader{}, &cutoff)
