@@ -870,3 +870,56 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   implementation. Preserve that evidence; do not repeat the aggregate for this
   test assertion and documentation-only follow-up. Existing integration lint
   findings are outside this bounded change.
+
+
+## Read-only deletion-retention inventory (2026-10-07)
+
+- Reuse FileRepo and host diagnostic state/error conventions with a structural
+  aggregate reader. One statement returns counts/timestamps/JSON-text byte
+  estimates; it never returns plans or identifiers and never calls storage,
+  outbox, scheduling or mutation APIs. Hosts authorize the whole database scope.
+- Optional cutoff is copied to UTC and strictly excludes equality. Unknown ages
+  are excluded from projections while remaining in totals. No cutoff means no
+  projection or implied retention policy; cleaner Minutes remains unrelated.
+- Minimal envelope/binding checks are explicitly diagnostic, not full decoder
+  validation or mutation eligibility. JSON text bytes do not estimate physical
+  disk savings. Completion facts come from completed_at, independent of shape.
+- Minimal completed tombstone fixtures retain FileID/object binding and exercise
+  the existing decoder and same/wrong-binding no-op behavior without adding a
+  compactor. Future policy must resolve actor/audit fields and holds first.
+- Required source-readiness constituent checks completed at `dfdb0b7`: tidy,
+  format, vet/lint, full race/coverage, public/PG/TUS/provider/original/audio
+  integrations, both clean consumers and strict host import scan. One test lint
+  correction and one fixture URL correction resumed only unfinished targets.
+  Scoped integration vet/new-code lint also passed with zero issues.
+- The original anonymous download command exited nonzero on a lone public-proxy
+  HTTP/2 lz4 ZIP error. Its failure is retained, not relabelled aggregate PASS.
+  Go 1.27.1 source proves download-all waits for all downloads and reports each
+  module error; no per-module success manifest survived the existing cleanup.
+  One fresh credential-free HTTP/1 corrective download of the same immutable
+  lz4 version passed with public proxy/sumdb checksum verification and TLS intact.
+  Dependency manifests are byte-identical to merged PR17's passed anonymous gate.
+  Parent accepted this explicit combined constituent evidence for draft review;
+  no full graph/aggregate rerun or validation-script change was made.
+- Owned PG/MinIO were cleaned with no leftover test databases. The CPU lane was
+  safely lent during network-only download after pausing the owned make scheduler,
+  then returned before subsequent checks. No hosted CI dispatch, workflow/settings
+  change, release or deployment. A separate local recommendation proposes retaining
+  path-free per-module download evidence on failures; it is outside this PR.
+
+
+### Cutoff precision correction
+
+- Preserve the caller's exact nanosecond cutoff in the projection and bind its
+  microsecond ceiling to PostgreSQL. For stored microsecond-aligned timestamps,
+  strict comparison against that ceiling equals strict comparison against the
+  original cutoff; pgx truncation cannot silently exclude T at cutoff T+1ns.
+- Add unit parameter/echo cases including a pre-Unix-epoch timestamp and the UTC
+  year boundary, plus real-PG T/T±1ns and microsecond-edge cases with read-only
+  execution and unchanged persisted evidence.
+- At source `3e5876e318cd7a3f7b83590204384b44596c0f74`, affected non-race
+  host/repository/externalconsumer retention tests, the real-PG cutoff regression,
+  scoped integration vet and new-code lint passed sequentially (zero lint issues).
+  The PostgreSQL year-limit parameter and original nanosecond echo passed too.
+  Exact owned PG fixture removed with no leftover test databases; lane released
+  to Outbox. No repeated provider/anonymous/full aggregate or hosted CI.

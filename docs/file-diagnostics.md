@@ -65,6 +65,11 @@ Each fixture creates a UUID-named schema, verifies its search path and drops onl
 that schema after closing its scoped pool. It never resets a shared database,
 truncates tables or runs migration downs. No live storage or worker is invoked.
 
+The first retention step now has a
+[read-only aggregate inventory](deletion-retention-inventory.md), including
+age what-ifs and minimal completed-tombstone binding compatibility fixtures.
+Compaction and reconciliation remain separate decisions.
+
 ## Sequenced follow-up PRs
 
 1. **Recovery contracts and preview first.** The current contract gap and

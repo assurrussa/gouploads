@@ -397,3 +397,45 @@ func TestHandle_FileIDIsEmpty(t *testing.T) {
 	_, err = useCase.Handle(context.Background(), request)
 	require.Error(t, err)
 }
+
+// A future payload compactor must retain the exact FileID and object binding.
+// This is a compatibility fixture only; no compaction is implemented here.
+func TestHandle_CompletedMinimalTombstoneRetainsBinding(t *testing.T) {
+	t.Parallel()
+	for _, binding := range []struct {
+		name       string
+		objectType shared.FileObjectType
+		objectID   shared.FileObjectID
+		mismatch   bool
+	}{
+		{"same binding", shared.ObjectTypeAdmin, 123, false},
+		{"wrong object", shared.ObjectTypeAdmin, 999, true},
+		{"wrong type", shared.ObjectTypeExercise, 123, true},
+	} {
+		t.Run(binding.name, func(t *testing.T) {
+			t.Parallel()
+			useCase, state, storage, request := newDeletion(t)
+			var plan model.DeletionPlan
+			require.NoError(t, json.Unmarshal([]byte(`{"file":{"id":123,"objectType":"admin","objectId":123}}`), &plan))
+			plan.Completed = true
+			state.plan, state.hidden = &plan, true
+			request.ObjectType, request.ObjectID = binding.objectType, binding.objectID
+			before := copyPlan(state.plan)
+			objects := len(storage.objects)
+			for range 2 {
+				_, err := useCase.Handle(t.Context(), request)
+				if binding.mismatch {
+					require.ErrorIs(t, err, deletedfile.ErrFileOwnershipMismatch)
+				} else {
+					require.NoError(t, err)
+				}
+			}
+			require.Equal(t, before, state.plan)
+			require.True(t, state.hidden)
+			require.Len(t, storage.objects, objects)
+			require.Empty(t, storage.calls)
+			require.Empty(t, state.jobs)
+			require.Empty(t, state.events)
+		})
+	}
+}

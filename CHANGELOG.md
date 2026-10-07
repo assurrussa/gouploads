@@ -4,6 +4,11 @@
 
 ### Added
 
+- Read-only `host.InspectDeletionRetention` and `FileRepo.GetDeletionRetention`
+  provide aggregate plan counts, actual source timestamps, payload JSON-text
+  byte estimates and optional caller-supplied age what-ifs. Unknown evidence
+  remains diagnostic; no retention default, compaction or recovery is installed.
+
 - Optional caller-owned `OriginalRuntimeDeps.Storage` for local-driver runtimes,
   shared by staging, finalization/scanning and deletion. Local TUS keeps its
   protocol spool and hands completed bytes to the supplied store. S3 overrides
