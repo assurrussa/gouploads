@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ func (r *retentionReader) GetDeletionRetention(_ context.Context, cutoff *time.T
 func TestInspectDeletionRetentionAvailableEmptyAndCutoff(t *testing.T) {
 	t.Parallel()
 	for _, withCutoff := range []bool{false, true} {
-		t.Run(fmt.Sprint(withCutoff), func(t *testing.T) {
+		t.Run(strconv.FormatBool(withCutoff), func(t *testing.T) {
 			t.Parallel()
 			reader := &retentionReader{}
 			var cutoff *time.Time
