@@ -857,3 +857,16 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   regression uses separate protocol/persistence roots and instruments staging,
   scanner reads, final persistence and cleanup/deletion. Public consumer has an
   executable operation-counting wrapper example without key/path telemetry.
+- Required `make source-readiness` passed once at `be13c7e`, including whole-module
+  tidy/format/vet/lint, full race/coverage, public and clean-module consumers,
+  all PG/local/S3 integration gates, anonymous graph/download verification and
+  strict host import boundaries. Owned PG/MinIO fixtures were cleaned; no test
+  databases remained. The anonymous tail completed without retry or rerun.
+- Extra integration-tag vet passed. Integration lint found one new inline type
+  assertion and 39 pre-existing findings in unchanged originals/audio helpers.
+  Corrected the new assertion at `0fa6100`; focused real-PG injection regression
+  and integration vet/new-code lint passed (0 new issues), with its owned PG
+  removed. Runtime/public consumer code is identical to the aggregate-tested
+  implementation. Preserve that evidence; do not repeat the aggregate for this
+  test assertion and documentation-only follow-up. Existing integration lint
+  findings are outside this bounded change.
