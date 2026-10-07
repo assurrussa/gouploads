@@ -67,7 +67,9 @@ truncates tables or runs migration downs. No live storage or worker is invoked.
 
 ## Sequenced follow-up PRs
 
-1. **Recovery contracts and preview first.** Define a host-supplied, authorized,
+1. **Recovery contracts and preview first.** The current contract gap and
+   proposed minimum are documented in [recovery preview dependency design](recovery-preview-contract.md).
+   No preview API is shipped until that dependency exists. Define a host-supplied, authorized,
    read-only job lookup using the outbox's verified public contracts. Establish
    durable FileID-to-job correlation for original, media dispatch/continuation
    and deletion jobs, plus retention semantics. Never search arbitrary payloads
