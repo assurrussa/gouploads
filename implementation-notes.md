@@ -821,3 +821,19 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   data removed, shared/prior resources preserved. Full matrix is recorded in
   `docs/file-diagnostics-readiness.md`. Lane released; requesting one final
   review. No tag, published probe, production or recovery mutation.
+
+## Recovery preview dependency design (2026-10-07)
+
+- Based on merged diagnostics `314ea8e`. Inspected original/media producers,
+  retained handoff/deletion plans, original uncertain-commit behavior and pinned
+  Outbox/PG `v0.12.0` readers/acknowledgment. Enqueue JobIDs are discarded;
+  active reads require a known JobID, failed reads use a different row identity,
+  successful jobs are removed, and no durable per-file operation coverage exists.
+- A useful mutation preview cannot be safely built from current diagnostics.
+  Applied the authorized fallback: design-only minimal evidence/correlation
+  dependency and acceptance matrix in `docs/recovery-preview-contract.md`, with
+  blocked/unknown precedence and explicit prerequisites for future actionable
+  candidates. No ceremonial API, new job source, correlation mutation, schema,
+  dependency, runtime or route change. Existing guarantee/source evidence is
+  unchanged. Documentation-only validation is `git diff --check`; no heavy lane
+  or repeated previously passed Go gates are needed. One final review requested.
