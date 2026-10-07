@@ -800,3 +800,10 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   no production, storage, recovery, release or registry mutation. Live SQL
   execution gap is closed. Full race/provider/published release readiness is
   outside this bounded diagnostic change and is not claimed.
+
+- Readiness review clarified that focused source/API verification is insufficient
+  for aggregate merge readiness. The untagged candidate must pass unchanged
+  `make source-readiness`, including its final `make check` constituent. The
+  complete 17-leaf existing/missing matrix and queued owned fixture scope are in
+  `docs/file-diagnostics-readiness.md`. Aggregate checks wait behind Outbox's
+  active heavy lane. No tag/published probe is authorized for this candidate.
