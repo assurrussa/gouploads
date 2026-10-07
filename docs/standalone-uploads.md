@@ -57,6 +57,57 @@ staging bucket, public delivery and TUS settings. The source is read through
 or a `site` proxy. Local TUS remains the existing single-node filesystem store;
 this change does not make local TUS cross-node durable.
 
+## Caller-owned storage
+
+`OriginalRuntimeDeps.Storage` optionally supplies a `host.Storage` implementation
+or wrapper in local-driver mode (including an omitted driver). Nil keeps the
+existing config-built local/S3 defaults. A typed nil returns
+`host.ErrInvalidOriginalStorage`. The runtime never calls `Close` on supplied
+storage, either on successful construction, construction failure or worker
+shutdown; the application owns its lifetime.
+
+```go
+type meteredStorage struct {
+    host.Storage
+    staged atomic.Int64 // sync/atomic
+}
+
+func (s *meteredStorage) SaveTemp(ctx context.Context, in host.SaveFileInput) (host.StoredFile, error) {
+    s.staged.Add(1)
+    return s.Storage.SaveTemp(ctx, in)
+}
+
+base, err := host.NewStorage(cfg) // cfg.Driver is local; cfg.Local.Root is explicit.
+if err != nil {
+    return err
+}
+metered := &meteredStorage{Storage: base}
+deps.Storage = metered // deps already includes host-owned DB, transaction, outbox.
+runtime, err := host.NewOriginalRuntime(cfg, deps)
+```
+
+The executable wrapper example is in
+`reference/externalconsumer/storage_example_test.go`. Count operations without
+logging keys, paths, content, credentials or request metadata. Wrapper methods
+must preserve storage contracts and be safe for concurrent workers. Configuration
+still controls canonical staging/destination keys, delivery URLs, upload policy
+and scanner checks; a wrapper must honor those keys and return valid stored
+metadata. Injection does not probe or authorize a backend.
+
+The same supplied instance handles ingestion staging, finalizer source reads,
+scanner source reads, persistence and deletion. Local TUS chunk writes still use
+the local protocol spool under `cfg.Local.Root`; its completed reader is copied
+through the supplied `SaveTemp`. The spool and persistence root may differ.
+Chunk writes are therefore not counted by this storage wrapper, and an explicit,
+usable local root remains required. All content and authorization checks apply.
+
+An injected store with `cfg.Driver == host.StorageDriverS3` returns
+`host.ErrOriginalStorageRequiresLocalTus` before constructing storage or TUS.
+S3 TUS creates its own config-built multipart client and completes with a key,
+so the generic `Storage` interface cannot establish that an override shares its
+backend. Supporting that combination needs a separate compatible TUS dependency
+contract. Default S3 wiring is unchanged.
+
 ## State, content and cleanup
 
 All four ingestion paths (multipart single/batch, reader, already-stored/TUS)

@@ -837,3 +837,23 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   dependency, runtime or route change. Existing guarantee/source evidence is
   unchanged. Documentation-only validation is `git diff --check`; no heavy lane
   or repeated previously passed Go gates are needed. One final review requested.
+
+## Original runtime storage injection (2026-10-07)
+
+- Additive `OriginalRuntimeDeps.Storage` uses the existing public contract.
+  Omission preserves config-built storage; typed nil fails explicitly. Caller
+  owns supplied storage on success, construction failure and worker shutdown.
+- Local TUS completes with a reader, copied through the supplied store. Its
+  protocol spool remains config-built and may have a separate root. Ingestion,
+  original finalization/scanning and deletion receive the identical instance.
+  S3 TUS independently builds a multipart client and completes with a key;
+  reject S3 overrides before construction rather than claim compatibility.
+- Preserve explicit local root, original processing validation, canonical key
+  and staging/destination isolation, scanner and host authorization policies.
+  No new provider, schema, runtime rewrite or recovery mutation. Future S3
+  injection requires a compatible protocol-store dependency contract first.
+- Unit cases cover defaults, wrapper identity, typed nil, S3, invalid config and
+  construction failure without closing supplied storage. Real PG/outbox/TUS
+  regression uses separate protocol/persistence roots and instruments staging,
+  scanner reads, final persistence and cleanup/deletion. Public consumer has an
+  executable operation-counting wrapper example without key/path telemetry.

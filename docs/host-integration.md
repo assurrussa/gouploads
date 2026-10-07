@@ -197,6 +197,11 @@ flow remains pass-through.
    For original-only wiring, `OriginalRuntimeDeps.ContentScanner` accepts an
    optional `host.ContentScanner`. It scans a complete private spool before
    publication, and the same bytes are stored. Nil provides no content approval.
+   `OriginalRuntimeDeps.Storage` optionally provides caller-owned persistence
+   in local-driver mode. Staging, scanner reads, finalization and deletion share
+   that instance; local TUS still spools locally before passing its reader to it.
+   S3 overrides are rejected because the key-only handoff cannot prove backend
+   compatibility. See [storage ownership and example](standalone-uploads.md#caller-owned-storage).
    TUS completion forwards `ReaderRequest.FinalizationKey`; ready sessions remain
    until TTL. Repeats return the same file and cannot resurrect a deleted result.
    Custom `TaskUploader` implementations must persist the handoff atomically with
