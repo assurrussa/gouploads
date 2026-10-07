@@ -419,3 +419,14 @@ Use `host.DiagnoseFile(ctx, runtime.Files, fileID)` after host authorization.
 or storage calls. Results preserve unknown and unavailable observations. No
 job-state source or recovery action is inferred from upload metadata. See
 [the state contract and sequenced recovery roadmap](file-diagnostics.md).
+
+### Deletion-retention inventory
+
+`host.InspectDeletionRetention(ctx, runtime.Files, completedBefore)` exposes
+aggregate counts, actual `created_at`/`completed_at` timestamps and labelled
+payload JSON-text byte estimates. Authorize the entire repository scope before
+calling; the default FileRepo inventories all retained plans in its database
+scope. A nil cutoff omits the what-if projection; a supplied cutoff uses strict
+`completed_at < cutoff` with known ages. Unavailable evidence is never a healthy
+empty result. There is no retention default or mutation. See
+[the inventory contract and compatibility requirements](deletion-retention-inventory.md).

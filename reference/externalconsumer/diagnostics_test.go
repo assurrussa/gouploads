@@ -8,7 +8,10 @@ import (
 	"github.com/assurrussa/gouploads/host"
 )
 
-var _ host.FileDiagnosticReader = (*host.FileRepo)(nil)
+var (
+	_ host.FileDiagnosticReader    = (*host.FileRepo)(nil)
+	_ host.DeletionRetentionReader = (*host.FileRepo)(nil)
+)
 
 func TestDiagnosticsPublicSurface(t *testing.T) {
 	t.Parallel()
@@ -18,4 +21,17 @@ func TestDiagnosticsPublicSurface(t *testing.T) {
 	require.EqualValues(t, 7, result.FileID)
 	var snapshot host.FileLifecycleSnapshot
 	require.False(t, snapshot.FinalizationRecorded)
+}
+
+func TestDeletionRetentionPublicSurface(t *testing.T) {
+	t.Parallel()
+	result, err := host.InspectDeletionRetention(t.Context(), nil, nil)
+	require.ErrorIs(t, err, host.ErrDiagnosticUnavailable)
+	require.Equal(t, host.DiagnosticUnavailable, result.Source)
+	require.Nil(t, result.Snapshot)
+	var snapshot host.DeletionRetentionSnapshot
+	require.Nil(t, snapshot.Projection)
+	require.Zero(t, snapshot.TotalCount)
+	_ = host.DeletionRetentionProjection{}
+	_ = host.ErrInvalidDiagnosticCutoff
 }

@@ -870,3 +870,22 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   implementation. Preserve that evidence; do not repeat the aggregate for this
   test assertion and documentation-only follow-up. Existing integration lint
   findings are outside this bounded change.
+
+
+## Read-only deletion-retention inventory (2026-10-07)
+
+- Reuse FileRepo and host diagnostic state/error conventions with a structural
+  aggregate reader. One statement returns counts/timestamps/JSON-text byte
+  estimates; it never returns plans or identifiers and never calls storage,
+  outbox, scheduling or mutation APIs. Hosts authorize the whole database scope.
+- Optional cutoff is copied to UTC and strictly excludes equality. Unknown ages
+  are excluded from projections while remaining in totals. No cutoff means no
+  projection or implied retention policy; cleaner Minutes remains unrelated.
+- Minimal envelope/binding checks are explicitly diagnostic, not full decoder
+  validation or mutation eligibility. JSON text bytes do not estimate physical
+  disk savings. Completion facts come from completed_at, independent of shape.
+- Minimal completed tombstone fixtures retain FileID/object binding and exercise
+  the existing decoder and same/wrong-binding no-op behavior without adding a
+  compactor. Future policy must resolve actor/audit fields and holds first.
+- Validation pending the coordinated local lane; no hosted CI dispatch or new
+  workflow/settings change is part of this bounded implementation.

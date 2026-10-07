@@ -81,7 +81,10 @@ moderation approval or a guarantee that untrusted content is safe to publish.
 `host.FileRepo`, reporting file, upload, finalization handoff and deletion states.
 Job state is explicitly unavailable because the public outbox contract has no
 lookup. Hosts authorize the FileID before calling; the API installs no route and
-performs no recovery or deletion. See [diagnostics and recovery roadmap](docs/file-diagnostics.md).
+performs no recovery or deletion. `host.InspectDeletionRetention` adds a read-only
+aggregate inventory of retained deletion plans, with caller-supplied age what-ifs
+and JSON-text byte estimates. See [the inventory contract](docs/deletion-retention-inventory.md)
+and [diagnostics and recovery roadmap](docs/file-diagnostics.md).
 
 ## Opt in to MP3/WAV originals
 
