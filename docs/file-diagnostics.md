@@ -52,6 +52,19 @@ finalization keys and bindings. Unrecognized status strings are not echoed.
 become unavailable on failure, even after a partial scan. Job remains unavailable
 on success. Do not add raw errors to host responses or unfiltered logs.
 
+## Verification
+
+After acquiring the heavy test lane, run `make test-diagnostics-postgres-integration`
+against the authorized test PostgreSQL service. The target uses the existing
+integration address/port overrides. It exercises the real embedded migrations,
+SQL projection, JSON operators and pgx decoding, including absent files with
+retained plans/multiple keys, soft deletion, null/empty/nonobject metadata,
+recognized/future statuses and missing lifecycle tables.
+
+Each fixture creates a UUID-named schema, verifies its search path and drops only
+that schema after closing its scoped pool. It never resets a shared database,
+truncates tables or runs migration downs. No live storage or worker is invoked.
+
 ## Sequenced follow-up PRs
 
 1. **Recovery contracts and preview first.** Define a host-supplied, authorized,

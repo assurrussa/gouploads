@@ -763,3 +763,10 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
 - Follow-up contracts and recovery/deletion-retention/storage/performance order
   are in `docs/file-diagnostics.md`; mutation work requires its own reviewed
   contracts and fencing proof.
+
+- Independent source review at `42b23fd` found no implementation issue but noted
+  the mock driver does not execute SQL. Added real-PG diagnostic cases and a
+  focused Make target (also part of source-readiness). Fixtures own one random
+  schema each, apply the real embedded migration SQL and clean up only that
+  schema, including pending-plan and missing-table cases. Execution remains
+  pending the explicit heavy-lane release; no recovery mutation was added.
