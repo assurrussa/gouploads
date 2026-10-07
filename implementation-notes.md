@@ -779,3 +779,24 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
 - Live PostgreSQL diagnostic execution remains pending a permitted fixture/window;
   this window excluded containers and the DataGrid PostgreSQL fixture was stopped.
   No live SQL, race, container or full release-readiness result is claimed.
+
+- Final diagnostics verification executed at exact
+  `228293264f49c988dd3132de39db0d0a1e9cacfa` after the parent granted a dedicated
+  sequential live-PG window. PostgreSQL 18.6 ran in one uniquely named,
+  loopback-only, CPU/memory-bounded tmpfs fixture. JSON test events confirmed
+  **19 subcases and 3 groups passed, 0 skips and 0 failures**.
+
+  | Check | Result |
+  | --- | --- |
+  | Metadata/soft-deletion SQL + pgx decoding | 15 subcases passed (NULL, empty/nonobject presets, known/future states) |
+  | Missing rows with retained deletion/finalization evidence | 2 subcases passed (pending/completed, two keys each) |
+  | Missing lifecycle tables -> sanitized unavailable | Both table cases passed |
+  | `make test-surface` | Passed all public/boundary/probe packages |
+  | `make externalconsumer-local` | Both clean local probe modes passed |
+  | Scoped non-race tests, vet/lint and integration-tagged vet/lint | Previously passed on identical implementation source |
+
+- Cleanup query confirmed zero diagnostic schemas remained, then only the
+  task-owned tmpfs PostgreSQL container was removed. Lane released to Outbox;
+  no production, storage, recovery, release or registry mutation. Live SQL
+  execution gap is closed. Full race/provider/published release readiness is
+  outside this bounded diagnostic change and is not claimed.
