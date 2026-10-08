@@ -38,7 +38,7 @@ func newJobEvidenceFixture(t *testing.T) (*pgsqlclient.Client, *host.FileRepo, *
 	}
 	id := insertDiagnosticFile(t, db, `{"fileUploader":{"status":"queued"}}`, false)
 	_, err = db.DB().Exec(t.Context(), "jobEvidence.BindOwnedFile",
-		"update files set object_type = $2, object_id = 77 where id = $1", id, host.ObjectTypeKnowledgeBase.String())
+		"update files set object_type = $2, object_id = 77, url = '' where id = $1", id, host.ObjectTypeKnowledgeBase.String())
 	require.NoError(t, err)
 	file, err := repo.GetByID(t.Context(), id)
 	require.NoError(t, err)
