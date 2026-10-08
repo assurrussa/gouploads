@@ -12,11 +12,12 @@ import (
 	clientresizer "github.com/assurrussa/gouploads/domain/files/service/client_resizer"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	listenresizefile "github.com/assurrussa/gouploads/domain/files/usecases/command/listen_resize_file"
+	"github.com/assurrussa/gouploads/internal/filejobs"
 )
 
 const pollInterval = 30 * time.Second
 
-func (u *UseCase) schedulePoll(ctx context.Context, req Request) error {
+func (u *UseCase) schedulePoll(ctx context.Context, file model.File, req Request) error {
 	payload, err := json.Marshal(shared.MediaDispatchPayload{
 		FileID: req.FileID, FilePath: req.FilePath, SkipResizeVideo: req.SkipResizeVideo,
 		JobID: req.JobID, PollDeadline: req.PollDeadline,
@@ -24,7 +25,10 @@ func (u *UseCase) schedulePoll(ctx context.Context, req Request) error {
 	if err != nil {
 		return fmt.Errorf("marshal media polling continuation: %w", err)
 	}
-	if _, err := u.outbox.Put(ctx, "send_resize_file", string(payload), time.Now().Add(pollInterval)); err != nil {
+	if _, err := filejobs.Put(
+		ctx, u.outbox, file, model.FileJobMediaAdmission, "send_resize_file",
+		string(payload), time.Now().Add(pollInterval),
+	); err != nil {
 		return fmt.Errorf("persist media polling continuation: %w", err)
 	}
 	return nil
@@ -47,7 +51,7 @@ func (u *UseCase) poll(ctx context.Context, file model.File, req Request) (Respo
 	}
 	switch result.Status {
 	case "queued", "running":
-		return response, u.schedulePoll(ctx, req)
+		return response, u.schedulePoll(ctx, file, req)
 	case "done", "failed":
 		artifacts := make([]listenresizefile.Artifact, 0, len(result.Artifacts))
 		for _, a := range result.Artifacts {

@@ -123,3 +123,11 @@ the design does not ship a recovery-preview API, and the inventory does not comp
 
 Each follow-up is a separate bounded review. No release, deployment or registry
 publication is implied by this roadmap.
+
+## Optional queue evidence
+
+The separate [file job evidence adapter](file-job-evidence.md) records explicit
+producer-created JobID links atomically on pinned PostgreSQL and exposes
+`host.InspectFileJobs`. The lifecycle-only `DiagnoseFile` result is unchanged.
+Job evidence is partial/unmapped; absent queue rows never prove success or make
+a recovery action safe.

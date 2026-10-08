@@ -4,6 +4,12 @@
 
 ### Added
 
+- Opt-in `host.NewPostgresFileJobOutbox` atomically retains explicit file-generation,
+  operation and actual queue JobID links on the pinned PostgreSQL backend.
+  `host.InspectFileJobs` / `FileRepo.GetFileJobs` read bounded sanitized job evidence.
+  Coverage stays partial/unmapped; no success-retention, recovery, backfill or
+  automatic worker behavior is introduced. See `docs/file-job-evidence.md`.
+
 - Read-only `host.InspectDeletionRetention` and `FileRepo.GetDeletionRetention`
   provide aggregate plan counts, actual source timestamps, payload JSON-text
   byte estimates and optional caller-supplied age what-ifs. Unknown evidence

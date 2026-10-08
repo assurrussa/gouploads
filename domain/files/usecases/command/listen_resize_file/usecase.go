@@ -15,6 +15,7 @@ import (
 	uploadfilejob "github.com/assurrussa/gouploads/domain/files/outbox/upload_file"
 	"github.com/assurrussa/gouploads/domain/files/shared"
 	eventstream "github.com/assurrussa/gouploads/internal/events"
+	"github.com/assurrussa/gouploads/internal/filejobs"
 	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
@@ -103,7 +104,9 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 		return Response{}, fmt.Errorf("marshal payload: %w", err)
 	}
 
-	if _, err := u.outboxPutter.Put(ctx, uploadfilejob.JobName, payload, tmNow); err != nil {
+	if _, err := filejobs.Put(
+		ctx, u.outboxPutter, fileModel, model.FileJobMediaFinalization, uploadfilejob.JobName, payload, tmNow,
+	); err != nil {
 		return Response{}, fmt.Errorf("admin Outbox: %w", err)
 	}
 

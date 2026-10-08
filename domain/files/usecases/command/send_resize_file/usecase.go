@@ -139,7 +139,7 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 	// Drop the signed source URL. Polling never resolves or submits it again.
 	// An old worker also fails source-path validation rather than re-submitting.
 	req.FilePath = ""
-	if err := u.schedulePoll(ctx, req); err != nil {
+	if err := u.schedulePoll(ctx, fileModel, req); err != nil {
 		return Response{}, err
 	}
 	// A retained failed admission also replies 202/queued. Replaying it cannot
