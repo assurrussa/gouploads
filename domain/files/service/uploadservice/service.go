@@ -17,6 +17,7 @@ import (
 	finalizeoriginal "github.com/assurrussa/gouploads/domain/files/outbox/finalize_original"
 	sendresizefilejob "github.com/assurrussa/gouploads/domain/files/outbox/send_resize_file"
 	"github.com/assurrussa/gouploads/domain/files/shared"
+	"github.com/assurrussa/gouploads/internal/filejobs"
 	"github.com/assurrussa/gouploads/internal/filepolicy"
 	"github.com/assurrussa/gouploads/internal/filesanitize"
 	"github.com/assurrussa/gouploads/internal/pointer"
@@ -238,7 +239,7 @@ func (s *Service) DeleteFile(ctx context.Context, req DeleteRequest) error {
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
 	}
-	if _, err := s.outbox.Put(ctx, deletedfilejob.JobName, payload, time.Now()); err != nil {
+	if _, err := filejobs.Put(ctx, s.outbox, file, model.FileJobDeletion, deletedfilejob.JobName, payload, time.Now()); err != nil {
 		return fmt.Errorf("put outbox: %w", err)
 	}
 	return nil
@@ -374,7 +375,7 @@ func (s *Service) uploadFile(
 		if err != nil {
 			return model.File{}, err
 		}
-		if _, err := s.outbox.Put(ctx, finalizeoriginal.JobName, payload, now); err != nil {
+		if _, err := filejobs.Put(ctx, s.outbox, file, model.FileJobOriginalFinalization, finalizeoriginal.JobName, payload, now); err != nil {
 			return model.File{}, fmt.Errorf("put original finalization job: %w", err)
 		}
 		return file, nil
@@ -384,7 +385,7 @@ func (s *Service) uploadFile(
 	if err != nil {
 		return model.File{}, fmt.Errorf("marshal payload: %w", err)
 	}
-	if _, err := s.outbox.Put(ctx, sendresizefilejob.JobName, payload, now); err != nil {
+	if _, err := filejobs.Put(ctx, s.outbox, file, model.FileJobMediaAdmission, sendresizefilejob.JobName, payload, now); err != nil {
 		return model.File{}, fmt.Errorf("put outbox job: %w", err)
 	}
 	return file, nil

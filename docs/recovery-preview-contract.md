@@ -1,6 +1,10 @@
 # Recovery preview: required evidence contract
 
-Status: dependency design only; no recovery-preview API or mutation is introduced.
+Status: recovery dependency design; no recovery-preview API or mutation is introduced.
+The opt-in [file job evidence implementation](file-job-evidence.md) now supplies
+partial producer provenance and read-only queue observations. It does not satisfy
+complete coverage, success retention, operation fencing or storage/remote evidence.
+The original evidence inventory below describes the baseline reviewed for this design.
 Checked against merged GoUploads `314ea8e9327b95ed05a5d26527d1fdbf7dee11f0`
 and its pinned `github.com/assurrussa/outbox` / PostgreSQL backend `v0.12.0`.
 

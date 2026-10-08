@@ -83,8 +83,10 @@ included in `v0.12.0`.
 
 `host.DiagnoseFile` reads a path-free lifecycle snapshot by FileID through
 `host.FileRepo`, reporting file, upload, finalization handoff and deletion states.
-Job state is explicitly unavailable because the public outbox contract has no
-lookup. Hosts authorize the FileID before calling; the API installs no route and
+The lifecycle-only result keeps job state unavailable. Opt-in
+[PostgreSQL job evidence](docs/file-job-evidence.md) adds durable producer links
+and separate read-only `host.InspectFileJobs` diagnostics with partial coverage;
+missing queue history never means success. Hosts authorize the FileID before calling; the API installs no route and
 performs no recovery or deletion. `host.InspectDeletionRetention` adds a read-only
 aggregate inventory of retained deletion plans, with caller-supplied age what-ifs
 and JSON-text byte estimates. See [the inventory contract](docs/deletion-retention-inventory.md)

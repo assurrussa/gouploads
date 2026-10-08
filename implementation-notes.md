@@ -928,3 +928,20 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   to Outbox. No repeated provider/anonymous/full aggregate or hosted CI.
 - Subsequently merged as PR #18 at `8439aa4`. The recorded verification remains
   accepted constituent evidence; the original aggregate is not relabelled PASS.
+
+## File job associations (2026-10-08)
+
+- Bounded to opt-in PostgreSQL producer provenance and a single-snapshot reader,
+  pinned to existing Outbox core/backend v0.12.0. No dependency or Outbox source
+  update, release, CI trigger, backfill or recovery action is needed.
+- A generic Put callback cannot prove atomic transaction sharing. The adapter
+  accepts the concrete pinned pgsqlclient.Client and owns jobsrepo insertion;
+  direct association writes use the same storage.GetTx transaction.
+- Generation is the already-persisted file slug plus object binding. This is
+  provenance, not a new mutation/fencing generation. Legacy/direct/after-job
+  gaps keep coverage partial. Missing queue history and expired leases never
+  produce success or quiescence.
+- Implementation initially preserved as a patch while cloud executor shell
+  writes could not start. Source-only Go formatting/parsing is separate from
+  compilation and owned-schema integration gates; those remain unverified
+  until the task environment and validation lane are available.
