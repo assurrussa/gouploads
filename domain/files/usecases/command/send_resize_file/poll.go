@@ -25,7 +25,10 @@ func (u *UseCase) schedulePoll(ctx context.Context, file model.File, req Request
 	if err != nil {
 		return fmt.Errorf("marshal media polling continuation: %w", err)
 	}
-	if _, err := filejobs.Put(ctx, u.outbox, file, model.FileJobMediaAdmission, "send_resize_file", string(payload), time.Now().Add(pollInterval)); err != nil {
+	if _, err := filejobs.Put(
+		ctx, u.outbox, file, model.FileJobMediaAdmission, "send_resize_file",
+		string(payload), time.Now().Add(pollInterval),
+	); err != nil {
 		return fmt.Errorf("persist media polling continuation: %w", err)
 	}
 	return nil

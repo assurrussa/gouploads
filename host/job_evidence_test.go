@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/assurrussa/gouploads/host"
 	"github.com/stretchr/testify/require"
+
+	"github.com/assurrussa/gouploads/host"
 )
 
 type jobEvidenceReader struct {
@@ -32,14 +33,27 @@ func TestFileJobDiagnosticsKeepCoverageAndOutcomeIndependent(t *testing.T) {
 	}{
 		{name: "legacy or unmapped", coverage: "historical_unmapped"},
 		{name: "truncated empty cannot mean no jobs", truncated: true, coverage: "partial"},
-		{name: "missing after ack or removal is unknown", jobs: []host.FileJobEvidence{{State: host.FileJobUnknown}}, coverage: "partial"},
-		{name: "failure does not establish storage outcome", jobs: []host.FileJobEvidence{{State: host.FileJobFailed}}, coverage: "partial"},
-		{name: "expired lease is not quiescence", jobs: []host.FileJobEvidence{{State: host.FileJobLeaseExpired}}, coverage: "partial"},
-		{name: "mixed jobs remain partial", jobs: []host.FileJobEvidence{{State: host.FileJobAvailable}, {State: host.FileJobLeased}}, coverage: "partial"},
+		{
+			name: "missing after ack or removal is unknown",
+			jobs: []host.FileJobEvidence{{State: host.FileJobUnknown}}, coverage: "partial",
+		},
+		{
+			name: "failure does not establish storage outcome",
+			jobs: []host.FileJobEvidence{{State: host.FileJobFailed}}, coverage: "partial",
+		},
+		{
+			name: "expired lease is not quiescence",
+			jobs: []host.FileJobEvidence{{State: host.FileJobLeaseExpired}}, coverage: "partial",
+		},
+		{
+			name: "mixed jobs remain partial",
+			jobs: []host.FileJobEvidence{{State: host.FileJobAvailable}, {State: host.FileJobLeased}}, coverage: "partial",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &jobEvidenceReader{snapshot: host.FileJobSnapshot{
-				ObservedAt: time.Now(), Jobs: tc.jobs, Truncated: tc.truncated}}
+				ObservedAt: time.Now(), Jobs: tc.jobs, Truncated: tc.truncated,
+			}}
 			result, err := host.InspectFileJobs(t.Context(), r, 13, host.FileJobOriginalFinalization)
 			require.NoError(t, err)
 			require.Equal(t, 1, r.calls)

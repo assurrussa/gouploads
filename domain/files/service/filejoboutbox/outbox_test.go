@@ -1,3 +1,4 @@
+//nolint:testpackage // Exercise private transaction seams without exporting test-only APIs.
 package filejoboutbox
 
 import (
@@ -28,7 +29,11 @@ func (r fakeRow) Scan(dest ...any) error {
 	if r.err != nil {
 		return r.err
 	}
-	*(dest[0].(*bool)) = true
+	value, ok := dest[0].(*bool)
+	if !ok {
+		return errors.New("unexpected fixture scan destination")
+	}
+	*value = true
 	return nil
 }
 func (t *fakeTx) QueryRow(context.Context, string, ...any) pgx.Row { return fakeRow{t.err} }
@@ -61,7 +66,9 @@ type fakeJobs struct {
 	calls int
 }
 
-func (j *fakeJobs) CreateJobVersioned(ctx context.Context, _ string, version core.SchemaVersion, _ string, _ time.Time) (types.JobID, error) {
+func (j *fakeJobs) CreateJobVersioned(
+	ctx context.Context, _ string, version core.SchemaVersion, _ string, _ time.Time,
+) (types.JobID, error) {
 	require.Same(j.t, j.tx, pgsql.GetTx(ctx))
 	require.Equal(j.t, core.DefaultSchemaVersion, version)
 	j.calls++

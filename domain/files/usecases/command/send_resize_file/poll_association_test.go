@@ -1,3 +1,4 @@
+//nolint:testpackage // Exercise private polling continuation without exporting test-only APIs.
 package sendresizefile
 
 import (
@@ -25,6 +26,7 @@ func (q *associatedPollQueue) Put(context.Context, string, string, time.Time) (t
 	q.t.Fatal("continuation must use explicit association")
 	return types.JobIDNil, nil
 }
+
 func (q *associatedPollQueue) PutFileJob(_ context.Context, file model.File, operation model.FileJobOperation,
 	name, payload string, _ time.Time,
 ) (types.JobID, error) {

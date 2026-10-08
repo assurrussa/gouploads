@@ -375,7 +375,9 @@ func (s *Service) uploadFile(
 		if err != nil {
 			return model.File{}, err
 		}
-		if _, err := filejobs.Put(ctx, s.outbox, file, model.FileJobOriginalFinalization, finalizeoriginal.JobName, payload, now); err != nil {
+		if _, err := filejobs.Put(
+			ctx, s.outbox, file, model.FileJobOriginalFinalization, finalizeoriginal.JobName, payload, now,
+		); err != nil {
 			return model.File{}, fmt.Errorf("put original finalization job: %w", err)
 		}
 		return file, nil
@@ -385,7 +387,9 @@ func (s *Service) uploadFile(
 	if err != nil {
 		return model.File{}, fmt.Errorf("marshal payload: %w", err)
 	}
-	if _, err := filejobs.Put(ctx, s.outbox, file, model.FileJobMediaAdmission, sendresizefilejob.JobName, payload, now); err != nil {
+	if _, err := filejobs.Put(
+		ctx, s.outbox, file, model.FileJobMediaAdmission, sendresizefilejob.JobName, payload, now,
+	); err != nil {
 		return model.File{}, fmt.Errorf("put outbox job: %w", err)
 	}
 	return file, nil

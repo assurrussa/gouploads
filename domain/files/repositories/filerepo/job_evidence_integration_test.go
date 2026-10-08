@@ -151,7 +151,8 @@ values ($1::uuid, $2, 'pgsql', 'queue', 'finalize_original_file', 1, 'private', 
 	require.NoError(t, err)
 	inspect(host.FileJobUnknown) // Absence after retention never means success.
 
-	_, err = db.DB().Exec(t.Context(), "jobEvidence.ChangeOwnedGeneration", "update files set slug = $2 where id = $1", file.ID, uuid.NewString())
+	_, err = db.DB().Exec(t.Context(), "jobEvidence.ChangeOwnedGeneration",
+		"update files set slug = $2 where id = $1", file.ID, uuid.NewString())
 	require.NoError(t, err)
 	require.Equal(t, "mismatch", inspect(host.FileJobUnknown).Binding)
 	_, err = queue.PutFileJob(t.Context(), file, host.FileJobDeletion, "deleted_file", "synthetic", time.Now())

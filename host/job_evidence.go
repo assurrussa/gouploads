@@ -7,10 +7,12 @@ import (
 	"github.com/assurrussa/gouploads/domain/files/model"
 )
 
-type FileJobOperation = model.FileJobOperation
-type FileJobEvidence = model.FileJobEvidence
-type FileJobSnapshot = model.FileJobSnapshot
-type FileJobState = model.FileJobState
+type (
+	FileJobOperation = model.FileJobOperation
+	FileJobEvidence  = model.FileJobEvidence
+	FileJobSnapshot  = model.FileJobSnapshot
+	FileJobState     = model.FileJobState
+)
 
 const (
 	FileJobOriginalFinalization = model.FileJobOriginalFinalization
@@ -29,7 +31,7 @@ var ErrInvalidDiagnosticOperation = errors.New("invalid diagnostic operation")
 
 // FileJobReader must read only explicitly persisted associations and queue metadata.
 type FileJobReader interface {
-	GetFileJobs(context.Context, int64, FileJobOperation) (FileJobSnapshot, error)
+	GetFileJobs(ctx context.Context, fileID int64, operation FileJobOperation) (FileJobSnapshot, error)
 }
 
 // FileJobDiagnosis reports partial evidence only. No complete-history or
@@ -47,9 +49,13 @@ type FileJobDiagnosis struct {
 // FileID and retained historical ownership in the host before calling.
 // An empty set is historical/unmapped; absent jobs and expired leases are
 // unknown outcomes, never permission to retry/delete.
-func InspectFileJobs(ctx context.Context, reader FileJobReader, fileID int64, operation FileJobOperation) (FileJobDiagnosis, error) {
-	result := FileJobDiagnosis{FileID: fileID, Operation: operation, Coverage: "unavailable",
-		Outcome: "unknown", Quiescence: "unknown"}
+func InspectFileJobs(
+	ctx context.Context, reader FileJobReader, fileID int64, operation FileJobOperation,
+) (FileJobDiagnosis, error) {
+	result := FileJobDiagnosis{
+		FileID: fileID, Operation: operation, Coverage: "unavailable",
+		Outcome: "unknown", Quiescence: "unknown",
+	}
 	if fileID <= 0 {
 		return result, ErrInvalidDiagnosticFileID
 	}

@@ -1,4 +1,4 @@
-package filejobs
+package filejobs_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
+	"github.com/assurrussa/gouploads/internal/filejobs"
 )
 
 type plainQueue struct{ calls int }
@@ -27,7 +28,9 @@ type linkedQueue struct {
 	err       error
 }
 
-func (q *linkedQueue) PutFileJob(_ context.Context, file model.File, op model.FileJobOperation, _, _ string, _ time.Time) (types.JobID, error) {
+func (q *linkedQueue) PutFileJob(
+	_ context.Context, file model.File, op model.FileJobOperation, _, _ string, _ time.Time,
+) (types.JobID, error) {
 	q.calls++
 	q.file, q.operation = file, op
 	return types.NewJobID(), q.err
@@ -36,12 +39,12 @@ func (q *linkedQueue) PutFileJob(_ context.Context, file model.File, op model.Fi
 func TestPutPreservesUnmappedQueuesAndNeverInfersStagingIdentity(t *testing.T) {
 	plain := &plainQueue{}
 	file := model.File{ID: 11, Slug: "owned"}
-	_, err := Put(t.Context(), plain, file, model.FileJobMediaAdmission, "send_resize_file", "not JSON", time.Now())
+	_, err := filejobs.Put(t.Context(), plain, file, model.FileJobMediaAdmission, "send_resize_file", "not JSON", time.Now())
 	require.NoError(t, err)
 	require.Equal(t, 1, plain.calls)
 	for _, legacy := range []model.File{{}, {ID: 11}, {Slug: "staging"}} {
 		q := &linkedQueue{}
-		_, err = Put(t.Context(), q, legacy, model.FileJobDeletion, "deleted_file", "not JSON", time.Now())
+		_, err = filejobs.Put(t.Context(), q, legacy, model.FileJobDeletion, "deleted_file", "not JSON", time.Now())
 		require.NoError(t, err)
 		require.Zero(t, q.calls)
 		require.Equal(t, 1, q.plainQueue.calls)
@@ -52,7 +55,7 @@ func TestPutForwardsExplicitProvenanceAndDoesNotFallBackAfterFailure(t *testing.
 	fail := errors.New("uncertain commit")
 	q := &linkedQueue{err: fail}
 	file := model.File{ID: 11, Slug: "owned"}
-	_, err := Put(t.Context(), q, file, model.FileJobMediaFinalization, "upload_file", "not JSON", time.Now())
+	_, err := filejobs.Put(t.Context(), q, file, model.FileJobMediaFinalization, "upload_file", "not JSON", time.Now())
 	require.ErrorIs(t, err, fail)
 	require.Equal(t, file, q.file)
 	require.Equal(t, model.FileJobMediaFinalization, q.operation)

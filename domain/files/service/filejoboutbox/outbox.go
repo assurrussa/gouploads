@@ -22,10 +22,12 @@ import (
 // not prove shared transaction/connection semantics.
 type Outbox struct {
 	jobs interface {
-		CreateJobVersioned(context.Context, string, core.SchemaVersion, string, time.Time) (types.JobID, error)
+		CreateJobVersioned(ctx context.Context, name string, version core.SchemaVersion, payload string,
+			availableAt time.Time,
+		) (types.JobID, error)
 	}
 	tx interface {
-		RunInTx(context.Context, func(context.Context) error) error
+		RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
 	}
 }
 

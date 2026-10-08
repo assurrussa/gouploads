@@ -104,7 +104,9 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 		return Response{}, fmt.Errorf("marshal payload: %w", err)
 	}
 
-	if _, err := filejobs.Put(ctx, u.outboxPutter, fileModel, model.FileJobMediaFinalization, uploadfilejob.JobName, payload, tmNow); err != nil {
+	if _, err := filejobs.Put(
+		ctx, u.outboxPutter, fileModel, model.FileJobMediaFinalization, uploadfilejob.JobName, payload, tmNow,
+	); err != nil {
 		return Response{}, fmt.Errorf("admin Outbox: %w", err)
 	}
 

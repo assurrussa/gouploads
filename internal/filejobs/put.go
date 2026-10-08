@@ -5,19 +5,22 @@ import (
 	"context"
 	"time"
 
-	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/outbox/shared/types"
+
+	"github.com/assurrussa/gouploads/domain/files/model"
 )
 
 type Putter interface {
-	Put(context.Context, string, string, time.Time) (types.JobID, error)
+	Put(ctx context.Context, name, payload string, availableAt time.Time) (types.JobID, error)
 }
 
 // AssociatedPutter is opt-in. Implementations must commit the queue row and
 // immutable file/operation association on the SAME transaction and connection.
 // A callback to an arbitrary Putter cannot establish this guarantee.
 type AssociatedPutter interface {
-	PutFileJob(context.Context, model.File, model.FileJobOperation, string, string, time.Time) (types.JobID, error)
+	PutFileJob(ctx context.Context, file model.File, operation model.FileJobOperation,
+		name, payload string, availableAt time.Time,
+	) (types.JobID, error)
 }
 
 // Put preserves custom/legacy queues. Their jobs remain explicitly unmapped.
