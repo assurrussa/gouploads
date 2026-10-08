@@ -47,7 +47,7 @@ func newJobEvidenceFixture(t *testing.T) (*pgsqlclient.Client, *host.FileRepo, *
 	return db, repo, queue, file
 }
 
-func TestIntegrationFileJobAtomicAssociationAndRollback(t *testing.T) {
+func TestIntegrationDiagnosticsFileJobAtomicAssociationAndRollback(t *testing.T) {
 	db, repo, queue, file := newJobEvidenceFixture(t)
 	tx := transaction.New(db.DB())
 	rollback := errors.New("synthetic rollback")
@@ -93,7 +93,7 @@ func TestIntegrationFileJobAtomicAssociationAndRollback(t *testing.T) {
 	require.ErrorIs(t, err, host.ErrDiagnosticUnavailable)
 }
 
-func TestIntegrationFileJobStatesAndFailedOriginalIdentity(t *testing.T) {
+func TestIntegrationDiagnosticsFileJobStatesAndFailedOriginalIdentity(t *testing.T) {
 	db, repo, queue, file := newJobEvidenceFixture(t)
 	id, err := queue.PutFileJob(t.Context(), file, host.FileJobOriginalFinalization,
 		"finalize_original_file", "private-payload-not-returned", time.Now().Add(-time.Minute))
@@ -161,7 +161,7 @@ values ($1::uuid, $2, 'pgsql', 'queue', 'finalize_original_file', 1, 'private', 
 	require.Equal(t, "file_missing", inspect(host.FileJobUnknown).Binding)
 }
 
-func TestIntegrationFileJobCoverageIsBoundedAndRepeatedPutsStayVisible(t *testing.T) {
+func TestIntegrationDiagnosticsFileJobCoverageIsBoundedAndRepeatedPutsStayVisible(t *testing.T) {
 	_, repo, queue, file := newJobEvidenceFixture(t)
 	for range 101 {
 		_, err := queue.PutFileJob(t.Context(), file, host.FileJobMediaAdmission,
@@ -181,7 +181,7 @@ func TestIntegrationFileJobCoverageIsBoundedAndRepeatedPutsStayVisible(t *testin
 }
 
 // Replaying a finalization key must not call the producer or create another link.
-func TestIntegrationFileJobFinalizationReplayPreservesOneAssociation(t *testing.T) {
+func TestIntegrationDiagnosticsFileJobFinalizationReplayPreservesOneAssociation(t *testing.T) {
 	_, repo, queue, file := newJobEvidenceFixture(t)
 	key, binding := uuid.NewString(), strings.Repeat("a", 64)
 	calls := 0
