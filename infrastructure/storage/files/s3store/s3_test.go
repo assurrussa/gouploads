@@ -107,7 +107,7 @@ func TestUpload(t *testing.T) {
 					AbortMultipartUpload(gomock.Any(), gomock.Any()).
 					Return(nil, errors.New("test-error"))
 			},
-			wantError: "context has been canceled before upload has done: can't abort upload: test-error",
+			wantError: "context has been canceled before upload has done: context canceled: can't abort upload: test-error",
 		},
 	}
 
