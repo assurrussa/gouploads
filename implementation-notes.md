@@ -945,3 +945,25 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   writes could not start. Source-only Go formatting/parsing is separate from
   compilation and owned-schema integration gates; those remain unverified
   until the task environment and validation lane are available.
+
+## Bounded multipart abort cleanup (2026-10-09)
+
+- Multipart abort keeps the upload context's values and detaches cancellation,
+  with a separate five-second deadline covering the SDK request and retries.
+  Deferred cancellation releases the cleanup timer. Cleanup stays synchronous;
+  both the original error and an abort error retain their identity. Cancellation
+  before the next part now wraps the original context error.
+- The original finalizer's transaction and row lock still span storage and
+  metadata/outbox writes. No lease, schema, public facade or configuration change.
+- Unit regressions reproduce missing cleanup deadlines and lost cancellation
+  identity. Fake time proves timeout propagation without a wall-clock delay.
+- The originals integration fixture uses real PostgreSQL and a mock multipart
+  transport in injected persistence. Cancellation releases a contested row lock
+  after bounded cleanup and preserves queued metadata, staging and original
+  jobs, with no completion event or additional jobs. It does not claim real S3
+  provider acceptance. Its race run and scoped integration lint passed.
+- All `make check` constituents passed. The first invocation stopped at new-test
+  lint findings; unchanged tidy/full-vet evidence was retained. Test-only fixes
+  passed scoped vet, formatting, full lint and the remaining race/coverage stage.
+  Owned PostgreSQL fixture data is removed after verification. Final independent
+  review remains with the parent; no publication or release gate was invoked.

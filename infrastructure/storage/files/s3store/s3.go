@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -16,6 +17,9 @@ const (
 	// При multipart загрузке s3 позволяет передавать часть меньше чем 5MiB только в одном случае - если эта часть
 	// последняя (или единственная, как частный случай) в multipart сессии.
 	MinPartSize = 1024 * 1024 * 5
+
+	// Bound detached cleanup, including SDK retries, while the caller may hold a database lock.
+	abortTimeout = 5 * time.Second
 )
 
 // Upload производит загрузку файла по частям. Является вспомогательным методом и берет все операции и
@@ -37,9 +41,10 @@ func Upload(
 	}
 
 	abortUpload := func() error {
-		// используется контекст без отмены для того, чтобы в случае завершения основного контекста мы все же смогли
-		// прервать операцию загрузки файла
-		_, err := client.AbortMultipartUpload(context.WithoutCancel(ctx), &s3.AbortMultipartUploadInput{
+		// Give cleanup its own finite budget even when the upload context has expired.
+		abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), abortTimeout)
+		defer cancel()
+		_, err := client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
 			Bucket:   mpu.Bucket,
 			Key:      mpu.Key,
 			UploadId: mpu.UploadId,
@@ -54,7 +59,7 @@ func Upload(
 	for partNo := 1; !eof; partNo++ {
 		select {
 		case <-ctx.Done():
-			err := errors.New("context has been canceled before upload has done")
+			err := fmt.Errorf("context has been canceled before upload has done: %w", ctx.Err())
 			abortErr := abortUpload()
 			if abortErr != nil {
 				err = fmt.Errorf("%w: can't abort upload: %w", err, abortErr)
