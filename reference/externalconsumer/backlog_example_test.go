@@ -23,7 +23,7 @@ type backlogSample struct {
 }
 
 type backlogQueueReader interface {
-	GetQueueStats(context.Context) (outbox.QueueStats, error)
+	GetQueueStats(ctx context.Context) (outbox.QueueStats, error)
 }
 
 var _ backlogQueueReader = (*outbox.Service)(nil)
