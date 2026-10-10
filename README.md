@@ -92,6 +92,10 @@ aggregate inventory of retained deletion plans, with caller-supplied age what-if
 and JSON-text byte estimates. See [the inventory contract](docs/deletion-retention-inventory.md)
 and [diagnostics and recovery roadmap](docs/file-diagnostics.md).
 
+For host-owned gauges, see [backlog metrics](docs/backlog-metrics.md): existing
+Outbox snapshots count processing jobs and the deletion inventory counts pending
+plans. A small host callback can publish these values without a new metrics SDK.
+
 ## Opt in to MP3/WAV originals
 
 MP3 and WAV use `host.FileTypeAudio` (7) and the same original storage/outbox
