@@ -1,5 +1,17 @@
 # Implementation Notes
 
+## 2026-10-09: Host-owned backlog metrics example
+
+- Reused existing Outbox queue snapshots and GoUploads deletion inventory in a
+  host-owned callback, without runtime APIs, SDK dependencies or polling.
+- Processing-job counts cover all schema versions of the four existing upload
+  job names, not unique files or active TUS sessions. Pending deletion plans
+  remain separate from queued deletion jobs and completed retained tombstones.
+- Tests distinguish read failure from successful empty snapshots and preserve
+  independent observation timestamps. Source formatting and patch whitespace
+  were checked. Runtime example tests and the external-consumer gate still
+  require a writable Go build environment; no runtime pass is claimed.
+
 ## 2026-07-21: Complete TUS and replacement cleanup lifecycle
 
 - Published commit `1d423eacf3c9aa7017dfa8f66fd353eb4110f294` as
