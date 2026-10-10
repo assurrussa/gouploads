@@ -284,7 +284,7 @@ func (patchStrategy) GetConfig(context.Context, host.UploadContext) *host.FileUp
 }
 
 func createPatchSessions(ctx context.Context, client *http.Client, base string, count int) ([]string, error) {
-	var metadata []string
+	metadata := make([]string, 0, 5)
 	for _, pair := range [][2]string{
 		{"filename", "measurement.pdf"},
 		{"entity_type", "admin"},
@@ -373,7 +373,7 @@ func runConcurrentPatches(ctx context.Context, client *http.Client, sessions []s
 	ready.Wait()
 	started := time.Now()
 	close(start)
-	var samples []patchLatency
+	samples := make([]patchLatency, 0, len(sessions)*int((measurementSize+chunk-1)/chunk))
 	var resultErr error
 	for range sessions {
 		r := <-results
@@ -406,6 +406,7 @@ func TestMeasurementPatch(t *testing.T) {
 }
 
 func runPatchMeasurement(t *testing.T, cfg patchConfig) error {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
 	defer cancel()
 	executable, err := os.Executable()
@@ -501,6 +502,7 @@ func runPatchMeasurement(t *testing.T, cfg patchConfig) error {
 }
 
 func servePatchMeasurement(t *testing.T, cfg patchConfig) error {
+	t.Helper()
 	root := os.Getenv("GOUPLOADS_MEASURE_PRIVATE_ROOT")
 	if root == "" {
 		root = t.TempDir()
@@ -525,7 +527,7 @@ func servePatchMeasurement(t *testing.T, cfg patchConfig) error {
 		isCreate := r.Method == http.MethodPost && r.URL.Path == "/files/tus"
 		isSession := strings.HasPrefix(r.URL.Path, "/files/tus/") &&
 			!strings.Contains(strings.TrimPrefix(r.URL.Path, "/files/tus/"), "/")
-		if !isCreate && !(isSession && (r.Method == http.MethodPatch || r.Method == http.MethodHead)) {
+		if !isCreate && (!isSession || (r.Method != http.MethodPatch && r.Method != http.MethodHead)) {
 			http.NotFound(w, r)
 			return
 		}
@@ -579,6 +581,7 @@ func servePatchMeasurement(t *testing.T, cfg patchConfig) error {
 }
 
 func emitPatchResult(t *testing.T, cfg patchConfig, server serverResult, samples []patchLatency, elapsed time.Duration) error {
+	t.Helper()
 	groups := map[string]latencySummary{"all": summarizeLatency(samples)}
 	for _, kind := range []string{"first_full", "steady_full", "final_short"} {
 		var selected []patchLatency
@@ -705,7 +708,7 @@ func verifyPatchFiles(ctx context.Context, store *tusupload.FileStore, root stri
 		if session.Offset != measurementSize || session.UploadLength != measurementSize || session.Status != tusupload.StatusActive {
 			return errors.New("session did not retain the complete accepted PATCH bytes in active state")
 		}
-		f, err := os.Open(filepath.Join(root, entry.Name(), "data"))
+		f, err := os.OpenInRoot(root, filepath.Join(entry.Name(), "data"))
 		if err != nil {
 			return err
 		}

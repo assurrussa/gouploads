@@ -341,7 +341,9 @@ func measureOriginalFinalizerLock(t *testing.T, scenario string, size int) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	lockProbeCheckResult(t, ctx, pool, uploads, file, body, scenario, events, initialEvents, initialJobs)
+	lockProbeCheckResult(t, ctx, pool, uploads, file, body, scenario, lockProbeCompletionState{
+		events: events, initialEvents: initialEvents, initialJobs: initialJobs,
+	})
 	lockProbeReport(t, p, scenario, size, pool.Config().MaxConns)
 }
 
@@ -416,16 +418,22 @@ count(*) FILTER (WHERE name='deleted_file') FROM jobs`).Scan(&count.total, &coun
 	return count
 }
 
+type lockProbeCompletionState struct {
+	events        *originalCancelEvents
+	initialEvents int64
+	initialJobs   lockProbeJobs
+}
+
 func lockProbeCheckResult(t *testing.T, ctx context.Context, pool *pgxpool.Pool, uploads *host.OriginalRuntime,
-	queued host.File, body []byte, scenario string, events *originalCancelEvents, initialEvents int64, initialJobs lockProbeJobs,
+	queued host.File, body []byte, scenario string, completion lockProbeCompletionState,
 ) {
 	t.Helper()
 	if scenario == "cancel_gated" {
 		retained, err := uploads.Files.GetByID(ctx, queued.ID)
 		require.NoError(t, err)
 		require.Equal(t, queued.GetData(), retained.GetData(), "rollback retains retry metadata")
-		require.Equal(t, initialJobs, lockProbeJobCount(t, ctx, pool), "rollback adds no completion jobs")
-		require.Equal(t, initialEvents, events.count.Load(), "rollback publishes no event")
+		require.Equal(t, completion.initialJobs, lockProbeJobCount(t, ctx, pool), "rollback adds no completion jobs")
+		require.Equal(t, completion.initialEvents, completion.events.count.Load(), "rollback publishes no event")
 		requireBytes(t, ctx, uploads.Storage, queued.GetFullPath(), body)
 		// Retry without the measurement context or artificial gate.
 		require.NoError(t, uploads.Finalizer.HandleOriginal(ctx, queued.ID))
@@ -439,17 +447,17 @@ func lockProbeCheckResult(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	require.Equal(t, hex.EncodeToString(sum[:]), preset.ChecksumSHA256)
 	require.EqualValues(t, len(body), file.Size)
 	requireBytes(t, ctx, uploads.Storage, file.GetFullPath(), body)
-	wantJobs := initialJobs
+	wantJobs := completion.initialJobs
 	wantJobs.total += 2
 	wantJobs.afterOriginal++
 	wantJobs.deletedFile++
 	require.Equal(t, wantJobs, lockProbeJobCount(t, ctx, pool), "exactly one after-job and one staging-cleanup job")
-	require.Equal(t, initialEvents+1, events.count.Load())
+	require.Equal(t, completion.initialEvents+1, completion.events.count.Load())
 	// The direct handler does not reserve/delete the original queue row. Repeated
 	// delivery must not duplicate completion jobs or events.
 	require.NoError(t, uploads.Finalizer.HandleOriginal(ctx, queued.ID))
 	require.Equal(t, wantJobs, lockProbeJobCount(t, ctx, pool))
-	require.Equal(t, initialEvents+1, events.count.Load())
+	require.Equal(t, completion.initialEvents+1, completion.events.count.Load())
 }
 
 //nolint:tagliatelle // The documented measurement result struct consistently uses snake_case.
