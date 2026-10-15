@@ -24,8 +24,7 @@ supplies PostgreSQL, a compatible transaction manager, a durable outbox worker
 and persistent file storage; route mounting and authorization remain host-owned.
 
 For local-driver runtimes, optional `OriginalRuntimeDeps.Storage` accepts
-caller-owned storage wrappers. This addition is merged but unreleased; it is not
-included in `v0.12.0`. See [storage injection and instrumentation](docs/standalone-uploads.md#caller-owned-storage)
+caller-owned storage wrappers, available since `v0.13.0`. See [storage injection and instrumentation](docs/standalone-uploads.md#caller-owned-storage)
 for TUS handoff, ownership and compatibility limits.
 
 ```go
@@ -78,8 +77,7 @@ moderation approval or a guarantee that untrusted content is safe to publish.
 
 ## Inspect file lifecycle safely
 
-The diagnostics and inventory APIs below are merged but unreleased; they are not
-included in `v0.12.0`.
+The diagnostics and inventory APIs below are available since `v0.13.0`.
 
 `host.DiagnoseFile` reads a path-free lifecycle snapshot by FileID through
 `host.FileRepo`, reporting file, upload, finalization handoff and deletion states.
@@ -134,15 +132,14 @@ External tests may use `github.com/assurrussa/gouploads/hosttest`.
 implementation details, not an additional stable SDK.
 
 ```sh
-go get github.com/assurrussa/gouploads@v0.12.0
+go get github.com/assurrussa/gouploads@v0.13.0
 ```
 
-This installs the latest published release, `v0.12.0`. Use its
-[version-matched README](https://github.com/assurrussa/gouploads/blob/v0.12.0/README.md)
-and [standalone guide](https://github.com/assurrussa/gouploads/blob/v0.12.0/docs/standalone-uploads.md)
-when integrating that release. The current source documentation also describes
-the explicitly marked, merged-but-unreleased additions above; installing
-`v0.12.0` does not provide them.
+This installs the current published release, `v0.13.0`, including the optional
+storage injection, lifecycle diagnostics and deletion-retention inventory above.
+See the [release notes](https://github.com/assurrussa/gouploads/releases/tag/v0.13.0)
+for additions and migration requirements. The v0.13.0 tag's documentation retains
+older pre-release wording; this README reflects the published release status.
 
 The public module resolves through the Go module proxy and checksum database.
 Installation does not require GitHub authentication or a
