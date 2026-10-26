@@ -4,6 +4,12 @@ Candidate based on public master `cdc352c251e4a5a59f25e078d3115f692ca4247d`
 (tree `0669bba1bf4d69dfc03d243426810c461612f87e`). This is source-candidate
 verification, **not a published release or deployment claim**.
 
+The tested source is PR #26 commit
+`25917c3b8d0090c27cf6306838f9b133e79546f5`, tree
+`2bace51da682d27f7bc8411b89781db484817459`. The follow-up receipt update
+changes only this document; runtime, tests, module files and gate scripts remain
+byte-for-byte identical to that tested tree.
+
 ## Passed on the patched Go 1.27.3 graph
 
 - `make check`: tidy diff, gofumpt/gci, vet, configured lint, and the full
@@ -28,27 +34,55 @@ verification, **not a published release or deployment claim**.
   compatibility pass. Invalid/mixed service identities, replacement deletion,
   user-targeted/default after-jobs and invalid UTF-8 client IDs are rejected.
 
-## Remaining gates and limitations
+## Cross-environment acceptance completed on 2026-10-26
 
-The source-built MinIO test service matches the existing recorded release,
-commit and Go module checksums in `integration/test-services/minio-source.json`.
-Its binary built successfully, but this execution sandbox denies the netlink
-interface enumeration performed before MinIO's main function. The supported
-escalated launcher also failed during sandbox setup. MinIO was not patched,
-network policy was not changed, and no external service was substituted.
-Consequently the live S3 source-URL, portable S3 media and local+S3 originals
-acceptance gates remain blocked, not passed.
+The initial dot sandbox could build the pinned MinIO source but could not start
+it because interface enumeration was denied. This is a limitation of that
+execution environment, not a passing S3 result. A separately authorized cloud
+environment subsequently tested the exact commit/tree above with live MinIO and
+PostgreSQL. The MinIO fixture remains pinned by
+`integration/test-services/minio-source.json`; no provider substitution or
+network-policy bypass was made.
+
+The cloud run passed live S3 source-URL acceptance, portable S3 media processing,
+and race-enabled original-only acceptance on both local and S3 storage.
+`make prepare` produced no diff. `make publish-readiness VERSION=v0.14.0`
+passed its prerequisites up to `anonymous-source`, where the isolated process
+could not resolve `proxy.golang.org`. That aggregate invocation therefore exited
+nonzero; it is not represented here as a single successful full invocation.
+
+A separately authorized macOS run on the same exact commit/tree then passed the
+original, unmodified `make anonymous-source`: empty inherited environment,
+fresh caches, authentication disabled and no inherited proxy. No cached or
+local-replacement download was substituted. The source gate proves public
+availability of the dependency graph, not publication of the root module.
+The following `import-policy-site` target also passed separately on macOS using
+`make import-policy-site IMPORT_POLICY_REPO_ROOT=<clean-consumer-root>`.
+All three configured consumer roots were present, populated with complete tracked
+Go source from clean real consumer checkouts: site commit
+`4de906fc3748e00eccc24b31c5694df64b170749` (560 Go files) and goadmin commit
+`081484d8937c540b747224f873845b810d76a0ed` (513 Go files). This verifies the
+tracked consumer sources, not uncommitted or ignored generated artifacts;
+no absent-directory skip was used and the original checkouts remained clean.
+
+Together these results close the source pre-merge checks. The cloud prepare
+result had no generated/source diff; this follow-up changes only the receipt,
+leaving all tested runtime inputs byte-for-byte unchanged.
+
+## Remaining publication gates and limitations
+
+An immutable published tag and its clean published-version and anonymous
+published-consumer gates remain required. The planned version `v0.14.0` was
+available when checked, but this is not a tag creation or release claim.
+No merge, tag, release or deployment is established by this source receipt.
 
 The additional integration-tag lint diagnostic reports pre-existing helper
 findings outside the new service code; the repository's required ordinary lint
 passes. Do not confuse that optional diagnostic with a clean integration-wide
 lint result.
 
-Anonymous-source download, preparation/generated-file reproducibility and final
-release readiness must be recorded before release. An immutable published tag
-and its anonymous/published consumer gates are still required. No new CI triggers
-were added. The verified base contains no checked-in GitHub Actions workflows;
-empty status/run lists are not a substitute for these gates.
+No new CI triggers were added. The verified base contains no checked-in GitHub
+Actions workflows; empty status/run lists are not a substitute for these gates.
 
 ## Compatibility note
 
