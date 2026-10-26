@@ -80,7 +80,7 @@ reject_forbidden() {
 if [ "$mode" = source ]; then
     cp "$source_root/go.mod" "$source_root/go.sum" "$probe_root/module/"
 else
-    printf 'module anonymous.example/gouploads-probe\n\ngo 1.27.0\n\nrequire %s %s\n' \
+    printf 'module anonymous.example/gouploads-probe\n\ngo 1.27.3\n\nrequire %s %s\n' \
         "$module" "$version" > "$probe_root/module/go.mod"
 fi
 cd "$probe_root/module"

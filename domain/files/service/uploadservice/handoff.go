@@ -15,6 +15,7 @@ import (
 
 	uploadconfig "github.com/assurrussa/gouploads/config"
 	"github.com/assurrussa/gouploads/domain/files/model"
+	"github.com/assurrussa/gouploads/domain/files/shared"
 	"github.com/assurrussa/gouploads/internal/filepolicy"
 	"github.com/assurrussa/gouploads/internal/filesanitize"
 )
@@ -55,14 +56,15 @@ func (s *Service) withFinalization(
 	// Persisted binding hashes include these exact JSON key names.
 	//nolint:tagliatelle // Preserve durable binding hash compatibility.
 	binding, err := json.Marshal(struct {
-		UserUUID      string `json:"UserUUID"`
-		ManagerID     int64  `json:"ManagerID"`
-		UserID        int64  `json:"UserID"`
-		ObjectType    string `json:"ObjectType"`
-		ObjectID      int64  `json:"ObjectID"`
-		ReplacementID int64  `json:"ReplacementID"`
-		Name          string `json:"Name"`
-		Size          int64  `json:"Size"`
+		UserUUID      string                   `json:"UserUUID"`
+		ManagerID     int64                    `json:"ManagerID"`
+		UserID        int64                    `json:"UserID"`
+		ObjectType    string                   `json:"ObjectType"`
+		ObjectID      int64                    `json:"ObjectID"`
+		ReplacementID int64                    `json:"ReplacementID"`
+		Name          string                   `json:"Name"`
+		Size          int64                    `json:"Size"`
+		Service       *shared.ServicePrincipal `json:"Service,omitempty"`
 	}{
 		req.UploaderUUID.String(),
 		req.ManagerID,
@@ -72,6 +74,7 @@ func (s *Service) withFinalization(
 		req.DeletedID.Int64(),
 		name,
 		size,
+		req.Service,
 	})
 	if err != nil {
 		return model.File{}, err

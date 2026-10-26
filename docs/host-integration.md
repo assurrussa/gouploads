@@ -441,3 +441,43 @@ scope. A nil cutoff omits the what-if projection; a supplied cutoff uses strict
 `completed_at < cutoff` with known ages. Unavailable evidence is never a healthy
 empty result. There is no retention default or mutation. See
 [the inventory contract and compatibility requirements](deletion-retention-inventory.md).
+
+## Service-owned reader uploads (next minor release)
+
+A trusted host may set `host.ReaderRequest.Service` to
+`&host.ServicePrincipal{SiteID: siteUUID, ClientID: authenticatedClientID}` when
+calling its existing `UploadService.UploadReader` (or validated `UploadStored`).
+Do not fabricate an admin, user ID, or user UUID. The service principal excludes
+all human identity fields and `DeletedID`; it requires a nonzero site UUID,
+nonempty bounded client ID, valid object type, and positive host object ID.
+There is no new HTTP route or authorization bypass. Authenticate the service and
+authorize its site/object in the host before constructing the request; do not
+bind this principal from untrusted upload metadata. Object IDs must identify
+host-owned records unambiguously across sites.
+
+The upload uses the same staging, policy/scanning, configured processing mode,
+media-resizer/finalizer, transaction and outbox as human uploads. Human storage
+and validation are unchanged. Service records have NULL `user_id`/`manager_id`;
+pending uploader metadata uses `host.UserTypeService`. `FileData.Service`
+retains the site/client provenance after transient uploader metadata is cleared
+on completion. This is additive JSON metadata, requiring no schema migration.
+Deploy the updated consumers/workers before producing service uploads.
+
+Use a server-issued immutable generation UUID as `FinalizationKey` for retryable
+admission. Existing durable finalization binds it to site/client and the existing
+object/name/size tuple; a different principal conflicts before another staging
+write. Human binding hashes are unchanged. The key is not a content digest:
+the host must preserve the same immutable original and generation when retrying.
+An empty key retains ordinary non-idempotent reader admission.
+
+Service `AfterJobs` require an explicit job name and custom immutable payload,
+and cannot set `UserID`. Successful finalization atomically enqueues these jobs;
+replayed finalization does not enqueue them again. Outbox delivery remains
+at-least-once: host handlers must validate site/client, file ID, object binding
+and generation against durable host records, and use an idempotent/CAS update
+before changing native image/preset/cache state. Do not overwrite unrelated
+content from a late callback. Failures remain observable through persisted
+uploader state and the existing lifecycle diagnostics. User event publishers
+receive no service upload notifications, including after-process callbacks.
+Service domain notifications, if needed, belong in the host's explicit outbox
+handler, not in a synthetic user WebSocket channel.

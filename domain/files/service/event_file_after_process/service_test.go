@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 
 	logger "github.com/assurrussa/gologger"
@@ -321,4 +322,38 @@ func mockWantPublishFormatter(name string, event shared.EventAfterProcess) gomoc
 			return len(unequalFields) == 0
 		}),
 	)
+}
+
+func TestServiceAfterProcessNeverNotifiesHuman(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(strconv.FormatBool(fail), func(t *testing.T) {
+			ctx, cancel, ts := NewTestSuite(t)
+			defer cancel()
+			file := model.File{ID: 123, Data: &model.FileData{Service: &shared.ServicePrincipal{}}}
+			payload, err := eventfileafterprocess.MarshalPayload(eventfileafterprocess.NewPayload(
+				sharedtypes.NewUserID(), shared.UserTypeAdmin, file.ID, "service_callback",
+			))
+			ts.Require().NoError(err)
+			ts.fileMock.EXPECT().GetByID(ctx, file.ID).Return(file, nil)
+			ts.transactorMock.EXPECT().RunInTx(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
+					return fn(ctx)
+				})
+			calls := 0
+			err = ts.job.HandleAfterProcess(ctx, payload, func(context.Context, eventfileafterprocess.Payload, model.File) error {
+				calls++
+				if fail {
+					return errors.New("callback failed")
+				}
+				return nil
+			})
+			if fail {
+				ts.Require().Error(err)
+			} else {
+				ts.Require().NoError(err)
+			}
+			ts.Equal(1, calls)
+			// No Publisher expectation: either success or failure notification would fail.
+		})
+	}
 }

@@ -2,7 +2,21 @@
 
 ## Unreleased
 
+### Security
+
+- The next release raises the minimum Go version to 1.27.3 (including the
+  crypto/x509 intermediate-certificate fix GO-2026-6809) and updates x/net to
+  v0.60.0 for HTTP/2 security fixes. Its minimal dependency closure updates
+  x/crypto to v0.57.0 and x/text to v0.42.0. Public upload APIs remain additive;
+  the toolchain floor is an intentional build requirement change.
+
 ### Added
+
+- Service-owned reader uploads through `host.ReaderRequest.Service` and
+  `host.ServicePrincipal`, preserving site/client provenance without human IDs.
+  Existing finalization/outbox processing is reused; service callbacks are
+  explicit durable jobs and never synthetic user notifications. This additive
+  capability requires a new minor release; it is not in v0.13.0.
 
 - Opt-in `host.NewPostgresFileJobOutbox` atomically retains explicit file-generation,
   operation and actual queue JobID links on the pinned PostgreSQL backend.

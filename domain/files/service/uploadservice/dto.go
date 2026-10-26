@@ -3,6 +3,7 @@ package uploadservice
 import (
 	"errors"
 	"mime/multipart"
+	"strings"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
 	"github.com/assurrussa/gouploads/domain/files/shared"
@@ -56,6 +57,9 @@ func (r SingleRequest) Validate() error {
 }
 
 type ReaderRequest struct {
+	// Service is a trusted host-authenticated principal, never client request metadata.
+	// It excludes human identity and replacement deletion.
+	Service      *shared.ServicePrincipal
 	UploaderUUID sharedtypes.UserID `validate:"required"`
 	ManagerID    int64
 	UserID       int64
@@ -64,16 +68,41 @@ type ReaderRequest struct {
 	DeletedID    shared.FileObjectID
 	AfterJobs    []shared.FileEventAfterJob
 	Config       *FileUploadConfig
-	// FinalizationKey is the server-issued TUS completion UUID, never client metadata.
+	// FinalizationKey is a server-issued TUS completion or service generation UUID, never client metadata.
 	// Empty keeps the ordinary non-TUS reader/stored upload contract.
 	FinalizationKey string
 }
 
 func (r ReaderRequest) Validate() error {
+	if r.Service != nil {
+		return r.validateService()
+	}
+
 	if r.UserID == 0 && r.ManagerID == 0 {
 		return shared.ErrUnknownUploadUser
 	}
 	return validator.Validator.Struct(r)
+}
+
+func (r ReaderRequest) validateService() error {
+	if err := r.Service.Validate(); err != nil {
+		return err
+	}
+	if r.UserID != 0 || r.ManagerID != 0 || !r.UploaderUUID.IsZero() || r.DeletedID != 0 {
+		return errors.New("service upload cannot include human identity or replacement deletion")
+	}
+	if r.ObjectID <= 0 {
+		return errors.New("service upload requires a positive object ID")
+	}
+	if err := r.ObjectType.Validate(); err != nil {
+		return err
+	}
+	for _, job := range r.AfterJobs {
+		if strings.TrimSpace(job.JobName) == "" || strings.TrimSpace(job.Payload) == "" || !job.UserID.IsZero() {
+			return errors.New("service after jobs require explicit payload and no user recipient")
+		}
+	}
+	return nil
 }
 
 type DeleteRequest struct {

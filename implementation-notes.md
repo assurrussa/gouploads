@@ -979,3 +979,33 @@ Make/Task environment probes; YAML graphs, shell syntax and diff checks passed.
   passed scoped vet, formatting, full lint and the remaining race/coverage stage.
   Owned PostgreSQL fixture data is removed after verification. Final independent
   review remains with the parent; no publication or release gate was invoked.
+
+## Service-owned reader provenance (2026-10-26 candidate)
+
+- Additive `ReaderRequest.Service` reuses the same upload/finalization pipeline;
+  it never maps a site UUID to a user or assigns a synthetic numeric admin.
+- Service provenance is also retained in `FileData.Service`, because existing
+  completion clears transient uploader metadata. Existing human JSON omits the
+  new pointer fields and existing finalization binding hashes omit Service.
+- Service ingress forbids replacement deletion and human-targeted/default
+  after-jobs; hosts explicitly authorize their site/object and provide immutable
+  custom callback payloads. No HTTP route/permission policy or CI trigger changed.
+- User publication skips an empty identity throughout media and original flows;
+  after-process handlers additionally inspect retained service provenance.
+- Source base is verified public master cdc352c251e4a5a59f25e078d3115f692ca4247d.
+  Local source is not a released version; the final gate matrix is recorded in
+  `docs/service-owned-uploads-verification.md`.
+
+### Candidate security verification
+
+- Version scan found Go 1.27.1 affected by GO-2026-6809 (fixed 1.27.3),
+  HTTP/2 x/net v0.58.0 advisories (fixed v0.60.0), and x/crypto v0.55.0
+  SSH advisories. Updated only Go floor and x/net's required dependency
+  closure: x/crypto v0.57.0 and x/text v0.42.0; existing x/sys v0.48.0
+  and x/sync v0.23.0 remain unchanged. Consumer probes use the same Go floor.
+- Patched package-level govulncheck reports no affected imported package.
+  The remaining module-only OpenPGP advisory is not imported: `go mod why`
+  identifies Fiber ACME/autocert as the crypto dependency, and `go list -deps`
+  contains sha3/acme/autocert, not openpgp. Module findings are not reachable
+  vulnerability findings. The patched full symbol scan subsequently passed with
+  zero reachable vulnerabilities; the gate matrix records remaining release limits.
