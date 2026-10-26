@@ -5,15 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
 
 	sharedtypes "github.com/assurrussa/gouploads/internal/identity"
 )
 
 type (
-	UserType       string
-	FileObjectType string
-	FileObjectID   int64
-	FileUploader   struct {
+	UserType         string
+	FileObjectType   string
+	FileObjectID     int64
+	ServicePrincipal struct {
+		SiteID   uuid.UUID `json:"siteId"`
+		ClientID string    `json:"clientId"`
+	}
+	FileUploader struct {
+		Service   *ServicePrincipal    `json:"service,omitempty"`
 		UserID    int64                `json:"userId"`
 		UserUUID  sharedtypes.UserID   `json:"userUuid"`
 		Type      UserType             `json:"type"`
@@ -23,8 +33,9 @@ type (
 )
 
 const (
-	UserTypeAdmin UserType = "admin"
-	UserTypeUser  UserType = "user"
+	UserTypeService UserType = "service"
+	UserTypeAdmin   UserType = "admin"
+	UserTypeUser    UserType = "user"
 )
 
 func (o *FileObjectID) Int64() int64 {
@@ -74,7 +85,26 @@ func (o FileObjectType) String() string {
 	return string(o)
 }
 
+// Validate checks provenance, not authorization. Hosts must authorize the site and object.
+func (p ServicePrincipal) Validate() error {
+	if p.SiteID == uuid.Nil || !utf8.ValidString(p.ClientID) || strings.TrimSpace(p.ClientID) != p.ClientID || p.ClientID == "" ||
+		len(p.ClientID) > 255 || strings.IndexFunc(p.ClientID, unicode.IsControl) >= 0 {
+		return errors.New("invalid service principal")
+	}
+	return nil
+}
+
 func (o FileUploader) Validate() error {
+	if o.Type == UserTypeService {
+		if o.Service == nil || o.UserID != 0 || !o.UserUUID.IsZero() {
+			return errors.New("invalid service uploader")
+		}
+		return o.Service.Validate()
+	}
+	if o.Service != nil {
+		return errors.New("human uploader cannot have service provenance")
+	}
+
 	if o.UserUUID == sharedtypes.UserIDNil {
 		return errors.New("invalid object UserUUID")
 	}
@@ -86,7 +116,7 @@ func (o FileUploader) Validate() error {
 	switch o.Type {
 	case UserTypeAdmin, UserTypeUser:
 		return nil
+	default:
+		return errors.New("invalid object type")
 	}
-
-	return errors.New("invalid object type")
 }

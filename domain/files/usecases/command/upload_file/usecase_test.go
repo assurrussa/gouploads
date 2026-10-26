@@ -585,3 +585,23 @@ func TestMediaCallbackRejectsAudioBeforeFinalStorage(t *testing.T) {
 	require.Empty(t, state.events)
 	require.NotEqual(t, model.FileTypeAudio, state.file.FileType)
 }
+
+func TestServiceMediaFinalizationRetainsProvenanceAndReplaysOnce(t *testing.T) {
+	useCase, state, _, _, request := newFinalization(t)
+	principal := shared.ServicePrincipal{SiteID: uuid.New(), ClientID: "cms"}
+	state.file.Data.Service = &principal
+	state.file.Data.Uploader = shared.FileUploader{
+		Type: shared.UserTypeService, Service: &principal, Status: shared.FileUploadTaskStatusQueued,
+		AfterJobs: []shared.FileEventAfterJob{{JobName: "asset_complete", Payload: `{"generation":"fixture"}`}},
+	}
+	for range 2 {
+		_, err := useCase.Handle(t.Context(), request)
+		require.NoError(t, err)
+	}
+	require.Equal(t, &principal, state.file.GetData().Service)
+	require.Len(t, state.file.GetData().Presets, 1)
+	require.Len(t, state.jobs, 2)
+	require.Equal(t, "asset_complete", state.jobs[0].name)
+	require.JSONEq(t, `{"generation":"fixture"}`, state.jobs[0].payload)
+	require.Empty(t, state.events)
+}

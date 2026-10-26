@@ -50,6 +50,8 @@ type ProviderMetadata struct {
 
 // FileData представляет дополнительные данные файла в JSON формате.
 type FileData struct {
+	// Service retains non-human provenance after the transient uploader is cleared.
+	Service  *filesshared.ServicePrincipal                     `json:"service,omitempty"`
 	Provider ProviderMetadata                                  `json:"provider,omitempty"`
 	Width    int                                               `json:"width,omitempty"`
 	Height   int                                               `json:"height,omitempty"`

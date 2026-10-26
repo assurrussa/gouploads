@@ -150,6 +150,14 @@ See [anonymous consumer checks](docs/anonymous-consumer.md) for isolated source
 and published-tag probes. Release readiness requires the actual published tag
 to pass both ordinary and integration-tag consumer builds without replacements.
 
+## Service-owned uploads (next minor release)
+
+The source candidate adds `host.ReaderRequest.Service` for authenticated
+site/client principals without an admin or user identity. It reuses the existing
+reader, finalizer and durable outbox; see the
+[service ownership contract](docs/host-integration.md#service-owned-reader-uploads-next-minor-release).
+This capability is not available in the current v0.13.0 release.
+
 ## Storage and TUS contracts
 
 `host.NewStorage(cfg)` supports local storage and explicit generic S3 endpoints.

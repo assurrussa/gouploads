@@ -158,6 +158,10 @@ func (u *UseCase) Handle(ctx context.Context, req Request) (resp Response, errRe
 }
 
 func (u *UseCase) publish(ctx context.Context, userID sharedtypes.UserID, event shared.FileUploadStatusEvent) {
+	// Service uploads deliberately have no user notification recipient.
+	if userID.IsZero() {
+		return
+	}
 	if err := u.eventStream.Publish(ctx, userID, event); err != nil {
 		u.logger.WarnContext(ctx, "publish event", logger.Error(err))
 	}

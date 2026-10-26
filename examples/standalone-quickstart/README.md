@@ -20,7 +20,7 @@ cd /path/to/gouploads/examples/standalone-quickstart
 
 The example uses that checkout's root `go.mod`, not a separately installed
 `gouploads` release. Use the Go version/toolchain declared there (currently
-Go `1.27.0`, toolchain `go1.27.1`) and have Docker Compose available.
+Go `1.27.3` or newer) and have Docker Compose available.
 
 ### 1. Start PostgreSQL and MinIO
 

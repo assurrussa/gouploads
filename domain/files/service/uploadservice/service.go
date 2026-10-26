@@ -144,7 +144,7 @@ func (s *Service) UploadReader(ctx context.Context, req ReaderRequest, input Rea
 	if err != nil {
 		return model.File{}, fmt.Errorf("prepare upload config: %w", err)
 	}
-	uploader, err := s.buildUploader(single)
+	uploader, err := s.buildReaderUploader(req, single)
 	if err != nil {
 		return model.File{}, fmt.Errorf("build uploader: %w", err)
 	}
@@ -157,10 +157,11 @@ func (s *Service) UploadReader(ctx context.Context, req ReaderRequest, input Rea
 
 func (s *Service) UploadStored(ctx context.Context, req ReaderRequest, uploaded UploadedFile) (model.File, error) {
 	if req.FinalizationKey != "" {
-		return s.withFinalization(ctx, req, uploaded.OriginalName, uploaded.Size, true, func(ctx context.Context) (model.File, error) {
-			req.FinalizationKey = ""
-			return s.UploadStored(ctx, req, uploaded)
-		})
+		return s.withFinalization(ctx, req, uploaded.OriginalName, uploaded.Size, req.Service == nil,
+			func(ctx context.Context) (model.File, error) {
+				req.FinalizationKey = ""
+				return s.UploadStored(ctx, req, uploaded)
+			})
 	}
 	if err := req.Validate(); err != nil {
 		return model.File{}, fmt.Errorf("validate request: %w", err)
@@ -176,11 +177,22 @@ func (s *Service) UploadStored(ctx context.Context, req ReaderRequest, uploaded 
 	if err := s.validateStoredUpload(ctx, &uploaded, cfg); err != nil {
 		return model.File{}, uploadClientError(err)
 	}
-	uploader, err := s.buildUploader(single)
+	uploader, err := s.buildReaderUploader(req, single)
 	if err != nil {
 		return model.File{}, fmt.Errorf("build uploader: %w", err)
 	}
 	return s.persistUpload(ctx, single, uploaded, uploader, cfg)
+}
+
+func (s *Service) buildReaderUploader(req ReaderRequest, single SingleRequest) (shared.FileUploader, error) {
+	if req.Service == nil {
+		return s.buildUploader(single)
+	}
+	principal := *req.Service
+	return shared.FileUploader{
+		Type: shared.UserTypeService, Service: &principal, Status: shared.FileUploadTaskStatusQueued,
+		AfterJobs: append([]shared.FileEventAfterJob(nil), req.AfterJobs...),
+	}, nil
 }
 
 func singleReaderRequest(req ReaderRequest) SingleRequest {
@@ -364,6 +376,11 @@ func (s *Service) uploadFile(
 		},
 
 		CreatedAt: now, UpdatedAt: now,
+	}
+	if uploader.Service != nil {
+		principal := *uploader.Service
+		file.Data.Service = &principal
+		file.ManagerID, file.UserID = nil, nil
 	}
 	id, err := s.fileRepo.Create(ctx, file)
 	if err != nil {

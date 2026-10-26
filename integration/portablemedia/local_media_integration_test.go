@@ -38,7 +38,6 @@ import (
 	uploadfile "github.com/assurrussa/gouploads/domain/files/usecases/command/upload_file"
 	"github.com/assurrussa/gouploads/host"
 	"github.com/assurrussa/gouploads/hosttest"
-	eventstream "github.com/assurrussa/gouploads/internal/events"
 )
 
 func TestIntegrationLocalMedia(t *testing.T) {
@@ -137,7 +136,7 @@ func TestIntegrationLocalMedia(t *testing.T) {
 		clientresizer.WithArtifactClient(artifactServer.Client()),
 	))
 	outbox := &outboxCollector{}
-	events := eventstream.Discard{}
+	events := &serviceEventCounter{}
 	listener := listenresizefile.Must(listenresizefile.NewOptions(repo, outbox, events, logger.Discard()))
 	uploadUseCase := uploadfile.Must(uploadfile.NewOptions(
 		tx,
@@ -217,6 +216,8 @@ func TestIntegrationLocalMedia(t *testing.T) {
 	}
 	verifyLocalFinalFiles(t, ctx, runtime, second, artifacts)
 	require.Len(t, sourceTransport.sourceURLs, 2)
+	testServiceLocalMedia(t, ctx, runtime, uploadService, events, scenario)
+	require.Len(t, sourceTransport.sourceURLs, 3)
 }
 
 type localUploadRuntime struct {
@@ -452,7 +453,7 @@ func verifyLocalFinalFiles(
 		require.Equal(t, sha256Hex(artifact.body), preset.ChecksumSHA256)
 		require.True(t, strings.HasPrefix(
 			preset.RelativePath,
-			path.Join("media/v1", host.ObjectTypeAdmin.String(), "42", file.Slug)+"/",
+			path.Join("media/v1", file.ObjectType.String(), file.ObjectID.String(), file.Slug)+"/",
 		))
 		requireLocalFileBody(t, runtime.root, preset.RelativePath, artifact.body)
 

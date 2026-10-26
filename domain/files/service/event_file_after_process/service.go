@@ -105,7 +105,9 @@ func (j *Service) handle(ctx context.Context, payload string, fnCall FnCallAfter
 		}
 
 		taskLogger.ErrorContext(ctx, "failed deleted file", logger.Error(errReturn))
-		j.publish(ctx, data.UserID, j.buildFailedEvent(file, errReturn, data.EventType))
+		if file.GetData().Service == nil && data.UserType != shared.UserTypeService {
+			j.publish(ctx, data.UserID, j.buildFailedEvent(file, errReturn, data.EventType))
+		}
 	}()
 
 	err = j.transactor.RunInTx(ctx, func(ctx context.Context) error {
@@ -119,7 +121,9 @@ func (j *Service) handle(ctx context.Context, payload string, fnCall FnCallAfter
 		return fmt.Errorf("trx: %w", err)
 	}
 
-	j.publish(ctx, data.UserID, j.buildCompletedEvent(file, data.EventType))
+	if file.GetData().Service == nil && data.UserType != shared.UserTypeService {
+		j.publish(ctx, data.UserID, j.buildCompletedEvent(file, data.EventType))
+	}
 
 	return nil
 }

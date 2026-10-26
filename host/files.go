@@ -49,6 +49,7 @@ type (
 	ObjectID              = fileshared.FileObjectID
 	ObjectType            = fileshared.FileObjectType
 	PresetName            = fileshared.PresetName
+	ServicePrincipal      = fileshared.ServicePrincipal
 	ReaderRequest         = uploadservice.ReaderRequest
 	ReaderUploadInput     = uploadservice.ReaderUploadInput
 	SingleRequest         = uploadservice.SingleRequest
@@ -88,6 +89,7 @@ const (
 	ObjectTypeKnowledgeBase        ObjectType           = fileshared.ObjectTypeKnowledgeBase
 	StatusCompleted                Status               = fileshared.StatusCompleted
 	StatusFailed                   Status               = fileshared.StatusFailed
+	UserTypeService                UserType             = fileshared.UserTypeService
 	UserTypeAdmin                  UserType             = fileshared.UserTypeAdmin
 	UserTypeUser                   UserType             = fileshared.UserTypeUser
 	TusStatusActive                TusStatus            = tusupload.StatusActive

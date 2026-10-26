@@ -14,6 +14,7 @@ import (
 
 	logger "github.com/assurrussa/gologger"
 	outboxtypes "github.com/assurrussa/outbox/shared/types"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/assurrussa/gouploads/domain/files/model"
@@ -325,4 +326,28 @@ func TestOriginalLargeID3FrameValidationBeforePublication(t *testing.T) {
 			require.Equal(t, hex.EncodeToString(sum[:]), f.file.GetData().Presets[shared.FilePresetMainName].ChecksumSHA256)
 		})
 	}
+}
+
+func TestServiceOriginalFinalizationKeepsProvenanceAndDurableCallbackOnReplay(t *testing.T) {
+	u, f := newOriginalFixture(t)
+	principal := shared.ServicePrincipal{SiteID: uuid.New(), ClientID: "cms"}
+	f.file.Data.Service = &principal
+	f.file.Data.Uploader = shared.FileUploader{
+		Type: shared.UserTypeService, Service: &principal, Status: shared.FileUploadTaskStatusQueued,
+		AfterJobs: []shared.FileEventAfterJob{{JobName: "asset_complete", Payload: `{"generation":"fixture"}`}},
+	}
+	require.NoError(t, u.HandleOriginal(t.Context(), f.file.ID))
+	require.Equal(t, &principal, f.file.GetData().Service)
+	require.True(t, isCompletedFile(f.file, f.file.GetData().Uploader))
+	require.Zero(t, f.events)
+	require.Len(t, f.jobs, 2)
+	require.Equal(t, "asset_complete", f.jobs[0].name)
+	require.JSONEq(t, `{"generation":"fixture"}`, f.jobs[0].payload)
+	cleanup, err := deletedfilejob.UnmarshalPayload(f.jobs[1].payload)
+	require.NoError(t, err)
+	require.True(t, cleanup.UserID.IsZero())
+	require.NoError(t, u.HandleOriginal(t.Context(), f.file.ID))
+	require.Equal(t, 1, f.saves)
+	require.Len(t, f.jobs, 2)
+	require.Zero(t, f.events)
 }
