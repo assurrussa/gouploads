@@ -311,6 +311,8 @@ func TestHandle_Success(t *testing.T) {
 
 func TestHandle_VideoPresets(t *testing.T) {
 	useCase, state, _, download, request := newFinalization(t)
+	// Older integrations may admit an M4A extension under their video policy.
+	state.file.OriginalFileName = "source.m4a"
 	state.file.FileType = model.FileTypeVideo
 	state.file.MimeType = "video/mp4"
 	download.bodies["video_mp4_main"] = sampleMP4Header()

@@ -62,6 +62,7 @@ func TestIntegrationAudioOriginals(t *testing.T) {
 				{"untagged.mp3", "audio/mpeg", audiofixture.UntaggedMP3()},
 				{"large-tag.mp3", "audio/mpeg", audiofixture.MP3WithTag(4096)},
 				{"tone.wav", "audio/wav", audiofixture.WAV},
+				{"tone.m4a", "audio/mp4", audiofixture.M4A},
 			} {
 				t.Run(sample.name, func(t *testing.T) {
 					first, err := runtime.Uploader.UploadReader(ctx, host.ReaderRequest{
@@ -107,8 +108,8 @@ func TestIntegrationAudioOriginals(t *testing.T) {
 			for _, filter := range []string{"audio", "7", "audio/"} {
 				files, total, err := runtime.Files.List(ctx, host.ListFilters{FileType: filter})
 				require.NoError(t, err)
-				require.Len(t, files, 8)
-				require.Equal(t, 8, total)
+				require.Len(t, files, 10)
+				require.Equal(t, 10, total)
 			}
 		})
 	}
@@ -116,8 +117,8 @@ func TestIntegrationAudioOriginals(t *testing.T) {
 
 func audioConfig() *host.FileUploadConfig {
 	return &host.FileUploadConfig{
-		MaxFileSize: 50 << 20, AllowedExtensions: []string{".mp3", ".wav"},
-		AllowedMimeTypes: map[string][]string{".mp3": {"audio/mpeg"}, ".wav": {"audio/x-wav"}},
+		MaxFileSize: 50 << 20, AllowedExtensions: []string{".mp3", ".wav", ".m4a"},
+		AllowedMimeTypes: map[string][]string{".mp3": {"audio/mpeg"}, ".wav": {"audio/x-wav"}, ".m4a": {"audio/mp4"}},
 	}
 }
 

@@ -22,7 +22,7 @@ func IncompleteMIMEHeader(header []byte, contentType string) bool {
 		signatures = [][]byte{{0x1a, 0x45, 0xdf, 0xa3}}
 	case "image/webp":
 		return incompleteWebP(header)
-	case "video/mp4":
+	case "video/mp4", mimeM4A:
 		return incompleteMP4(header)
 	case mimeMP3:
 		return incompleteMP3(header)

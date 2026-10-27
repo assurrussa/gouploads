@@ -85,3 +85,33 @@ func TestLargeID3FrameInspectionIsBoundedAndReplayed(t *testing.T) {
 		})
 	}
 }
+
+func TestM4AContainerDetectionAndCompatibility(t *testing.T) {
+	header := audiofixture.M4A[:min(512, len(audiofixture.M4A))]
+	require.Equal(t, "audio/mp4", filepolicy.DetectContentTypeForName(header, "урок.M4A", []string{"audio/mp4"}))
+	require.NotEqual(t, "audio/mp4", filepolicy.DetectContentTypeForName(header, "урок.mp4", []string{"audio/mp4"}))
+	require.NoError(t, filepolicy.ValidateAudioHeader(header, "audio/mp4", int64(len(audiofixture.M4A))))
+	require.Equal(t, ".m4a", filepolicy.Extension("audio/x-m4a"))
+	require.NoError(t, filepolicy.ValidateOriginalConfig(50<<20, []string{".m4a"}, map[string][]string{".m4a": {"audio/mp4"}}))
+	require.Error(t, filepolicy.ValidateOriginalConfig(50<<20, []string{".m4a"}, map[string][]string{".m4a": {"video/mp4"}}))
+	for _, alias := range []string{"audio/x-m4a", "audio/m4a", "audio/x-mp4"} {
+		require.Equal(t, "audio/mp4", filepolicy.NormalizeMIME(alias))
+	}
+	for _, prefix := range [][]byte{
+		[]byte("not an MP4"), audiofixture.M4A[:12],
+		[]byte("\x00\x00\x00\x10ftypzzzz\x00\x00\x00\x00"),
+		[]byte("\x00\x00\x00\x08ftypM4A "),
+	} {
+		require.NotEqual(t, "audio/mp4", filepolicy.DetectContentTypeForName(prefix, "audio.m4a", []string{"audio/mp4"}))
+		require.Error(t, filepolicy.ValidateAudioHeader(prefix, "audio/mp4", int64(len(prefix))))
+	}
+	// Files using generic MP4 compatible brands are audio only when the host
+	// explicitly opts into .m4a; existing video/mp4 detection is unchanged.
+	generic := []byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isommp42")
+	require.Equal(t, "audio/mp4", filepolicy.DetectContentTypeForName(generic, "audio.m4a", []string{"audio/mp4"}))
+	require.Equal(t, "video/mp4", filepolicy.DetectContentTypeForName(generic, "video.mp4", []string{"video/mp4"}))
+	require.Equal(t, "video/mp4", filepolicy.DetectContentTypeForName(generic, "legacy.m4a", []string{"video/mp4"}))
+	require.Equal(t, "video/mp4", filepolicy.DetectContentTypeForName(generic, "legacy.m4a", []string{"video/*", "audio/mp4"}))
+	require.Equal(t, "video/mp4", filepolicy.DetectContentTypeForName(generic, "legacy.m4a", nil))
+	require.Error(t, filepolicy.ValidateAudioHeader(header, "audio/mp4", 12))
+}

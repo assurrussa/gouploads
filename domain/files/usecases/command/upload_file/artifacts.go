@@ -168,7 +168,8 @@ func (u *UseCase) saveFileStorage(
 	if len(header) == 0 {
 		return fileStorageDTO{}, errors.New("artifact body is empty")
 	}
-	contentType, err := validateArtifactContentType(artifact.ContentType, response.ContentType, filepolicy.DetectContentType(header))
+	detectedType := filepolicy.DetectContentTypeForName(header, file.OriginalFileName, []string{file.MimeType})
+	contentType, err := validateArtifactContentType(artifact.ContentType, response.ContentType, detectedType)
 	if err != nil {
 		return fileStorageDTO{}, err
 	}

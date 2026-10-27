@@ -379,10 +379,11 @@ For example, a dedicated recording strategy can return:
 ```go
 &host.FileUploadConfig{
     MaxFileSize: 50 * 1024 * 1024,
-    AllowedExtensions: []string{".mp3", ".wav", ".mp4"},
+    AllowedExtensions: []string{".mp3", ".wav", ".m4a", ".mp4"},
     AllowedMimeTypes: map[string][]string{
         ".mp3": {"audio/mpeg"},
         ".wav": {"audio/wav"},
+        ".m4a": {"audio/mp4"},
         ".mp4": {"video/mp4"},
     },
 }
@@ -391,15 +392,15 @@ For example, a dedicated recording strategy can return:
 The 50 MiB limit is this host strategy's choice, not a new global default.
 Configure transport body/TUS limits consistently and preserve other strategies.
 The original runtime accepts only an explicit matching extension/MIME policy.
-Canonical stored and delivered MIME types are `audio/mpeg` and `audio/wav`,
-with deterministic `.mp3` and `.wav` final object suffixes. The original bytes,
+Canonical stored and delivered MIME types are `audio/mpeg`, `audio/wav`, and `audio/mp4`,
+with deterministic `.mp3`, `.wav`, and `.m4a` final object suffixes. The original bytes,
 size and SHA-256 are retained in the sole `main` artifact. Browser MIME metadata
 is not trusted; reader, multipart, stored/TUS completion and finalization inspect
 content using one shared bounded sniffer. Tagged/untagged Layer III MP3 and RIFF
-WAVE are recognized; other audio formats need a separate supported policy.
+WAVE are recognized. An opt-in `.m4a` is recognized from a complete supported ISO BMFF `ftyp` box; the name and explicit allowed MIME distinguish it from MP4 video. When both audio and video are allowed and the bytes match video, video takes precedence to preserve existing policies. This identifies the container, not its codecs or tracks.
 
 Supported aliases are `audio/mp3`, `audio/x-mp3`, `audio/mpeg3`,
-`audio/x-mpeg-3`, `audio/wave`, `audio/x-wav`, and `audio/vnd.wave`. Aliases must
+`audio/x-mpeg-3`, `audio/wave`, `audio/x-wav`, `audio/vnd.wave`, `audio/m4a`, `audio/x-m4a`, and `audio/x-mp4`. Aliases must
 still agree with the detected format. Truncated headers/container declarations,
 wrong extensions and mismatched MIME are rejected. The first MP3 frame after
 ID3 metadata is checked within the shared 1 MiB header-inspection budget;

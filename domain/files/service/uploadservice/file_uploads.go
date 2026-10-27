@@ -247,7 +247,7 @@ func (s *Service) processReader(ctx context.Context, input ReaderUploadInput, cf
 	if n == 0 {
 		return UploadedFile{}, newUploadError(uploadErrorCodeFileEmpty, errors.New("file is empty"))
 	}
-	mimeType := filepolicy.DetectContentType(header[:n])
+	mimeType := filepolicy.DetectContentTypeForName(header[:n], name, cfg.AllowedMimeTypes[ext])
 	if !s.isAllowedMime(ext, mimeType, cfg.AllowedMimeTypes) {
 		return UploadedFile{},
 			newUploadError(uploadErrorCodeMimeDenied,

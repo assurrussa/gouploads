@@ -12,4 +12,5 @@ func TestAudioMIMEAliasesMatchDuringTUS(t *testing.T) {
 		require.False(t, isAllowedMimeType(".mp3", "audio/wav", map[string][]string{".mp3": {"audio/mpeg"}}))
 	}
 	require.True(t, isAllowedMimeType(".mp3", "audio/mpeg", map[string][]string{".mp3": {"audio/mp3"}}))
+	require.True(t, isAllowedMimeType(".m4a", "audio/mp4", map[string][]string{".m4a": {"audio/x-m4a"}}))
 }

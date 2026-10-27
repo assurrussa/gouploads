@@ -36,6 +36,51 @@ func DetectContentType(header []byte) string {
 	return detected
 }
 
+// DetectContentTypeForName distinguishes opt-in M4A from MP4 video using the
+// allowed types for this extension. Existing recognized video takes precedence
+// when allowed. The filename never replaces a complete supported ftyp box, and
+// this bounded signature check does not validate audio codecs or tracks.
+func DetectContentTypeForName(header []byte, name string, allowed []string) string {
+	detected := DetectContentType(header)
+	if strings.HasSuffix(strings.ToLower(name), ".m4a") && m4aContainer(header) &&
+		!matchesAllowed(detected, allowed) && matchesAllowed(mimeM4A, allowed) {
+		return mimeM4A
+	}
+	return detected
+}
+
+func matchesAllowed(contentType string, allowed []string) bool {
+	contentType = NormalizeMIME(contentType)
+	for _, raw := range allowed {
+		candidate := NormalizeMIME(raw)
+		if candidate == contentType ||
+			strings.HasSuffix(candidate, "/*") && strings.HasPrefix(contentType, strings.TrimSuffix(candidate, "*")) {
+			return true
+		}
+	}
+	return false
+}
+
+func m4aContainer(header []byte) bool {
+	if len(header) < 16 || !bytes.Equal(header[4:8], []byte("ftyp")) {
+		return false
+	}
+	size := int(binary.BigEndian.Uint32(header[:4]))
+	if size < 16 || size > 512 || size%4 != 0 || size > len(header) {
+		return false
+	}
+	for offset := 8; offset < size; offset += 4 {
+		if offset == 12 { // Minor version, not a compatible brand.
+			continue
+		}
+		switch string(header[offset : offset+4]) {
+		case "M4A ", "M4B ", "mp41", "mp42", "isom", "iso2", "iso3", "iso4", "iso5", "iso6":
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateAudioHeader rejects impossible/truncated container declarations. Size
 // is the whole-file size, not the sniff prefix length. ExactReader separately
 // verifies that the private object supplies every declared byte.
@@ -44,6 +89,10 @@ func ValidateAudioHeader(header []byte, contentType string, size int64) error {
 	case mimeMP3:
 		if err := validateMP3Size(header, size); err != nil {
 			return err
+		}
+	case mimeM4A:
+		if !m4aContainer(header) || (size > 0 && int64(binary.BigEndian.Uint32(header[:4])) > size) {
+			return errors.New("invalid or truncated M4A container")
 		}
 	case mimeWAV:
 		if len(header) < 12 || !bytes.Equal(header[:4], []byte("RIFF")) || !bytes.Equal(header[8:12], []byte("WAVE")) {
