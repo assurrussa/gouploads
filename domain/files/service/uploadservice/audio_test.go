@@ -22,8 +22,8 @@ import (
 
 func audioPolicy() *uploadservice.FileUploadConfig {
 	return &uploadservice.FileUploadConfig{
-		MaxFileSize: 50 << 20, AllowedExtensions: []string{".mp3", ".wav"},
-		AllowedMimeTypes: map[string][]string{".mp3": {"audio/mpeg"}, ".wav": {"audio/x-wav"}},
+		MaxFileSize: 50 << 20, AllowedExtensions: []string{".mp3", ".wav", ".m4a"},
+		AllowedMimeTypes: map[string][]string{".mp3": {"audio/mpeg"}, ".wav": {"audio/x-wav"}, ".m4a": {"audio/mp4"}},
 	}
 }
 
@@ -36,6 +36,7 @@ func TestAudioReaderAndStoredUseOriginalFinalization(t *testing.T) {
 		{"untagged", ".mp3", "audio/mpeg", "audio/mpeg", audiofixture.UntaggedMP3()},
 		{"large tag", ".mp3", "audio/mpeg", "audio/mpeg", audiofixture.MP3WithTag(4096)},
 		{"WAV", ".wav", "audio/wav", "audio/x-wav", audiofixture.WAV},
+		{"M4A", ".m4a", "audio/mp4", "audio/x-m4a", audiofixture.M4A},
 	} {
 		for _, ingress := range []string{"reader", "stored"} {
 			t.Run(sample.name+"/"+ingress, func(t *testing.T) {
@@ -99,6 +100,8 @@ func TestAudioRejectsDefaultPolicySpoofingAndOversize(t *testing.T) {
 	}{
 		{"default", "tone.mp3", audiofixture.MP3, nil, int64(len(audiofixture.MP3))},
 		{"spoof", "tone.mp3", []byte("plain text"), audioPolicy(), 10},
+		{"spoofed M4A", "tone.m4a", []byte("plain text"), audioPolicy(), 10},
+		{"truncated M4A", "tone.m4a", audiofixture.M4A[:12], audioPolicy(), 12},
 		{"wrong extension", "tone.wav", audiofixture.MP3, audioPolicy(), int64(len(audiofixture.MP3))},
 		{"empty", "tone.mp3", nil, audioPolicy(), 0},
 		{"truncated", "tone.mp3", audiofixture.MP3[:10], audioPolicy(), 10},
@@ -179,6 +182,52 @@ func TestLargeID3ForgeryIsRejectedByReaderAndStoredIngress(t *testing.T) {
 				})
 			}
 			require.Error(t, err) // No writes/transaction/jobs are permitted for the forged frame.
+		})
+	}
+}
+
+// An existing media-resizer host can opt an .m4a name into its video policy.
+// Such files must remain video through both direct and stored upload paths.
+func TestLegacyM4AWithVideoPolicyRemainsVideo(t *testing.T) {
+	body := []byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isommp42")
+	for _, ingress := range []string{"reader", "stored"} {
+		t.Run(ingress, func(t *testing.T) {
+			ctx, cancel, ts := NewTestRepoSuite(t)
+			defer cancel()
+			storage := &readableStorage{MockfileStorage: ts.mockFileStorage, body: body}
+			queue := &associatedUploadQueue{MockoutboxPutter: ts.mockOutboxPutter}
+			svc, err := uploadservice.NewWithProcessing(uploadservice.NewOptions(ts.mockTransactor,
+				queue, ts.mockFileRepository, logger.Discard(), storage), config.ProcessingMediaResizer)
+			require.NoError(t, err)
+			const key = "tmp/uploads/admin/12/source.m4a"
+			if ingress == "reader" {
+				ts.mockFileStorage.EXPECT().SaveTemp(gomock.Any(), gomock.Any()).Return(
+					filestorage.StoredFile{RelativePath: key, Size: int64(len(body)), MimeType: "video/mp4"}, nil)
+			}
+			executeTx(ts)
+			ts.mockFileRepository.EXPECT().Create(gomock.Any(), gomock.Any()).Return(int64(21), nil)
+			req := uploadservice.ReaderRequest{
+				UploaderUUID: identity.NewUserID(), ManagerID: 12,
+				ObjectType: shared.ObjectTypeAdmin, ObjectID: 12,
+				Config: &uploadservice.FileUploadConfig{
+					AllowedExtensions: []string{".m4a"},
+					AllowedMimeTypes:  map[string][]string{".m4a": {"video/mp4"}},
+				},
+			}
+			var result model.File
+			if ingress == "stored" {
+				result, err = svc.UploadStored(ctx, req, uploadservice.UploadedFile{
+					OriginalName: "source.m4a", FileName: "source.m4a", Path: key,
+					Size: int64(len(body)), MimeType: "video/mp4",
+				})
+			} else {
+				result, err = svc.UploadReader(ctx, req, uploadservice.ReaderUploadInput{
+					OriginalName: "source.m4a", Size: int64(len(body)), Reader: bytes.NewReader(body),
+				})
+			}
+			require.NoError(t, err)
+			require.Equal(t, model.FileTypeVideo, result.FileType)
+			require.Equal(t, "video/mp4", result.MimeType)
 		})
 	}
 }

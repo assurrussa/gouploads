@@ -94,15 +94,15 @@ For host-owned gauges, see [backlog metrics](docs/backlog-metrics.md): existing
 Outbox snapshots count processing jobs and the deletion inventory counts pending
 plans. A small host callback can publish these values without a new metrics SDK.
 
-## Opt in to MP3/WAV originals
+## Opt in to MP3/WAV/M4A originals
 
-MP3 and WAV use `host.FileTypeAudio` (7) and the same original storage/outbox
-workflow. Register a host upload strategy with explicit `.mp3`/`.wav` extension
-and `audio/mpeg`/`audio/wav` MIME allowlists and a bounded `MaxFileSize`. The
+MP3, WAV and M4A use `host.FileTypeAudio` (7) and the same original storage/outbox
+workflow. Register a host upload strategy with explicit `.mp3`/`.wav`/`.m4a` extension
+and `audio/mpeg`/`audio/wav`/`audio/mp4` MIME allowlists and a bounded `MaxFileSize`. The
 generic and rich-text defaults do not enable audio or increase their limits.
 WAV aliases (`audio/wave`, `audio/x-wav`, `audio/vnd.wave`) normalize to
 `audio/wav`; common MP3 aliases normalize to `audio/mpeg`. Type detection uses
-bytes, including untagged MPEG Layer III frames, rather than a supplied MIME.
+bytes, including untagged MPEG Layer III frames; M4A additionally uses its extension to distinguish an audio container from MP4 video. A supplied MIME is not trusted.
 
 Audio requires `original_only`; `media_resizer`, even with `SkipResizer`,
 rejects audio without scheduling unsupported image/video processing. This

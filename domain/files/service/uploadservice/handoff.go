@@ -131,7 +131,7 @@ func (s *Service) validateStoredUpload(ctx context.Context, file *UploadedFile, 
 	if n == 0 {
 		return newUploadError(uploadErrorCodeFileEmpty, errors.New("stored upload is empty"))
 	}
-	mimeType := filepolicy.DetectContentType(header[:n])
+	mimeType := filepolicy.DetectContentTypeForName(header[:n], file.OriginalName, []string{file.MimeType})
 	if !s.isAllowedMime(ext, mimeType, cfg.AllowedMimeTypes) {
 		return newUploadError(uploadErrorCodeMimeDenied, errors.New("stored upload content is denied"))
 	}

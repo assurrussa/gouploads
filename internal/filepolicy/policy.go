@@ -20,6 +20,7 @@ const (
 	mimeJPEG     = "image/jpeg"
 	mimeMP3      = "audio/mpeg"
 	mimeWAV      = "audio/wav"
+	mimeM4A      = "audio/mp4"
 	MaxFileSize  = int64(10 << 30)
 	HeaderBudget = int64(1 << 20)
 )
@@ -56,6 +57,8 @@ func NormalizeMIME(raw string) string {
 		return mimeMP3
 	case "audio/wave", "audio/x-wav", "audio/vnd.wave":
 		return mimeWAV
+	case "audio/m4a", "audio/x-m4a", "audio/x-mp4":
+		return mimeM4A
 	default:
 		return strings.ToLower(value)
 	}
@@ -83,6 +86,8 @@ func Extension(contentType string) string {
 		return ".mp3"
 	case mimeWAV:
 		return ".wav"
+	case mimeM4A:
+		return ".m4a"
 	default:
 		return ""
 	}

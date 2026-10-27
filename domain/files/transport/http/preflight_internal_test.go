@@ -229,22 +229,28 @@ func TestTusAdmissionFormatsAndSmallChunksWithoutClientMIME(t *testing.T) {
 		{".gif", "image/gif", "GIF89a"},
 		{".webp", "image/webp", "RIFF\x18\x00\x00\x00WEBPVP"},
 		{".mp4", "video/mp4", "\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isommp42"},
+		{".m4a", "video/mp4", "\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isommp42"},
+		{".m4a", "audio/mp4", string(audiofixture.M4A[:28])},
 		{".webm", "video/webm", "\x1a\x45\xdf\xa3"},
 		{".pdf", "application/pdf", "%PDF-"},
 		{".mp3", "audio/mpeg", "ID3\x03\x00\x00\x00\x00\x00\x00"},
 		{".wav", "audio/wav", "RIFF\x18\x00\x00\x00WAVE"},
 	} {
 		policies := map[string]*uploadservice.FileUploadConfig{"explicit": preflightPolicy(sample.extension, sample.mime)}
-		if !strings.HasPrefix(sample.mime, "audio/") {
+		if !strings.HasPrefix(sample.mime, "audio/") && sample.extension != ".m4a" {
 			policies["default"] = &uploadservice.FileUploadConfig{}
 		}
 		if strings.HasPrefix(sample.mime, "image/") {
 			policies["rich_text"] = uploadservice.DefaultFileUploadRichTextConfig()
 		}
 		for name, policy := range policies {
-			t.Run(sample.extension+"/"+name, func(t *testing.T) {
+			t.Run(sample.extension+"/"+sample.mime+"/"+name, func(t *testing.T) {
 				handler, _, _ := newPatchProbe(t)
-				handler.taskUploader = newPreflightService(t, config.ProcessingOriginalOnly)
+				mode := config.ProcessingOriginalOnly
+				if sample.extension == ".m4a" && sample.mime == "video/mp4" {
+					mode = config.ProcessingMediaResizer
+				}
+				handler.taskUploader = newPreflightService(t, mode)
 				store, err := tusupload.NewFileStore(t.TempDir())
 				require.NoError(t, err)
 				handler.tusStore = store

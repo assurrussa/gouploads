@@ -23,6 +23,7 @@ func TestIncompleteHeadersRemainPrivateUntilSignatureIsComplete(t *testing.T) {
 		{"audio/wav", "RIFF\x18\x00\x00\x00WAVE"},
 		{"video/webm", "\x1a\x45\xdf\xa3"},
 		{"video/mp4", "\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isommp42"},
+		{"audio/mp4", "\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00isomM4A "},
 	} {
 		t.Run(header.contentType, func(t *testing.T) {
 			for size := 1; size < len(header.signature); size++ {

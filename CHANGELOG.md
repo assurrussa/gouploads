@@ -12,6 +12,8 @@
 
 ### Added
 
+- Opt-in M4A original uploads with canonical `audio/mp4` metadata and unchanged bytes. A bounded ISO BMFF signature plus the `.m4a` extension distinguishes them from MP4 video; this is not codec or track validation.
+
 - Service-owned reader uploads through `host.ReaderRequest.Service` and
   `host.ServicePrincipal`, preserving site/client provenance without human IDs.
   Existing finalization/outbox processing is reused; service callbacks are

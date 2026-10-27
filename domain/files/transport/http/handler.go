@@ -1109,7 +1109,7 @@ func (h *Handler) resolveTusPatchMimeType(
 		sniff = sniff[:tusupload.SniffLen]
 	}
 	sniff = append(sniff, body[:min(len(body), tusupload.SniffLen-len(sniff))]...)
-	mimeType := filepolicy.DetectContentType(sniff)
+	mimeType := filepolicy.DetectContentTypeForName(sniff, session.OriginalName, resolution.config.AllowedMimeTypes[ext])
 	if !isAllowedMimeType(ext, mimeType, resolution.config.AllowedMimeTypes) {
 		if canReadPrefix && offset+int64(len(body)) < session.UploadLength &&
 			hasIncompleteMIMEHeader(sniff, resolution.config.AllowedMimeTypes[ext]) {
