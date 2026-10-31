@@ -46,19 +46,7 @@ func checkUploadFileMatcher(
 	if !reflect.DeepEqual(expected.Config, got.Config) {
 		unequalFields = append(unequalFields, "Config")
 	}
-	if got.FileHeader != nil && expected.FileHeader != nil {
-		if expected.FileHeader.Size != got.FileHeader.Size {
-			unequalFields = append(unequalFields, "Config size")
-		}
-		if reflect.DeepEqual(expected.FileHeader.Header, got.FileHeader.Header) {
-			unequalFields = append(unequalFields, "Config headers")
-		}
-		if expected.FileHeader.Filename != got.FileHeader.Filename {
-			unequalFields = append(unequalFields, "Config Filename")
-		}
-	} else {
-		unequalFields = append(unequalFields, "FileHeader invalid")
-	}
+	unequalFields = appendUploadFileHeaderMismatches(expected, got, unequalFields)
 	if len(expected.AfterJobs) != len(got.AfterJobs) {
 		unequalFields = append(unequalFields, "AfterJobs not equal")
 	} else {
@@ -80,4 +68,25 @@ func checkUploadFileMatcher(
 	}
 
 	return unequalFields, len(unequalFields) == 0
+}
+
+func appendUploadFileHeaderMismatches(
+	expected uploadservice.SingleRequest,
+	got uploadservice.SingleRequest,
+	unequalFields []string,
+) []string {
+	if got.FileHeader != nil && expected.FileHeader != nil {
+		if expected.FileHeader.Size != got.FileHeader.Size {
+			unequalFields = append(unequalFields, "Config size")
+		}
+		if reflect.DeepEqual(expected.FileHeader.Header, got.FileHeader.Header) {
+			unequalFields = append(unequalFields, "Config headers")
+		}
+		if expected.FileHeader.Filename != got.FileHeader.Filename {
+			unequalFields = append(unequalFields, "Config Filename")
+		}
+	} else {
+		unequalFields = append(unequalFields, "FileHeader invalid")
+	}
+	return unequalFields
 }
